@@ -278,6 +278,24 @@ def test_dendritic_contact_gets_a_marker_on_the_branch():
     assert "dend.apical[1]@0.6" in svg
 
 
+def test_raster_has_a_time_grid_with_round_labels():
+    from vnl.report import raster_svg
+
+    model, _ = load(example("ffi"))
+    svg = raster_svg(model, simulate(model))
+    assert svg.count('class="grid"') >= 4
+    assert '>0</text>' in svg and ">400</text>" in svg
+
+
+def test_raster_marks_when_each_stimulus_was_running():
+    from vnl.report import raster_svg
+
+    model, _ = load(example("disinhibition"))
+    svg = raster_svg(model, simulate(model))
+    assert svg.count('class="stim-band"') == len(model.stimuli)
+    assert "gate: poisson" in svg
+
+
 def test_modulator_is_drawn_towards_the_contact_it_governs():
     from vnl.report import circuit_svg
 

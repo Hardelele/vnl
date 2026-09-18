@@ -265,37 +265,89 @@ def circuit_svg(model: ir.Model) -> str:
     return "".join(parts)
 
 
+def _nice_step(span: float, target_ticks: int = 6) -> float:
+    """Шаг сетки из ряда 1-2-5, чтобы подписи были круглыми."""
+    raw = span / max(target_ticks, 1)
+    magnitude = 10.0 ** math.floor(math.log10(raw)) if raw > 0 else 1.0
+    for factor in (1.0, 2.0, 5.0, 10.0):
+        if raw <= factor * magnitude:
+            return factor * magnitude
+    return 10.0 * magnitude
+
+
 def raster_svg(model: ir.Model, result: SimResult) -> str:
     names = list(model.instances)
     row_height = 26
-    width, left = 760, 54
-    height = row_height * len(names) + 34
+    width, left, right = 760, 54, 78
+    top = 14
+    height = row_height * len(names) + top + 26
     duration = model.run.duration
+    span = width - left - right
+
+    def at(time: float) -> float:
+        return left + min(max(time, 0.0), duration) / duration * span
+
     parts = [
         f'<svg class="raster" viewBox="0 0 {width} {height}" role="img" '
         f'aria-label="Растр спайков">'
     ]
-    for index, name in enumerate(names):
-        y = 14 + index * row_height
-        parts.append(
-            f'<text class="row-label" x="{left - 10}" y="{y + 12}">{_esc(name)}</text>'
+
+    # Окна работы стимулов -- полосой в строке той клетки, куда они приходят.
+    rows = {name: top + index * row_height for index, name in enumerate(names)}
+    for stim in model.stimuli:
+        target = stim.target.instance
+        if target not in rows:
+            continue
+        start, stop = at(stim.start), at(min(stim.stop, duration))
+        if stop - start < 0.5:
+            continue
+        detail = (
+            f"{stim.rate:g} Гц"
+            if stim.kind == "poisson"
+            else f"{len(stim.times)} импульсов"
+            if stim.kind == "spikes"
+            else f"{stim.amplitude:g} нА"
         )
         parts.append(
-            f'<line class="row-base" x1="{left}" y1="{y + 9}" '
-            f'x2="{width - 16}" y2="{y + 9}"/>'
+            f'<rect class="stim-band" x="{start:.1f}" y="{rows[target] - 2}" '
+            f'width="{stop - start:.1f}" height="{row_height - 4}" rx="2">'
+            f"<title>{_esc(stim.id)}: {_esc(stim.kind)}, {_esc(detail)}, "
+            f"{stim.start:g}–{min(stim.stop, duration):g} мс</title></rect>"
         )
+
+    step = _nice_step(duration)
+    tick = 0.0
+    while tick <= duration + 1e-9:
+        x = at(tick)
+        parts.append(
+            f'<line class="grid" x1="{x:.1f}" y1="{top - 6}" '
+            f'x2="{x:.1f}" y2="{height - 22}"/>'
+            f'<text class="axis tick" x="{x:.1f}" y="{height - 8}">{tick:g}</text>'
+        )
+        tick += step
+    parts.append(
+        f'<text class="axis unit" x="{left + span + 10}" y="{height - 8}">мс</text>'
+    )
+
+    for name in names:
+        y = rows[name]
         klass = "inh" if _is_inhibitory(model, name) else "exc"
+        count = len(result.spikes.get(name, []))
+        parts.append(
+            f'<text class="row-label" x="8" y="{y + 12}">{_esc(name)}</text>'
+            f'<line class="row-base" x1="{left}" y1="{y + 9}" '
+            f'x2="{left + span}" y2="{y + 9}"/>'
+            f'<text class="row-count" x="{left + span + 62}" y="{y + 12}">'
+            f"{count}</text>"
+        )
         for time in result.spikes.get(name, []):
-            x = left + (time / duration) * (width - left - 16)
+            x = at(time)
             parts.append(
                 f'<line class="spike {klass}-stroke" x1="{x:.1f}" y1="{y}" '
                 f'x2="{x:.1f}" y2="{y + 18}"/>'
             )
-    parts.append(
-        f'<text class="axis" x="{left}" y="{height - 6}">0</text>'
-        f'<text class="axis end" x="{width - 16}" y="{height - 6}">{duration:g} мс</text>'
-        "</svg>"
-    )
+
+    parts.append("</svg>")
     return "".join(parts)
 
 
@@ -317,8 +369,9 @@ def trace_svg(name: str, times: list[float], values: list[float]) -> str:
         f'<svg class="trace" viewBox="0 0 {width} {height}" role="img" '
         f'aria-label="Трасса {_esc(name)}">'
         f'<polyline class="trace-line" points="{points}"/>'
-        f'<text class="axis" x="6" y="20">{high:.3g}</text>'
-        f'<text class="axis" x="6" y="{height - bottom + 4}">{low:.3g}</text>'
+        f'<text class="axis value" x="{left - 8}" y="20">{high:.3g}</text>'
+        f'<text class="axis value" x="{left - 8}" y="{height - bottom + 4}">'
+        f'{low:.3g}</text>'
         f'<text class="trace-name" x="{left}" y="14">{_esc(name)}</text>'
         f"</svg>"
     )
@@ -369,7 +422,13 @@ svg { display: block; width: 100%; height: auto; min-width: 460px; }
 .exc-cell { stroke: var(--exc); } .inh-cell { stroke: var(--inh); }
 .cell-name { text-anchor: middle; font-size: 12px; font-weight: 600; fill: var(--ink); }
 .cell-type { font-size: 10px; fill: var(--muted); }
-.row-label { text-anchor: end; font-size: 12px; fill: var(--muted); }
+.row-label { font-size: 12px; fill: var(--muted); }
+.row-count { text-anchor: end; font-size: 11px; fill: var(--muted);
+             font-variant-numeric: tabular-nums; }
+.grid { stroke: var(--line); stroke-width: 1; }
+.stim-band { fill: var(--ink); opacity: .055; }
+.axis.tick { text-anchor: middle; font-variant-numeric: tabular-nums; }
+.axis.value { text-anchor: end; font-variant-numeric: tabular-nums; }
 .row-base { stroke: var(--line); stroke-width: 1; }
 .spike { stroke-width: 1.6; }
 .exc-stroke { stroke: var(--exc); } .inh-stroke { stroke: var(--inh); }
