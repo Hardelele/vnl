@@ -378,10 +378,13 @@ svg { display: block; width: 100%; height: auto; min-width: 460px; }
 .trace-line { fill: none; stroke: var(--trace); stroke-width: 1.4; }
 .trace-name { font-size: 11px; fill: var(--muted); }
 .trace + .trace { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+table { border-collapse: collapse; width: auto; min-width: 280px;
+         font-size: 0.9rem; }
+th, td { text-align: left; padding: 6px 14px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums;
+                 white-space: nowrap; }
+td:first-child { padding-right: 32px; }
 ul.notes { margin: 0; padding-left: 20px; color: var(--muted); font-size: 0.9rem; }
 ul.notes li { margin: 3px 0; }
 .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted);

@@ -249,6 +249,15 @@ def test_report_is_valid_standalone_html():
     assert "<script" not in page and "http://" not in page
 
 
+def test_numeric_columns_are_aligned_with_their_headers():
+    from vnl.report import render
+
+    model, _ = load(example("ffi"))
+    page = render(model, simulate(model))
+    assert page.count('<th class="num">') == page.count("<th>") + 1
+    assert "th.num, td.num { text-align: right;" in page
+
+
 def test_circuit_draws_every_cell_and_contact():
     from vnl.report import circuit_svg
 
