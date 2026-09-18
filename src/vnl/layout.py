@@ -146,7 +146,7 @@ def cell_geometry(model: ir.Model, instance_id: str) -> CellGeometry:
     return CellGeometry(
         instance=instance_id,
         cell_type=cell_type.id,
-        inhibitory="inhibitory" in cell_type.tags or cell_type.transmitter == "gaba",
+        inhibitory=ir.is_inhibitory_cell(cell_type),
         dendrites=dendrites,
         axon_tip=(AXON_LEN, 0.0),
     )

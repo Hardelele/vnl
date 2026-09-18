@@ -61,8 +61,7 @@ def _cell_type(cell_type: ir.CellType) -> dict[str, Any]:
         "id": cell_type.id,
         "tags": list(cell_type.tags),
         "transmitter": cell_type.transmitter,
-        "inhibitory": "inhibitory" in cell_type.tags
-        or cell_type.transmitter == "gaba",
+        "inhibitory": ir.is_inhibitory_cell(cell_type),
         "pointModel": {
             "kind": point.kind,
             "vRest": point.v_rest,
@@ -129,7 +128,9 @@ def _stimulus(stim: ir.Stimulus, duration: float) -> dict[str, Any]:
 
 
 def trace_key(recording: ir.Recording) -> str:
-    return f"{recording.target.instance}.{recording.target.section}:{recording.var}"
+    return ir.trace_key(
+        recording.target.instance, recording.target.section, recording.var
+    )
 
 
 def model_payload(model: ir.Model) -> dict[str, Any]:
@@ -151,9 +152,9 @@ def model_payload(model: ir.Model) -> dict[str, Any]:
                 "id": instance.id,
                 "cellType": instance.cell_type,
                 "tags": list(instance.tags),
-                "inhibitory": "inhibitory"
-                in model.cell_type_of(instance.id).tags
-                or model.cell_type_of(instance.id).transmitter == "gaba",
+                "inhibitory": ir.is_inhibitory_cell(
+                    model.cell_type_of(instance.id)
+                ),
             }
             for instance in model.instances.values()
         ],

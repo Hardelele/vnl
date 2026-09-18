@@ -33,6 +33,58 @@ def is_inhibitory_receptor(receptor: str) -> bool:
     return receptor in INHIBITORY_RECEPTORS
 
 
+@dataclass(frozen=True)
+class RecordedVariable:
+    """Что за величина пишется и как её читать.
+
+    Реестр живёт в ядре, потому что это знание предметной области, а не
+    оформление: единицы нужны и выгрузке в JSON, и подписи на графике, и
+    CSV. Раньше каждый потребитель знал это по-своему и знал по-разному.
+    """
+
+    name: str
+    unit: str
+    #: Шкала обязана включать ноль -- у проводимости и веса он осмыслен.
+    from_zero: bool = False
+    #: Величина 0/1: ломаной её рисовать бессмысленно, только событиями.
+    binary: bool = False
+    #: У величины есть порог клетки, относительно которого её читают.
+    against_threshold: bool = False
+
+
+RECORDED: dict[str, RecordedVariable] = {
+    "v": RecordedVariable(
+        "мембранный потенциал", "мВ", against_threshold=True
+    ),
+    "g": RecordedVariable("синаптическая проводимость", "нСм", from_zero=True),
+    "g_exc": RecordedVariable("возбуждающая проводимость", "нСм", from_zero=True),
+    "g_inh": RecordedVariable("тормозная проводимость", "нСм", from_zero=True),
+    "w": RecordedVariable(
+        "суммарный вес пластичных входов", "нСм", from_zero=True
+    ),
+    "spikes": RecordedVariable("спайки", "", binary=True),
+}
+
+
+def trace_key(instance: str, section: str, var: str) -> str:
+    """Имя трассы. Один формат на симулятор, выгрузку и отрисовку."""
+    return f"{instance}.{section}:{var}"
+
+
+def parse_trace_key(key: str) -> tuple[str, str, str]:
+    """'E.soma:v' -> ('E', 'soma', 'v')."""
+    address, _, var = key.rpartition(":")
+    instance, _, section = address.partition(".")
+    if not var or not instance:
+        raise ValueError(f"не разобрать имя трассы: {key!r}")
+    return instance, section, var
+
+
+def is_inhibitory_cell(cell_type: "CellType") -> bool:
+    """Тормозная ли клетка. Решается в одном месте, иначе разъедется."""
+    return "inhibitory" in cell_type.tags or cell_type.transmitter == "gaba"
+
+
 @dataclass
 class PointModel:
     """Параметры точечной модели мембраны (LIF с адаптацией)."""

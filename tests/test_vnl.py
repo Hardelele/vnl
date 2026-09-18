@@ -334,3 +334,44 @@ def test_disinhibition_actually_releases_the_pyramid():
     window = slice(int(200 / model.run.dt), int(400 / model.run.dt))
     rest = inhibition[: int(200 / model.run.dt)]
     assert sum(inhibition[window]) / len(inhibition[window]) < sum(rest) / len(rest)
+
+
+# --- общее знание в ядре --------------------------------------------------
+
+
+def test_recorded_variables_are_described_in_one_place():
+    """Единицы и признаки величины -- знание предметной области, не оформления."""
+    from vnl.ir import RECORDED
+
+    assert RECORDED["v"].unit == "мВ" and RECORDED["v"].against_threshold
+    assert RECORDED["g_inh"].from_zero and RECORDED["g_inh"].unit == "нСм"
+    assert RECORDED["spikes"].binary
+
+    # Валидатор и парсер берут список величин оттуда же, а не копией.
+    from vnl.parser import _VARS as parser_vars
+    from vnl.resolve import _VARS as resolve_vars
+
+    assert parser_vars == resolve_vars == frozenset(RECORDED)
+
+
+def test_trace_key_is_built_and_parsed_by_the_same_module():
+    from vnl.ir import parse_trace_key, trace_key
+
+    key = trace_key("E", "dend.apical[1]", "g_exc")
+    assert parse_trace_key(key) == ("E", "dend.apical[1]", "g_exc")
+
+    # Ключ, который реально выдаёт симулятор, тоже разбирается.
+    model, _ = load(example("ffi"))
+    for key in simulate(model).traces:
+        instance, _, var = parse_trace_key(key)
+        assert instance in model.instances
+        assert var in {"v", "g", "g_exc", "g_inh", "w", "spikes"}
+
+
+def test_dot_export_marks_inhibition_with_a_bar():
+    from vnl.backends.dot_export import export as dot_export
+
+    model, _ = load(example("ffi"))
+    dot = dot_export(model)
+    assert "arrowhead=tee" in dot and "arrowhead=normal" in dot
+    assert dot.count("->") == len(model.contacts)

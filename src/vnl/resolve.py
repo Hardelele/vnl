@@ -14,7 +14,7 @@ from . import ir
 from .morphology import MorphologyError
 from .parser import ParsedModel, PendingContact, PendingRecording, PendingStimulus
 
-_VARS = {"v", "spikes", "g", "g_exc", "g_inh", "w"}
+_VARS = frozenset(ir.RECORDED)
 
 
 class ValidationError(ValueError):

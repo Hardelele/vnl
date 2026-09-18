@@ -12,8 +12,7 @@ def esc(text: str) -> str:
 
 
 def is_inhibitory(model: ir.Model, instance_id: str) -> bool:
-    cell_type = model.cell_type_of(instance_id)
-    return "inhibitory" in cell_type.tags or cell_type.transmitter == "gaba"
+    return ir.is_inhibitory_cell(model.cell_type_of(instance_id))
 
 
 def nice_step(span: float, target_ticks: int = 6) -> float:

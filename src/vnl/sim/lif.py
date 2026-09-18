@@ -143,7 +143,9 @@ class Simulator:
 
     @staticmethod
     def _trace_key(recording: ir.Recording) -> str:
-        return f"{recording.target.instance}.{recording.target.section}:{recording.var}"
+        return ir.trace_key(
+            recording.target.instance, recording.target.section, recording.var
+        )
 
     # --- шаг -----------------------------------------------------------
 

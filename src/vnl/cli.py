@@ -8,6 +8,7 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
+from .backends.dot_export import export as dot_export
 from .backends.netpyne_export import export as netpyne_export
 from .ir import Model
 from .resolve import Diagnostic, ValidationError, load
@@ -39,11 +40,7 @@ def _raster(model: Model, spikes: dict[str, list[float]], width: int = 78) -> st
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    try:
-        model, diagnostics = _read(args.file)
-    except ValidationError as exc:
-        _print_diagnostics(exc.diagnostics)
-        return 1
+    model, diagnostics = _read(args.file)
     _print_diagnostics(diagnostics)
     summary = model.summary()
     print(
@@ -54,11 +51,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    try:
-        model, diagnostics = _read(args.file)
-    except ValidationError as exc:
-        _print_diagnostics(exc.diagnostics)
-        return 1
+    model, diagnostics = _read(args.file)
     _print_diagnostics(diagnostics)
 
     if model.run.level == "L2":
@@ -98,11 +91,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_view(args: argparse.Namespace) -> int:
-    try:
-        model, diagnostics = _read(args.file)
-    except ValidationError as exc:
-        _print_diagnostics(exc.diagnostics)
-        return 1
+    model, diagnostics = _read(args.file)
     _print_diagnostics(diagnostics)
 
     if model.run.level == "L2":
@@ -131,11 +120,7 @@ def cmd_view(args: argparse.Namespace) -> int:
 
 def cmd_data(args: argparse.Namespace) -> int:
     """Прогон в JSON -- то, чем живёт интерфейс."""
-    try:
-        model, diagnostics = _read(args.file)
-    except ValidationError as exc:
-        _print_diagnostics(exc.diagnostics)
-        return 1
+    model, diagnostics = _read(args.file)
     _print_diagnostics(diagnostics)
 
     from .api import dumps, run_payload
@@ -167,11 +152,7 @@ def cmd_data(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    try:
-        model, diagnostics = _read(args.file)
-    except ValidationError as exc:
-        _print_diagnostics(exc.diagnostics)
-        return 1
+    model, diagnostics = _read(args.file)
     _print_diagnostics(diagnostics)
 
     report = netpyne_export(model)
@@ -186,30 +167,8 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 
 def cmd_graph(args: argparse.Namespace) -> int:
-    try:
-        model, _ = _read(args.file)
-    except ValidationError as exc:
-        _print_diagnostics(exc.diagnostics)
-        return 1
-
-    lines = [f"digraph {model.name} {{", "  rankdir=LR;", "  node [shape=circle];"]
-    for instance in model.instances.values():
-        cell_type = model.cell_types[instance.cell_type]
-        inhibitory = "inhibitory" in cell_type.tags or cell_type.transmitter == "gaba"
-        shape = "square" if inhibitory else "circle"
-        lines.append(
-            f'  {instance.id} [shape={shape}, label="{instance.id}\\n{cell_type.id}"];'
-        )
-    for contact in model.contacts:
-        inhibitory = contact.receptor.startswith("gaba")
-        arrow = "tee" if inhibitory else "normal"
-        label = f"{contact.post.section}@{contact.post.fraction:g}"
-        lines.append(
-            f'  {contact.pre.instance} -> {contact.post.instance} '
-            f'[arrowhead={arrow}, label="{label}"];'
-        )
-    lines.append("}")
-    dot = "\n".join(lines)
+    model, _ = _read(args.file)
+    dot = dot_export(model)
     if args.out:
         Path(args.out).write_text(dot, encoding="utf-8")
         print(f"граф: {args.out}")
@@ -268,7 +227,13 @@ def main(argv: list[str] | None = None) -> int:
     graph.set_defaults(func=cmd_graph)
 
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except ValidationError as exc:
+        # Модель не прошла проверку -- это нормальный исход работы, а не сбой
+        # программы, поэтому печатаем диагностику, а не трассу стека.
+        _print_diagnostics(exc.diagnostics)
+        return 1
 
 
 if __name__ == "__main__":
