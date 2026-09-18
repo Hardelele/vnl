@@ -1,8 +1,11 @@
-# VNL — язык описания нейронных микросхем
+# VNL — a language for describing neural microcircuits
 
-Модель пишется текстом. Файл `.vnl` разбирается в IR, а IR уходит в бэкенды:
-точечный симулятор для быстрой работы и скрипт NetPyNE/NEURON для биофизики.
-Свой солвер уравнений Ходжкина–Хаксли не пишется и писаться не будет.
+**English** · [Русский](README.ru.md)
+
+You write the model as text. A `.vnl` file is parsed into an IR, and the IR goes
+out to backends: a point-neuron simulator for fast work, and a NetPyNE/NEURON
+script for the biophysics. No Hodgkin–Huxley solver of our own is being written,
+and none will be.
 
 ```
    .vnl  ──►  AST  ──►  IR  ──┬──►  L1: точечный симулятор (чистый Python)
@@ -12,14 +15,18 @@
                               └──►  граф в DOT
 ```
 
-![Схема микросхемы: feed-forward inhibition](docs/img/circuit-ffi.png)
+> The tool itself speaks Russian: diagnostics, page labels and reports come out
+> in Russian, and the screenshots below show that. Only the documentation is
+> translated.
 
-Всё на картинке нарисовано из исходника. Круг — возбуждающая клетка, квадрат —
-тормозная. Слева веером отходят дендриты, справа пунктиром — аксон. Зелёная
-точка на ветви стоит там, куда сел контакт: `E.dend.apical[1]@0.6`. Красная
-плашка у сомы — торможение.
+![Circuit diagram: feed-forward inhibition](docs/img/circuit-ffi.png)
 
-## Запуск
+Everything in that picture is drawn from the source. A circle is an excitatory
+cell, a square an inhibitory one. Dendrites fan out to the left, the axon runs
+right as a dashed line. The green dot sits exactly where the contact landed:
+`E.dend.apical[1]@0.6`. The red bar at the soma is inhibition.
+
+## Running it
 
 ```bash
 pip install -e .[dev]
@@ -31,7 +38,7 @@ vnl export examples/ffi.vnl -o ffi.netpyne.py
 vnl graph  examples/disinhibition.vnl -o circuit.dot
 ```
 
-`vnl run` печатает растр прямо в терминал:
+`vnl run` prints a raster straight into the terminal:
 
 ```
 IN ......|.|.|||||.||||.|.||||.|..||||||..|||.||.|....|.|.||||.|||.|....|.||.....
@@ -40,98 +47,104 @@ IN ......|.|.|||||.||||.|.||||.|..||||||..|||.||.|....|.|.||||.|||.|....|.||....
    0                                                                      400 мс
 ```
 
-## Страница прогона
+## The run page
 
-`vnl view` собирает один самодостаточный HTML-файл: его печатают, кладут в
-задачу, открывают без всего. Скриптов в нём нет, только SVG и CSS. Три блока —
-схема, активность сети и трассы.
+`vnl view` builds a single self-contained HTML file. Print it, attach it to a
+ticket, open it with nothing installed. There are no scripts inside, only SVG
+and CSS. Three blocks: the circuit, network activity, and traces.
 
-![Активность сети: дорожка на нейрон](docs/img/network-activity.png)
+![Network activity: one track per neuron](docs/img/network-activity.png)
 
-Активность сети — обзорный экран: дорожка на клетку, штрихи спайков, под ними
-мембранный потенциал, серой полосой окно работы стимула. Он растёт строками, а
-не уплотнением, поэтому новая клетка не отнимает места у остальных.
+Network activity is the overview: one track per cell, spike strokes, the
+membrane potential underneath, and a grey band marking when a stimulus was
+running. It grows by rows rather than by packing, so a new cell takes no room
+away from the others.
 
-![Трассы](docs/img/traces.png)
+![Traces](docs/img/traces.png)
 
-В трассах у каждого вида записи своя подача. У потенциала линия порога, у
-проводимости отсчёт от нуля и заливка, у веса — сколько было и сколько стало, у
-спайков — штрихи вместо кривой.
+In the traces block each kind of recording is presented on its own terms. The
+potential gets a threshold line, conductance counts from zero and is filled in,
+weight reports where it started and where it ended, and spikes are strokes
+instead of a curve.
 
-Временная ось на странице одна. Тик «100 мс» в активности сети и в трассах
-стоит на одной вертикали, поэтому блоки читаются друг под другом. Оформление
-следует дизайн-системе Reckue (`design/reckue/`), есть светлая и тёмная темы.
+The page has one time axis. The «100 мс» tick in network activity and in the
+traces sits on the same vertical, so the blocks read one under another. Styling
+follows the Reckue design system (`design/reckue/`); light and dark themes are
+both there.
 
-### Раскладку считает ELK
+### ELK does the layout
 
-Расставить клетки и развести связи — отдельная задача, и решать её вручную
-незачем: самописные кривые сливаются уже на трёх контактах. `vnl.layout`
-собирает граф с портами и отдаёт его [ELK Layered](https://eclipse.dev/elk/)
-через Node, а `vnl.report` только рисует готовые ломаные.
+Placing cells and routing connections is a problem of its own, and there is no
+reason to solve it by hand: hand-rolled curves start merging at the third
+contact. `vnl.layout` assembles a graph with ports and hands it to
+[ELK Layered](https://eclipse.dev/elk/) through Node; `vnl.report` only draws
+the polylines it gets back.
 
-ELK выбран из-за портов с `FIXED_POS`: они приводят связь ровно в ту точку
-дендрита, где объявлен контакт. Graphviz с `splines=ortho` так не умеет.
+ELK was chosen for its `FIXED_POS` ports: they bring a connection to the exact
+point on the dendrite where the contact is declared. Graphviz with
+`splines=ortho` cannot do that.
 
 ```bash
 npm install --prefix tools/layout elkjs
 ```
 
-![Схема растормаживания с нейромодулятором](docs/img/circuit-disinhibition.png)
+![Disinhibition, with a neuromodulator](docs/img/circuit-disinhibition.png)
 
-Тот же движок на цепочке VIP ⊣ SST ⊣ PYR. Янтарный пунктир — нейромодулятор, он
-ведёт к тому контакту, которым управляет.
+The same engine on a VIP ⊣ SST ⊣ PYR chain. The amber dashed line is the
+neuromodulator, and it runs to the contact it governs.
 
-Без Node и elkjs всё работает по-прежнему: раскладка падает на встроенную
-послойную, и страница это отмечает. Движок выбирается флагом
+Without Node and elkjs everything still works: the layout falls back to the
+built-in layered one and the page says so. Pick the engine with
 `--layout elk|builtin|auto`.
 
-## Интерфейс
+## The interface
 
-Там, где нужно разобраться в причинности, страницы мало. Интерфейс живёт в
-`ui/` и читает тот же прогон в виде JSON:
+When you need to work out causality, a page is not enough. The interface lives
+in `ui/` and reads the same run as JSON:
 
 ```bash
 vnl data examples/ffi.vnl -o ui/public/run.json
 cd ui && npm install && npm run dev
 ```
 
-![Инспектор нейрона](docs/img/inspector.png)
+![Neuron inspector](docs/img/inspector.png)
 
-Первый экран — инспектор нейрона: входы с местом контакта и параметрами,
-мембранный потенциал с порогом, отдельно возбуждающая и тормозная
-проводимость, их баланс.
-Курсор времени общий для всех графиков, значения под ним держатся в шапке.
+The first screen is the neuron inspector: inputs with their contact site and
+parameters, membrane potential against the threshold, excitatory and inhibitory
+conductance apart, and the balance between them. One time cursor serves every
+plot, and the values under it stay in the header.
 
-![Отклик после спайка входа](docs/img/spike-triggered-average.png)
+![Response after an input spike](docs/img/spike-triggered-average.png)
 
-Усреднение вокруг спайков источника отвечает на вопрос «что делает с клеткой
-вот этот вход». Подпись под графиком предупреждает: это корреляция, а не
-действие входа поодиночке. Если два источника спайкуют синхронно, в окне
-каждого виден и сосед.
+Averaging around the source's spikes answers the question «what does this input
+do to the cell». The caption under the plot warns you: this is correlation, not
+what the input does on its own. When two sources fire in sync, each one's window
+shows the neighbour too.
 
-Собрано на Vite и React, без Next: локальному инструменту не нужны ни SSR, ни
-серверный роутинг, а готовый прогон он читает файлом. Формат обмена описан в
-`src/vnl/api.py`, зеркало для TypeScript — в `ui/src/model/types.ts`. Менять их
-можно только вместе.
+Built on Vite and React, without Next: a local tool needs neither SSR nor server
+routing, and it reads a finished run from a file. The exchange format is
+described in `src/vnl/api.py`, its TypeScript mirror in
+`ui/src/model/types.ts`. Change them together or not at all.
 
-## Развёртка параметра
+## Parameter sweep
 
-«А что будет, если подвинуть задержку» одним прогоном не ответить: другой
-параметр — другая симуляция. Развёртка клонирует модель, меняет в копии один
-параметр и считает каждую копию отдельно.
+«What happens if I move the delay» cannot be answered by one run: a different
+parameter means a different simulation. A sweep clones the model, changes one
+parameter in the copy, and computes each copy separately.
 
 ```bash
 vnl data examples/ffi.vnl --sweep "c3.delay=0.5,1.4,4,10"
 ```
 
-![Сравнение вариантов развёртки](docs/img/sweep.png)
+![Comparing sweep variants](docs/img/sweep.png)
 
-Крутится вес и задержка контакта, вложенные `dynamics.*` и `plasticity.*`,
-параметры типа клетки. Список полей явный, поэтому опечатка в пути ловится
-сразу и называет, что есть в модели. На `ffi` видно окно интеграции: чем позже
-приходит торможение, тем больше спайков успевает дать пирамида.
+You can turn a contact's weight and delay, the nested `dynamics.*` and
+`plasticity.*`, and the parameters of a cell type. The field list is explicit, so
+a typo in the path is caught immediately and tells you what the model actually
+has. On `ffi` the integration window is plain to see: the later inhibition
+arrives, the more spikes the pyramid gets out.
 
-## Язык
+## The language
 
 ```
 morphology pyr {
@@ -165,29 +178,29 @@ record E.soma.v
 run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }
 ```
 
-Числа пишутся с единицами (`ms`, `nS`, `um`, `mV`, `Hz`, `nA`); внутри IR всё
-приводится к мс / нСм / мкм / мВ / Гц / нА.
+Numbers carry units (`ms`, `nS`, `um`, `mV`, `Hz`, `nA`); inside the IR
+everything is converted to ms / nS / µm / mV / Hz / nA.
 
-Записывать можно `v` (потенциал), `g` (суммарная проводимость), `g_exc` и
-`g_inh` (возбуждение и торможение врозь — в сумме их баланс пропадает), `w`
-(суммарный вес пластичных входов) и `spikes`.
+You can record `v` (potential), `g` (total conductance), `g_exc` and `g_inh`
+(excitation and inhibition apart — summed together, their balance disappears),
+`w` (total weight of plastic inputs) and `spikes`.
 
-### Два решения, на которых держится всё остальное
+### Two decisions everything else rests on
 
-**Адресация контакта двухуровневая.** В исходнике стоит логический адрес
-`E.dend.apical[2]@0.72`; резолвер превращает его в `(section, fraction)` — тот
-самый кортеж, который понимают и NEURON (`sec(0.72)`), и NeuroML2
-(`postSegmentId` + `postFractionAlong`). Логический адрес переживает смену
-морфологии, разрешённый — нет, поэтому хранится первый.
+**Contact addressing has two levels.** The source holds a logical address,
+`E.dend.apical[2]@0.72`; the resolver turns it into `(section, fraction)` — the
+very tuple that both NEURON (`sec(0.72)`) and NeuroML2 (`postSegmentId` +
+`postFractionAlong`) understand. A logical address survives a change of
+morphology, a resolved one does not, so the first is what gets stored.
 
-**Обе стороны контакта — точки, а не клетки.** `pre` и `post` типизированы
-одинаково, поэтому axo-axonic, axo-dendritic и axo-somatic контакты — один
-механизм без спецслучаев.
+**Both ends of a contact are points, not cells.** `pre` and `post` have the same
+type, which makes axo-axonic, axo-dendritic and axo-somatic contacts one
+mechanism with no special cases.
 
-### Ничего не теряется молча
+### Nothing is lost silently
 
-При понижении уровня детализации параметры деградируют по явным правилам, и
-каждое срабатывание попадает в отчёт:
+When the level of detail drops, parameters degrade by explicit rules, and every
+one of them lands in a report:
 
 ```
 деградация L2 -> L1:
@@ -195,62 +208,62 @@ run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }
   в вес x0.619 и задержку +0.60 мс
 ```
 
-То же на экспорте. `vnl export` печатает список того, что NetPyNE не принимает
-один в один: короткотечная динамика, сигнал нейромодулятора, остановка NetStim.
-Это «скрипт плюс список потерь», а не молчаливое усечение модели.
+Export works the same way. `vnl export` prints what NetPyNE will not take as is:
+short-term dynamics, the neuromodulator signal, stopping a NetStim. It is «a
+script plus a list of losses», not a model quietly trimmed down.
 
-## Примеры
+## Examples
 
-| Файл | Что показывает |
+| File | What it shows |
 |---|---|
-| `examples/ffi.vnl` | feed-forward inhibition; выход пирамиды падает с 13 спайков до 6 |
-| `examples/disinhibition.vnl` | VIP → SST → PYR; вес пластичного входа стоит на месте до дофамина и растёт после |
-| `examples/depression.vnl` | один и тот же вход на депрессирующий и фасилитирующий контакт |
+| `examples/ffi.vnl` | feed-forward inhibition; the pyramid's output drops from 13 spikes to 6 |
+| `examples/disinhibition.vnl` | VIP → SST → PYR; the plastic input's weight holds still until dopamine, then grows |
+| `examples/depression.vnl` | the same input onto a depressing and a facilitating contact |
 
-## Что уже есть
+## What is there already
 
-- разбор `.vnl` и диагностика с указанием места и причины;
-- морфология, логическая адресация, затухание и задержка по дендриту;
-- L1: LIF с адаптацией, проводимостные синапсы, задержки, короткотечная
-  динамика Цодыкса–Маркрама, парный STDP, STDP с подкреплением и модулятором;
-- экспорт в NetPyNE со списком потерь и граф в DOT;
-- страница прогона с раскладкой через ELK;
-- развёртка параметра: несколько прогонов на одном экране;
-- интерфейс на React с инспектором нейрона;
-- 91 тест у ядра и 17 у интерфейса. Зависимостей у ядра нет: Node и ELK нужны
-  только для картинки, React — только для интерфейса.
+- parsing `.vnl`, with diagnostics that name the place and the reason;
+- morphology, logical addressing, attenuation and delay along the dendrite;
+- L1: LIF with adaptation, conductance synapses, delays, Tsodyks–Markram
+  short-term dynamics, pair STDP, and STDP with reinforcement and a modulator;
+- export to NetPyNE with a list of losses, and a DOT graph;
+- the run page, laid out by ELK;
+- parameter sweep: several runs on one screen;
+- a React interface with the neuron inspector;
+- 91 tests for the core and 17 for the interface. The core has no dependencies:
+  Node and ELK are only for the picture, React only for the interface.
 
-## Чего ещё нет
+## What is not there yet
 
-- **L2 не прогонялся.** Генератор NetPyNE проверен только на то, что скрипт
-  компилируется и несёт правильные `sec`/`loc`. NEURON локально не стоит;
-  первый настоящий прогон нужно делать в WSL или Docker.
-- **Нормировка проводимости условная.** Вес в `nS` трактуется в единицах
-  проводимости утечки (leak = 1 нСм), поэтому веса в примерах подобраны под L1,
-  а не взяты из физиологии. При первом прогоне L2 масштаб придётся пересчитать —
-  это ожидаемая правка, а не сюрприз.
-- Схему нельзя редактировать мышью. Курсор времени на статической странице
-  ходит только по трассам и не подсвечивает схему; чтобы он шёл сквозь все
-  блоки, нужен скрипт на странице.
-- В интерфейс не переехали схема и активность сети.
-- Дендритный веер рисуется схематично и в раскладке участвует лишь габаритом:
-  ELK обходит прямоугольник клетки, а не саму ветвь.
-- Нет импорта `.swc`, экспорта в NeuroML2, редактора и уровня L0.
+- **L2 has never been run.** The NetPyNE generator has only been checked for
+  compiling and carrying the right `sec`/`loc`. NEURON is not installed locally;
+  the first real run has to happen in WSL or Docker.
+- **The conductance scale is arbitrary.** A weight in `nS` is read in units of
+  the leak conductance (leak = 1 nS), so the weights in the examples are tuned
+  for L1 rather than taken from physiology. The first L2 run will force a
+  rescale — an expected edit, not a surprise.
+- The circuit cannot be edited with the mouse. The time cursor on the static
+  page only runs along the traces and does not highlight the circuit; carrying
+  it through every block needs a script on the page.
+- The circuit and network activity have not moved into the interface.
+- The dendritic fan is drawn schematically and takes part in the layout only as
+  a bounding box: ELK routes around the cell's rectangle, not around the branch.
+- No `.swc` import, no NeuroML2 export, no editor, no L0 level.
 
-## Разработка
+## Development
 
 ```bash
 python -m pytest -q          # ядро
 cd ui && npm test            # интерфейс
 ```
 
-## Лицензия
+## Licence
 
-Код проекта пока без лицензии, а это по умолчанию значит «все права защищены».
-Если использование нужно разрешить — скажите, какую лицензию поставить.
+The project's code carries no licence yet, which by default means all rights
+reserved. If it should be usable, say which licence to put on it.
 
-Каталог `design/reckue/` — фирменные материалы Reckue, условия на них
-отдельные: [design/reckue/LICENSE.md](design/reckue/LICENSE.md). Коротко: с ними
-можно собирать и дорабатывать VNL, но не брать их в другие продукты. Код
-обращается к переменным (`--ink`, `--accent`, `--exc`), а не к конкретным
-цветам, поэтому в форке токены заменяются своими без правок кода.
+The `design/reckue/` directory holds Reckue brand material under separate terms:
+[design/reckue/LICENSE.md](design/reckue/LICENSE.md). In short: you may build and
+work on VNL with it, but not carry it into other products. The code addresses
+variables (`--ink`, `--accent`, `--exc`) rather than concrete colours, so a fork
+swaps the tokens for its own without touching any code.
