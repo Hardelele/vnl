@@ -15,6 +15,10 @@ from .scales import fmt
 # значений, поэтому число -- компромисс между шагом курсора и весом страницы.
 SCRUB_ZONES = 80
 
+# Спайк -- событие, а не число: в строке курсора он показывается значком.
+SPIKE_MARK = "●"
+IDLE_MARK = "○"
+
 # Короткая пометка вида величины в строке курсора: без неё две записи с
 # одной клетки (v и g) читаются как одно и то же число.
 _SCRUB_MARK = {
@@ -28,13 +32,21 @@ _SCRUB_MARK = {
 _SCRUB_DIGITS = {"v": 1, "g": 2, "g_exc": 2, "g_inh": 2, "w": 2}
 
 
+def scrub_label(instance: str, kind: str) -> str:
+    """Подпись ряда в строке курсора.
+
+    Живёт рядом со скраббером, а не в сборке блока: это его формат строки.
+    """
+    return instance + _SCRUB_MARK.get(kind, " " + kind)
+
+
 def scrub_value(
     kind: str, values: list[float], start: int, stop: int
 ) -> str:
     """Что показать в точке курсора: число или факт разряда."""
     if kind == "spikes":
         fired = any(value >= 0.5 for value in values[start:stop])
-        return "●" if fired else "○"
+        return SPIKE_MARK if fired else IDLE_MARK
     index = min(len(values) - 1, start)
     return fmt(values[index], _SCRUB_DIGITS.get(kind, 2))
 

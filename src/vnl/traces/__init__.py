@@ -30,12 +30,14 @@ from .figures import (
 from .geometry import Frame, time_axis
 from .sampling import COLUMNS, downsample_minmax, spike_times
 from .scales import value_scale
-from .scrub import SCRUB_ZONES, scrub
+from .scrub import IDLE_MARK, SCRUB_ZONES, SPIKE_MARK, scrub, scrub_label
 from .style import STYLE
 
 __all__ = [
     "COLUMNS",
+    "IDLE_MARK",
     "SCRUB_ZONES",
+    "SPIKE_MARK",
     "STYLE",
     "downsample_minmax",
     "render",
@@ -89,12 +91,11 @@ def render(model: ir.Model, result: SimResult) -> str:
     for key, values in result.traces.items():
         if not values:
             continue
-        head, _, kind = key.partition(":")
-        if kind in ("v", ""):
+        instance, section, kind = ir.parse_trace_key(key)
+        if kind == "v":
+            head = f"{instance}.{section}"
             points = downsample_minmax(result.times[: len(values)], values)
-            prepared.append(
-                (head, kind, points, threshold_of(model, head.split(".")[0]))
-            )
+            prepared.append((head, kind, points, threshold_of(model, instance)))
     voltage_scale = shared_voltage_scale(prepared)
 
     # Ряды для скраббера: строка курсора должна перечислять все записи в
@@ -105,9 +106,9 @@ def render(model: ir.Model, result: SimResult) -> str:
         if not values:
             continue
         times = result.times[: len(values)]
-        head, _, kind = key.partition(":")
-        instance = head.split(".")[0]
-        series.append((instance + _SCRUB_MARK.get(kind, " " + kind), kind, values))
+        instance, section, kind = ir.parse_trace_key(key)
+        head = f"{instance}.{section}"
+        series.append((scrub_label(instance, kind), kind, values))
 
         if kind == "spikes":
             figures.append(
