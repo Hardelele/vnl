@@ -93,6 +93,27 @@ export class RunView {
     return index * this.dt
   }
 
+  get sweep() {
+    return this.run.sweep
+  }
+
+  /** Трасса величины в конкретном варианте развёртки. */
+  variantTrace(
+    variantIndex: number,
+    instance: string,
+    variable: string,
+  ): number[] | undefined {
+    const variant = this.run.sweep?.variants[variantIndex]
+    if (!variant) return undefined
+    const exact = variant.result.traces[`${instance}.soma:${variable}`]
+    if (exact) return exact
+    const suffix = `:${variable}`
+    for (const [key, values] of Object.entries(variant.result.traces)) {
+      if (key.startsWith(`${instance}.`) && key.endsWith(suffix)) return values
+    }
+    return undefined
+  }
+
   cellType(id: string) {
     const neuron = this.byId.get(id)
     return neuron ? this.run.model.cellTypes[neuron.cellType] : undefined

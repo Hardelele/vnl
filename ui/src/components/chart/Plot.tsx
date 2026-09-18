@@ -24,6 +24,7 @@ export interface Series {
   fill?: 'zero' | 'bottom' | 'none'
   width?: number
   dashed?: boolean
+  opacity?: number
   label?: string
 }
 
@@ -179,7 +180,11 @@ export function Plot({
                   ) : null}
                   <path
                     className={`plot-line${item.dashed ? ' plot-dashed' : ''}`}
-                    style={{ stroke: item.color, strokeWidth: item.width ?? 1.4 }}
+                    style={{
+                      stroke: item.color,
+                      strokeWidth: item.width ?? 1.4,
+                      opacity: item.opacity ?? 1,
+                    }}
                     d={path}
                   />
                 </g>

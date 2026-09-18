@@ -199,21 +199,55 @@ def result_payload(result: SimResult) -> dict[str, Any]:
     }
 
 
+def _diagnostics(items: list[Any] | None) -> list[dict[str, Any]]:
+    return [
+        {"severity": d.severity, "where": d.where, "message": d.message}
+        for d in (items or [])
+    ]
+
+
+def sweep_payload(sweep: Any, model: ir.Model) -> dict[str, Any]:
+    """Развёртка параметра: каждый вариант -- отдельный прогон.
+
+    Базовый прогон остаётся в `result`, поэтому интерфейс, который про
+    развёртку не знает, продолжает работать как прежде.
+    """
+    from .sweep import summarise
+
+    rates = {row["label"]: row for row in summarise(sweep, model)}
+    return {
+        "spec": sweep.spec,
+        "path": sweep.path,
+        "variants": [
+            {
+                "label": variant.label,
+                "value": variant.value,
+                "result": result_payload(variant.result),
+                "spikes": rates[variant.label]["spikes"],
+                "rates": rates[variant.label]["rates"],
+                "diagnostics": _diagnostics(variant.diagnostics),
+            }
+            for variant in sweep.variants
+        ],
+    }
+
+
 def run_payload(
     model: ir.Model,
     result: SimResult,
     diagnostics: list[Any] | None = None,
+    sweep: Any | None = None,
 ) -> dict[str, Any]:
     """Всё, что нужно интерфейсу для одного прогона."""
-    return {
+    payload: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "model": model_payload(model),
         "result": result_payload(result),
-        "diagnostics": [
-            {"severity": d.severity, "where": d.where, "message": d.message}
-            for d in (diagnostics or [])
-        ],
+        "diagnostics": _diagnostics(diagnostics),
     }
+    if sweep is not None:
+        payload["sweep"] = sweep_payload(sweep, model)
+    return payload
 
 
 def dumps(payload: dict[str, Any], pretty: bool = False) -> str:

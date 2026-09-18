@@ -18,6 +18,7 @@ import {
   spikeTriggeredAverage,
 } from '../../lib/analysis'
 import { Plot } from '../chart/Plot'
+import { SweepComparison } from './SweepComparison'
 import { useUi } from '../../state/store'
 import './inspector.css'
 
@@ -277,6 +278,8 @@ export function NeuronInspector({ view, id }: Props) {
           <code>record {id}.soma.g_exc</code> и <code>g_inh</code>.
         </p>
       )}
+
+      <SweepComparison view={view} id={id} />
 
       {responses.length > 0 ? (
         <section className="insp-block">

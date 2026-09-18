@@ -139,8 +139,25 @@ def cmd_data(args: argparse.Namespace) -> int:
     _print_diagnostics(diagnostics)
 
     from .api import dumps, run_payload
+    from .sweep import SweepError, run_sweep, summarise
 
-    payload = run_payload(model, simulate(model), diagnostics)
+    sweep = None
+    if args.sweep:
+        try:
+            sweep = run_sweep(model, args.sweep)
+        except SweepError as exc:
+            print(str(exc), file=sys.stderr)
+            return 4
+        print(f"развёртка {sweep.path}: {len(sweep.variants)} вариантов")
+        for row in summarise(sweep, model):
+            rates = ", ".join(
+                f"{name} {count}" for name, count in row["spikes"].items()
+            )
+            print(f"  {row['label']:>8s} → {rates}")
+        for variant in sweep.variants:
+            _print_diagnostics(variant.diagnostics)
+
+    payload = run_payload(model, simulate(model), diagnostics, sweep)
     out = Path(args.out or Path(args.file).with_suffix(".json"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(dumps(payload, pretty=args.pretty), encoding="utf-8")
@@ -232,6 +249,11 @@ def main(argv: list[str] | None = None) -> int:
     data.add_argument("-o", "--out")
     data.add_argument(
         "--pretty", action="store_true", help="читаемый JSON с отступами"
+    )
+    data.add_argument(
+        "--sweep",
+        metavar="ПАРАМЕТР=ЗНАЧЕНИЯ",
+        help='развернуть параметр, например "c1.delay=0.5,1,2,4"',
     )
     data.set_defaults(func=cmd_data)
 

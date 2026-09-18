@@ -152,9 +152,28 @@ export interface Diagnostic {
   message: string
 }
 
+export interface SweepVariant {
+  label: string
+  value: number
+  result: Result
+  spikes: Record<string, number>
+  rates: Record<string, number>
+  diagnostics: Diagnostic[]
+}
+
+export interface Sweep {
+  /** Исходная строка развёртки, например `c3.delay=0.5,1.4,4,10`. */
+  spec: string
+  /** Путь параметра: `c3.delay`. */
+  path: string
+  variants: SweepVariant[]
+}
+
 export interface Run {
   schema: number
   model: Model
   result: Result
   diagnostics: Diagnostic[]
+  /** Есть только если прогон делался с развёрткой параметра. */
+  sweep?: Sweep
 }
