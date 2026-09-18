@@ -1,4 +1,4 @@
-"""Командная строка: vnl check | run | view | data | export | graph | serve."""
+"""Командная строка: vnl check | run | view | data | export | graph | add | serve."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from pathlib import Path
 from . import __version__
 from .backends.dot_export import export as dot_export
 from .backends.netpyne_export import export as netpyne_export
-from .ir import Model
+from .ir import Model, Site
+from .patterns import Pattern, Port
 from .resolve import Diagnostic, ValidationError, load
 from .sim import simulate
 from .store import StoreError
@@ -178,6 +179,85 @@ def cmd_graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def _port(spec: str) -> Port:
+    """`in=IN.soma`, `out=E.dend.apical[1]@0.6`, `drive:mod=VTA.soma`.
+
+    Порт не выводится из схемы сам: чем блок подключается наружу -- решение
+    автора, а не свойство модели. Два одинаковых по форме входа могут значить
+    «сюда приходит сигнал» и «сюда приходит управление».
+    """
+    if "=" not in spec:
+        raise ValidationError(
+            [Diagnostic("error", spec, "порт пишется как имя=точка, например in=IN.soma")]
+        )
+    left, target = spec.split("=", 1)
+    name, _, direction = left.partition(":")
+    direction = direction or name
+    if direction not in ("in", "out", "mod"):
+        raise ValidationError(
+            [
+                Diagnostic(
+                    "error",
+                    spec,
+                    f"направление {direction!r} не из in/out/mod; "
+                    "если имя порта своё, пишите имя:направление=точка",
+                )
+            ]
+        )
+
+    place, _, fraction = target.partition("@")
+    instance, _, section = place.partition(".")
+    if not instance:
+        raise ValidationError(
+            [Diagnostic("error", spec, "не указан нейрон: нужно вида IN.soma")]
+        )
+    return Port(
+        name=name,
+        direction=direction,  # type: ignore[arg-type]
+        site=Site(
+            instance=instance,
+            section=section or "soma",
+            fraction=float(fraction) if fraction else 0.5,
+        ),
+    )
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Положить готовую схему в библиотеку.
+
+    Раньше это делалось только из Python, поэтому наполнить библиотеку можно
+    было лишь разовым скриптом. Стимулы и записи уезжают в витрину карточки
+    сами (`Pattern.from_model`), так что импорт примера сразу даёт паттерн с
+    демонстрационным запуском.
+    """
+    from .store import Store
+
+    model, diagnostics = _read(args.file)
+    _print_diagnostics(diagnostics)
+
+    store = Store(args.root)
+    ports = [_port(spec) for spec in (args.port or [])]
+    name = args.name or model.name
+    taken = [item.id for item in store.patterns()]
+    identifier = args.id or Pattern.empty(name, taken=taken).id
+
+    pattern = Pattern.from_model(
+        model,
+        id=identifier,
+        name=name,
+        ports=ports,
+        level=args.level,
+        status="ready" if ports else "draft",
+    )
+    problems = pattern.validate()
+    store.save_pattern(pattern)
+
+    print(f"{pattern.name} -> {store.pattern_path(pattern.id)}")
+    for problem in problems:
+        print(f"  черновик: {problem}", file=sys.stderr)
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     # Импорт внутри команды: остальным командам сервер не нужен, а `vnl check`
     # не должен тянуть за собой сокеты.
@@ -253,6 +333,25 @@ def main(argv: list[str] | None = None) -> int:
     graph.add_argument("file")
     graph.add_argument("-o", "--out")
     graph.set_defaults(func=cmd_graph)
+
+    add = sub.add_parser("add", help="положить схему из .vnl в библиотеку")
+    add.add_argument("file")
+    add.add_argument("--root", default=".vnl", help="каталог хранилища")
+    add.add_argument("--name", help="имя паттерна (по умолчанию имя модели)")
+    add.add_argument("--id", help="идентификатор (по умолчанию из имени)")
+    add.add_argument(
+        "--level",
+        choices=("L1", "L2", "L3"),
+        default="L2",
+        help="уровень каталога: масштаб конструкции, а не детализация физики",
+    )
+    add.add_argument(
+        "--port",
+        action="append",
+        metavar="ИМЯ=ТОЧКА",
+        help="порт блока, например in=IN.soma или drive:mod=VTA.soma",
+    )
+    add.set_defaults(func=cmd_add)
 
     serve = sub.add_parser(
         "serve", help="локальный сервер библиотеки паттернов и песочниц"
