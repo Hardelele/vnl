@@ -109,12 +109,21 @@ def cmd_view(args: argparse.Namespace) -> int:
         print("для просмотра нужен прогон L1: поставьте level = L1", file=sys.stderr)
         return 2
 
+    from .layout import LayoutError, layout
     from .report import render
 
     result = simulate(model)
+    try:
+        placement = layout(model, args.layout)
+    except LayoutError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    for note in placement.notes:
+        print(note, file=sys.stderr)
+
     out = Path(args.out or Path(args.file).with_suffix(".html"))
-    out.write_text(render(model, result), encoding="utf-8")
-    print(f"страница: {out}")
+    out.write_text(render(model, result, placement), encoding="utf-8")
+    print(f"страница: {out} (раскладка: {placement.engine})")
     if args.open:
         webbrowser.open(out.resolve().as_uri())
     return 0
@@ -190,6 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     view.add_argument("file")
     view.add_argument("-o", "--out")
     view.add_argument("--open", action="store_true", help="открыть в браузере")
+    view.add_argument(
+        "--layout",
+        choices=("auto", "elk", "builtin"),
+        default="auto",
+        help="движок раскладки схемы (по умолчанию auto: ELK, если доступен)",
+    )
     view.set_defaults(func=cmd_view)
 
     export = sub.add_parser("export", help="сгенерировать скрипт NetPyNE")

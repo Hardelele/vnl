@@ -1,27 +1,19 @@
 """Отрисовка модели и результата прогона в самодостаточный HTML.
 
+Только рисование: где стоят клетки и как идут связи, решает vnl.layout.
 Весь вывод -- статический SVG, собранный на Python: ни внешних библиотек, ни
-graphviz, ни скриптов в странице. Схема рисует морфологию как она есть, потому
-что главное в языке -- куда именно сел контакт, а не просто «A соединён с B».
+скриптов в самой странице. Схема показывает морфологию, потому что главное
+в языке -- куда именно сел контакт, а не просто «A соединён с B».
 """
 
 from __future__ import annotations
 
 import html
 import math
-from dataclasses import dataclass
 
 from . import ir
+from .layout import SOMA_R, LayoutResult, layout
 from .sim import SimResult
-
-CELL_GAP_Y = 190
-COMPACT_GAP_Y = 124
-COLUMN_GAP_X = 230
-MARGIN = 70
-SOMA_R = 15
-AXON_LEN = 52
-DEND_BASE = 34
-DEND_SCALE = 70.0
 
 
 def _esc(text: str) -> str:
@@ -33,170 +25,80 @@ def _is_inhibitory(model: ir.Model, instance_id: str) -> bool:
     return "inhibitory" in cell_type.tags or cell_type.transmitter == "gaba"
 
 
-@dataclass
-class _Placed:
-    """Клетка на холсте: центр сомы и геометрия отростков."""
+def _rounded_path(points: list[tuple[float, float]], radius: float = 14.0) -> str:
+    """Ломаная со скруглёнными углами: маршруты ELK иначе выглядят рублеными."""
+    if len(points) < 3:
+        return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in points)
 
-    instance: str
-    x: float
-    y: float
-    inhibitory: bool
-    dendrites: dict[str, tuple[float, float, float, float]]  # id -> x1,y1,x2,y2
-    axon_tip: tuple[float, float]
-
-    def point_on(self, section: str, fraction: float) -> tuple[float, float]:
-        if section not in self.dendrites:
-            return self.x, self.y
-        x1, y1, x2, y2 = self.dendrites[section]
-        return x1 + (x2 - x1) * fraction, y1 + (y2 - y1) * fraction
-
-
-def _levels(model: ir.Model) -> dict[str, int]:
-    """Грубая раскладка по слоям: от входов вглубь, по прямым связям."""
-    targets = {contact.post.instance for contact in model.contacts}
-    roots = [name for name in model.instances if name not in targets]
-    if not roots:
-        roots = list(model.instances)[:1]
-
-    level = {name: 0 for name in roots}
-    changed = True
-    guard = 0
-    while changed and guard < len(model.instances) + 2:
-        changed = False
-        guard += 1
-        for contact in model.contacts:
-            pre, post = contact.pre.instance, contact.post.instance
-            if pre not in level:
-                continue
-            candidate = level[pre] + 1
-            if level.get(post, -1) < candidate:
-                level[post] = candidate
-                changed = True
-    for name in model.instances:
-        level.setdefault(name, 0)
-    return level
-
-
-def _place(model: ir.Model) -> tuple[dict[str, _Placed], float, float]:
-    """Сигнал течёт слева направо: дендриты веером влево, аксон вправо.
-
-    При такой раскладке связь «аксон одной клетки -- дендрит следующей» не
-    пересекает сомы, а место контакта видно там, где оно и объявлено.
-    """
-    level = _levels(model)
-    columns: dict[int, list[str]] = {}
-    for name in model.instances:
-        columns.setdefault(level[name], []).append(name)
-
-    has_morphology = any(
-        not model.cell_type_of(name).is_point for name in model.instances
-    )
-    gap_y = CELL_GAP_Y if has_morphology else COMPACT_GAP_Y
-    tallest = max(len(names) for names in columns.values())
-    placed: dict[str, _Placed] = {}
-    for column, names in columns.items():
-        centering = (tallest - len(names)) / 2 * gap_y
-        for row, name in enumerate(names):
-            x = column * COLUMN_GAP_X
-            y = row * gap_y + centering
-            morph = model.morphology_of(name)
-            branches = [
-                section
-                for section in morph.sections.values()
-                if section.kind == "dend"
-            ]
-            dendrites: dict[str, tuple[float, float, float, float]] = {}
-            count = max(len(branches), 1)
-            for index, section in enumerate(branches):
-                # веер уводится вверх, чтобы ни одна ветвь не ложилась
-                # на горизонталь и не путалась с линией связи
-                spread = (
-                    0.0 if count == 1 else (index / (count - 1) - 0.5) * 1.4
-                ) - 0.3
-                angle = math.pi + spread
-                length = DEND_BASE + DEND_SCALE * min(section.length / 200.0, 2.0)
-                dendrites[section.id] = (
-                    x,
-                    y,
-                    x + math.cos(angle) * length,
-                    y + math.sin(angle) * length,
-                )
-            placed[name] = _Placed(
-                instance=name,
-                x=x,
-                y=y,
-                inhibitory=_is_inhibitory(model, name),
-                dendrites=dendrites,
-                axon_tip=(x + AXON_LEN, y),
-            )
-
-    xs: list[float] = []
-    ys: list[float] = []
-    for cell in placed.values():
-        xs += [cell.x - SOMA_R, cell.axon_tip[0]]
-        ys += [cell.y - SOMA_R - 16, cell.y + SOMA_R + 20]
-        for x1, y1, x2, y2 in cell.dendrites.values():
-            xs += [x1, x2]
-            ys += [y1, y2]
-
-    offset_x, offset_y = MARGIN - min(xs), MARGIN - min(ys)
-    for name, cell in placed.items():
-        placed[name] = _Placed(
-            instance=cell.instance,
-            x=cell.x + offset_x,
-            y=cell.y + offset_y,
-            inhibitory=cell.inhibitory,
-            dendrites={
-                key: (x1 + offset_x, y1 + offset_y, x2 + offset_x, y2 + offset_y)
-                for key, (x1, y1, x2, y2) in cell.dendrites.items()
-            },
-            axon_tip=(cell.axon_tip[0] + offset_x, cell.axon_tip[1] + offset_y),
+    out = [f"M{points[0][0]:.1f},{points[0][1]:.1f}"]
+    for index in range(1, len(points) - 1):
+        before, corner, after = points[index - 1], points[index], points[index + 1]
+        entry = _step_towards(corner, before, radius)
+        exit_ = _step_towards(corner, after, radius)
+        out.append(f"L{entry[0]:.1f},{entry[1]:.1f}")
+        out.append(
+            f"Q{corner[0]:.1f},{corner[1]:.1f} {exit_[0]:.1f},{exit_[1]:.1f}"
         )
-
-    width = max(xs) - min(xs) + MARGIN * 2
-    height = max(ys) - min(ys) + MARGIN * 2
-    return placed, width, height
+    out.append(f"L{points[-1][0]:.1f},{points[-1][1]:.1f}")
+    return " ".join(out)
 
 
-def circuit_svg(model: ir.Model) -> str:
-    placed, width, height = _place(model)
+def _step_towards(
+    origin: tuple[float, float], target: tuple[float, float], distance: float
+) -> tuple[float, float]:
+    dx, dy = target[0] - origin[0], target[1] - origin[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return origin
+    step = min(distance, length / 2)
+    return origin[0] + dx / length * step, origin[1] + dy / length * step
+
+
+def _trim_end(points: list[tuple[float, float]], distance: float) -> list[tuple[float, float]]:
+    """Отвести конец маршрута от центра сомы, иначе стрелка прячется под ней."""
+    trimmed = list(points)
+    while len(trimmed) > 2:
+        last, previous = trimmed[-1], trimmed[-2]
+        if math.hypot(last[0] - previous[0], last[1] - previous[1]) > distance:
+            break
+        trimmed.pop()
+    last, previous = trimmed[-1], trimmed[-2]
+    trimmed[-1] = _step_towards(last, previous, distance)
+    return trimmed
+
+
+def circuit_svg(model: ir.Model, placement: LayoutResult | None = None) -> str:
+    placement = placement or layout(model)
     parts: list[str] = [
-        f'<svg class="circuit" viewBox="0 0 {width:.0f} {height:.0f}" '
-        f'role="img" aria-label="Схема микросхемы">',
-        '<defs>'
+        f'<svg class="circuit" viewBox="0 0 {placement.width:.0f} '
+        f'{placement.height:.0f}" role="img" aria-label="Схема микросхемы">',
+        "<defs>"
         '<marker id="exc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
         'markerHeight="6" orient="auto-start-reverse">'
         '<path d="M0,0 L10,5 L0,10 z" class="exc-fill"/></marker>'
         '<marker id="inh" viewBox="0 0 10 10" refX="4" refY="5" markerWidth="7" '
         'markerHeight="7" orient="auto-start-reverse">'
         '<path d="M2,0 L2,10" class="inh-stroke"/></marker>'
-        '</defs>',
+        "</defs>",
     ]
 
-    for name, cell in placed.items():
-        for x1, y1, x2, y2 in cell.dendrites.values():
+    for cell in placement.cells.values():
+        for x1, y1, x2, y2 in cell.dendrites():
             parts.append(
                 f'<line class="dend" x1="{x1:.1f}" y1="{y1:.1f}" '
                 f'x2="{x2:.1f}" y2="{y2:.1f}"/>'
             )
+        soma, tip = cell.soma, cell.axon_tip
         parts.append(
-            f'<line class="axon" x1="{cell.x:.1f}" y1="{cell.y:.1f}" '
-            f'x2="{cell.axon_tip[0]:.1f}" y2="{cell.axon_tip[1]:.1f}"/>'
+            f'<line class="axon" x1="{soma[0]:.1f}" y1="{soma[1]:.1f}" '
+            f'x2="{tip[0]:.1f}" y2="{tip[1]:.1f}"/>'
         )
 
     for contact in model.contacts:
-        pre = placed[contact.pre.instance]
-        post = placed[contact.post.instance]
-        start = pre.axon_tip
-        end = post.point_on(contact.post.section, contact.post.fraction)
-        forward = end[0] > start[0]
-        bow = 26.0 if forward else 0.55 * CELL_GAP_Y  # обратная связь обходит снизу
-        control = (
-            (start[0] + end[0]) / 2,
-            (start[1] + end[1]) / 2 + (bow if not forward else -bow),
-        )
+        route = placement.routes.get(contact.id)
+        if route is None:
+            continue
         klass = "inh" if contact.receptor.startswith("gaba") else "exc"
-        marker = "inh" if klass == "inh" else "exc"
         where = (
             f"{contact.post.section}@{contact.post.fraction:g}"
             if contact.post.section != "soma"
@@ -211,54 +113,47 @@ def circuit_svg(model: ir.Model) -> str:
             tooltip += " · динамический"
         if contact.plasticity.enabled:
             tooltip += f" · {contact.plasticity.rule}"
+        on_soma = contact.post.section == "soma"
+        points = _trim_end(route.points, SOMA_R + 4) if on_soma else route.points
         parts.append(
-            f'<path class="edge {klass}" marker-end="url(#{marker})" '
-            f'd="M{start[0]:.1f},{start[1]:.1f} Q{control[0]:.1f},{control[1]:.1f} '
-            f'{end[0]:.1f},{end[1]:.1f}"><title>{_esc(tooltip)}</title></path>'
+            f'<path class="edge {klass}" marker-end="url(#{klass})" '
+            f'd="{_rounded_path(points)}">'
+            f"<title>{_esc(tooltip)}</title></path>"
         )
-        if contact.post.section != "soma":
+        if not on_soma:
+            end = route.end
             parts.append(
                 f'<circle class="bouton {klass}-fill" cx="{end[0]:.1f}" '
                 f'cy="{end[1]:.1f}" r="4.5"><title>{_esc(tooltip)}</title></circle>'
             )
 
     for modulator in model.modulators.values():
-        governed = [
-            contact
-            for contact in model.contacts
-            if contact.plasticity.modulator == modulator.id
-        ]
-        for source in modulator.sources:
-            for contact in governed:
-                start = placed[source].axon_tip
-                end = placed[contact.post.instance].point_on(
-                    contact.post.section, contact.post.fraction
-                )
-                control = ((start[0] + end[0]) / 2 + 40, (start[1] + end[1]) / 2)
-                parts.append(
-                    f'<path class="edge mod" d="M{start[0]:.1f},{start[1]:.1f} '
-                    f'Q{control[0]:.1f},{control[1]:.1f} {end[0]:.1f},{end[1]:.1f}">'
-                    f"<title>{_esc(modulator.transmitter)} от {_esc(source)} "
-                    f"управляет контактом {_esc(contact.id)}</title></path>"
-                )
+        for route_id, route in placement.routes.items():
+            if not route_id.startswith(f"mod:{modulator.id}:"):
+                continue
+            _, _, source, contact_id = route_id.split(":", 3)
+            parts.append(
+                f'<path class="edge mod" d="{_rounded_path(route.points)}">'
+                f"<title>{_esc(modulator.transmitter)} от {_esc(source)} "
+                f"управляет контактом {_esc(contact_id)}</title></path>"
+            )
 
-    for name, cell in placed.items():
-        cell_type = model.cell_type_of(name)
+    for name, cell in placement.cells.items():
+        geometry = cell.geometry
+        x, y = cell.soma
         shape = (
-            f'<rect class="soma inh-cell" x="{cell.x - SOMA_R:.1f}" '
-            f'y="{cell.y - SOMA_R:.1f}" width="{SOMA_R * 2}" height="{SOMA_R * 2}" '
-            f'rx="4"/>'
-            if cell.inhibitory
-            else f'<circle class="soma exc-cell" cx="{cell.x:.1f}" '
-            f'cy="{cell.y:.1f}" r="{SOMA_R}"/>'
+            f'<rect class="soma inh-cell" x="{x - SOMA_R:.1f}" '
+            f'y="{y - SOMA_R:.1f}" width="{SOMA_R * 2:.0f}" '
+            f'height="{SOMA_R * 2:.0f}" rx="4"/>'
+            if geometry.inhibitory
+            else f'<circle class="soma exc-cell" cx="{x:.1f}" cy="{y:.1f}" '
+            f'r="{SOMA_R:.0f}"/>'
         )
         parts.append(
-            f'<g><title>{_esc(name)} — {_esc(cell_type.id)}</title>{shape}'
-            f'<text class="cell-name" x="{cell.x:.1f}" y="{cell.y + 5:.1f}">'
-            f'{_esc(name)}</text>'
-            f'<text class="cell-type" x="{cell.x + SOMA_R + 6:.1f}" '
-            f'y="{cell.y + SOMA_R + 14:.1f}">'
-            f'{_esc(cell_type.id)}</text></g>'
+            f'<g><title>{_esc(name)} — {_esc(geometry.cell_type)}</title>{shape}'
+            f'<text class="cell-name" x="{x:.1f}" y="{y + 5:.1f}">{_esc(name)}</text>'
+            f'<text class="cell-type" x="{x + SOMA_R + 6:.1f}" '
+            f'y="{y + SOMA_R + 14:.1f}">{_esc(geometry.cell_type)}</text></g>'
         )
 
     parts.append("</svg>")
@@ -457,7 +352,12 @@ ul.notes li { margin: 3px 0; }
 """
 
 
-def render(model: ir.Model, result: SimResult) -> str:
+def render(
+    model: ir.Model,
+    result: SimResult,
+    placement: LayoutResult | None = None,
+) -> str:
+    placement = placement or layout(model)
     rows = "".join(
         f"<tr><td>{_esc(name)}</td><td class='num'>{count}</td>"
         f"<td class='num'>{count / model.run.duration * 1000:.1f}</td></tr>"
@@ -467,6 +367,9 @@ def render(model: ir.Model, result: SimResult) -> str:
         trace_svg(key, result.times, values)
         for key, values in result.traces.items()
         if values
+    )
+    layout_note = "".join(
+        f"<p class='sub note'>{_esc(note)}</p>" for note in placement.notes
     )
     degradation = (
         "<h2>Деградация L2 → L1</h2><section><ul class='notes'>"
@@ -491,13 +394,14 @@ def render(model: ir.Model, result: SimResult) -> str:
 {model.run.duration:g} мс · шаг {model.run.dt:g} мс · seed {model.run.seed}</p>
 
 <h2>Схема</h2>
-<section>{circuit_svg(model)}
+<section>{circuit_svg(model, placement)}
 <div class="legend"><span class="e">возбуждающий контакт</span>
 <span class="i">тормозный контакт</span>
 <span class="m">нейромодулятор</span>
 <span>круг — возбуждающая клетка, квадрат — тормозная</span>
 <span>серое: дендриты слева веером, аксон справа пунктиром</span>
 <span>точка на ветви — место контакта</span></div>
+{layout_note}
 </section>
 
 <h2>Растр спайков</h2>
