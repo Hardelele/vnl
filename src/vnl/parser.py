@@ -33,7 +33,7 @@ _TOKEN = re.compile(
     re.VERBOSE,
 )
 
-_VARS = {"v", "spikes", "g", "w"}
+_VARS = {"v", "spikes", "g", "g_exc", "g_inh", "w"}
 
 
 class ParseError(SyntaxError):

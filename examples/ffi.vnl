@@ -54,5 +54,7 @@ stim drive -> IN.soma : poisson rate=250Hz weight=1.5nS start=20ms stop=380ms
 record IN.soma.v
 record E.soma.v
 record I.soma.v
+record E.soma.g_exc
+record E.soma.g_inh
 
 run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }

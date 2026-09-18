@@ -14,9 +14,7 @@ from . import ir
 from .morphology import MorphologyError
 from .parser import ParsedModel, PendingContact, PendingRecording, PendingStimulus
 
-_VARS = {"v", "spikes", "g", "w"}
-_EXCITATORY = {"ampa", "nmda", "nicotinic"}
-_INHIBITORY = {"gaba_a", "gaba_b"}
+_VARS = {"v", "spikes", "g", "g_exc", "g_inh", "w"}
 
 
 class ValidationError(ValueError):
@@ -114,13 +112,13 @@ class _Resolver:
         transmitter = self.parsed.cell_types[
             self.parsed.instances[pre.instance].cell_type
         ].transmitter
-        if transmitter == "gaba" and pending.receptor in _EXCITATORY:
+        if transmitter == "gaba" and not ir.is_inhibitory_receptor(pending.receptor):
             self.warn(
                 where,
                 f"клетка {pre.instance} помечена как ГАМК-ергическая, "
                 f"а рецептор {pending.receptor} возбуждающий",
             )
-        if transmitter == "glutamate" and pending.receptor in _INHIBITORY:
+        if transmitter == "glutamate" and ir.is_inhibitory_receptor(pending.receptor):
             self.warn(
                 where,
                 f"клетка {pre.instance} помечена как глутаматергическая, "
@@ -262,6 +260,27 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
         run=parsed.run,
         source=parsed.source,
     )
+
+    # Две записи одной величины с одного участка писали бы в одну трассу по
+    # два значения за шаг и разъезжались со шкалой времени -- дубль отбрасываем.
+    unique: list[ir.Recording] = []
+    seen_records: set[tuple[str, str, float, str]] = set()
+    for recording in model.recordings:
+        key = (
+            recording.target.instance,
+            recording.target.section,
+            recording.target.fraction,
+            recording.var,
+        )
+        if key in seen_records:
+            resolver.warn(
+                f"запись {recording.id}",
+                f"повтор записи {recording.target}.{recording.var}: пропущена",
+            )
+            continue
+        seen_records.add(key)
+        unique.append(recording)
+    model.recordings = unique
 
     seen: set[str] = set()
     for contact in model.contacts:

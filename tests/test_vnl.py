@@ -233,3 +233,38 @@ def test_export_reports_what_it_could_not_carry_over():
 
 def test_sanitize_makes_neuron_safe_names():
     assert sanitize("dend.apical[12]") == "dend_apical_12"
+
+
+def test_excitation_and_inhibition_are_recorded_apart():
+    """Баланс входа виден только врозь: в сумме он пропадает."""
+    source = example("ffi").replace(
+        "record E.soma.v",
+        "record E.soma.v\nrecord E.soma.g_exc\nrecord E.soma.g_inh\nrecord E.soma.g",
+    )
+    model, _ = load(source)
+    result = simulate(model)
+
+    excitation = result.traces["E.soma:g_exc"]
+    inhibition = result.traces["E.soma:g_inh"]
+    total = result.traces["E.soma:g"]
+
+    assert max(excitation) > 0 and max(inhibition) > 0
+    assert all(
+        e + i == pytest.approx(g) for e, i, g in zip(excitation, inhibition, total)
+    )
+
+
+def test_duplicate_recording_is_dropped_with_a_warning():
+    source = example("ffi") + "\nrecord E.soma.v\n"
+    model, diagnostics = load(source)
+    keys = [(r.target.instance, r.target.section, r.var) for r in model.recordings]
+    assert len(keys) == len(set(keys))
+    assert any("повтор записи" in d.message for d in diagnostics)
+
+
+def test_receptor_sign_comes_from_its_reversal_potential():
+    from vnl.ir import is_inhibitory_receptor
+
+    assert is_inhibitory_receptor("gaba_a") and is_inhibitory_receptor("gaba_b")
+    assert not is_inhibitory_receptor("ampa")
+    assert not is_inhibitory_receptor("nicotinic")

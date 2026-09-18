@@ -22,6 +22,16 @@ RECEPTORS: dict[str, tuple[float, float]] = {
     "nicotinic": (0.0, 5.0),
 }
 
+# Тормозный рецептор определяется по реверсалу ниже потенциала покоя: именно
+# он решает, тянет синапс клетку к порогу или от него.
+INHIBITORY_RECEPTORS = frozenset(
+    name for name, (reversal, _) in RECEPTORS.items() if reversal < -50.0
+)
+
+
+def is_inhibitory_receptor(receptor: str) -> bool:
+    return receptor in INHIBITORY_RECEPTORS
+
 
 @dataclass
 class PointModel:

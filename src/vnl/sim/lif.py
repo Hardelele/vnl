@@ -311,6 +311,15 @@ class Simulator:
                 value = cell.v
             elif recording.var == "g":
                 value = sum(cell.conductance.values())
+            elif recording.var in ("g_exc", "g_inh"):
+                # Возбуждение и торможение врозь: их баланс и есть то, что
+                # решает судьбу клетки, а в сумме он теряется.
+                inhibitory = recording.var == "g_inh"
+                value = sum(
+                    conductance
+                    for receptor, conductance in cell.conductance.items()
+                    if ir.is_inhibitory_receptor(receptor) is inhibitory
+                )
             elif recording.var == "spikes":
                 value = 1.0 if cell.spiked else 0.0
             else:  # w -- суммарный вес пластичных входов клетки
