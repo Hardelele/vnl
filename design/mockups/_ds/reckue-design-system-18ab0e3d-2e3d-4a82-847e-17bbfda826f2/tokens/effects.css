@@ -1,0 +1,36 @@
+/* Reckue effects — radii, borders, shadows, motion.
+   Subtle and cool. Shadows tinted with the ink undertone, never black. */
+:root {
+  /* Radii */
+  --radius-xs:   3px;
+  --radius-sm:   5px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   18px;
+  --radius-full: 9999px;
+
+  /* Border widths */
+  --border-width: 1px;
+  --border-width-strong: 1.5px;
+
+  /* Shadows (ink-tinted, low spread) */
+  --shadow-xs: 0 1px 1px rgba(22, 24, 30, 0.05);
+  --shadow-sm: 0 1px 2px rgba(22, 24, 30, 0.07), 0 1px 3px rgba(22, 24, 30, 0.05);
+  --shadow-md: 0 2px 6px rgba(22, 24, 30, 0.07), 0 4px 12px rgba(22, 24, 30, 0.06);
+  --shadow-lg: 0 8px 24px rgba(22, 24, 30, 0.10), 0 2px 6px rgba(22, 24, 30, 0.06);
+  --shadow-xl: 0 20px 48px rgba(22, 24, 30, 0.14);
+
+  /* Connective "glue" — a minimal metaball join between blocks (surface-tension
+     bridge). Flat, same weight as the blocks — no glow, no blur, no gradient.
+     Blocks stay ink; the connector is the accent sky, more transparent. */
+  --glue-ink: var(--ink-900); /* @kind other */
+  --glue: rgba(63, 155, 238, 0.55); /* sky-500 @ 55% — the glue color @kind other */
+  --glue-strong: rgba(63, 155, 238, 0.72); /* @kind other */
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.2, 0, 0.1, 1); /* @kind other */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* @kind other */
+  --duration-fast: 120ms; /* @kind other */
+  --duration-base: 180ms; /* @kind other */
+  --duration-slow: 260ms; /* @kind other */
+}

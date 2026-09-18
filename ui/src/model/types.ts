@@ -177,3 +177,85 @@ export interface Run {
   /** Есть только если прогон делался с развёрткой параметра. */
   sweep?: Sweep
 }
+
+// --- библиотека паттернов -------------------------------------------------
+
+/** Уровень каталога: масштаб конструкции, а не уровень детализации физики. */
+export type CatalogLevel = 'L1' | 'L2' | 'L3'
+
+export type PatternStatus = 'draft' | 'ready'
+
+export interface PatternPort {
+  name: string
+  direction: 'in' | 'out' | 'mod'
+  site: Site
+  note: string
+}
+
+export interface SchemeNeuron {
+  id: string
+  inhibitory: boolean
+}
+
+/** Род связи: возбуждение, торможение и нейромодулятор -- разные механизмы. */
+export type EdgeKind = 'exc' | 'inh' | 'mod'
+
+export interface SchemeEdge {
+  id: string
+  from: string
+  to: string
+  kind: EdgeKind
+}
+
+/** Схема паттерна для миниатюры: из неё рисуется картинка в каталоге. */
+export interface Scheme {
+  neurons: SchemeNeuron[]
+  edges: SchemeEdge[]
+}
+
+/** Витрина карточки: пример запуска, который не переезжает в чужую сеть. */
+export interface DemoRun {
+  stimuli: Stimulus[]
+  recordings: Recording[]
+  run: RunSpec
+}
+
+export interface Pattern {
+  id: string
+  name: string
+  level: CatalogLevel
+  levelName: string
+  status: PatternStatus
+  statusName: string
+  ports: PatternPort[]
+  counts: { neurons: number; contacts: number; ports: number }
+  scheme: Scheme
+  demo: DemoRun | null
+  /** Чего паттерну не хватает, чтобы считаться готовым. */
+  problems: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+/** Паттерн с начинкой: приходит по запросу одного паттерна, не в каталоге. */
+export interface PatternDetail extends Pattern {
+  body: Model
+}
+
+/** Чип фильтра вместе с числом паттернов за ним. */
+export interface Facet {
+  id: string
+  name: string
+  count: number
+}
+
+export interface Catalog {
+  schema: number
+  query: { text: string; levels: string[]; statuses: string[] }
+  /** Сколько всего в библиотеке и сколько прошло отбор. */
+  total: number
+  matched: number
+  levels: Facet[]
+  statuses: Facet[]
+  patterns: Pattern[]
+}

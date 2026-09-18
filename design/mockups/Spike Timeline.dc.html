@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/reckue-design-system-18ab0e3d-2e3d-4a82-847e-17bbfda826f2/styles.css">
+  <script src="_ds/reckue-design-system-18ab0e3d-2e3d-4a82-847e-17bbfda826f2/_ds_bundle.js"></script>
+  <style>body{margin:0;background:var(--surface-page);font-family:Roboto,sans-serif;color:var(--text-primary)} a{color:var(--sky-600)} a:hover{color:var(--sky-700)}</style>
+</helmet>
+<div style="padding:32px;max-width:1120px;margin:0 auto">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:500;letter-spacing:.04em;text-transform:uppercase;color:var(--text-secondary)">Активность сети</div>
+    <div style="font-family:'Roboto Mono',monospace;font-size:12px;color:var(--text-muted)">{{ hoverLabel }}</div>
+  </div>
+  <div style="background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 1px 2px rgba(22,24,30,.06);overflow:hidden">
+    <div style="display:grid;grid-template-columns:148px minmax(0,1fr)">
+      <div style="border-right:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:8px 14px;font-size:11px;color:var(--text-muted);font-weight:500">Популяция</div>
+      <div style="position:relative;height:30px;border-bottom:1px solid var(--border-subtle);background:var(--surface-subtle)">
+        <sc-for list="{{ ticks }}" as="t" hint-placeholder-count="5">
+          <div style="position:absolute;top:0;bottom:0;left:{{ t.pct }}%;border-left:1px solid var(--border-default)"></div>
+          <div style="position:absolute;top:8px;left:calc({{ t.pct }}% + 5px);font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ t.label }}</div>
+        </sc-for>
+      </div>
+      <sc-for list="{{ tracks }}" as="tr" hint-placeholder-count="3">
+        <div style="border-right:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:12px 14px;display:flex;flex-direction:column;gap:6px;justify-content:center">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:8px;border-radius:2px;background:{{ tr.color }};display:inline-block"></span>
+            <span style="font-size:14px;font-weight:500">{{ tr.name }}</span>
+          </div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-muted)">{{ tr.count }} спайков · {{ tr.rate }} Гц</div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ tr.hoverV }}</div>
+        </div>
+        <div style="position:relative;border-bottom:1px solid var(--border-subtle);cursor:crosshair" onMouseMove="{{ onMove }}" onMouseLeave="{{ onLeave }}">
+          <sc-for list="{{ ticks }}" as="t" hint-placeholder-count="5">
+            <div style="position:absolute;top:0;bottom:0;left:{{ t.pct }}%;border-left:1px dashed var(--border-subtle)"></div>
+          </sc-for>
+          <div style="height:22px;position:relative;margin:8px 0 0">
+            <sc-for list="{{ tr.spikes }}" as="s" hint-placeholder-count="8">
+              <div style="position:absolute;top:2px;left:{{ s.pct }}%;width:2px;height:18px;border-radius:1px;background:{{ tr.color }}"></div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ showTraces }}" hint-placeholder-val="{{ true }}">
+            <svg viewBox="0 0 400 100" preserveAspectRatio="none" style="display:block;width:100%;height:{{ traceH }}px;margin:2px 0 8px">
+              <path d="{{ tr.fill }}" fill="{{ tr.color }}" opacity=".12"></path>
+              <path d="{{ tr.path }}" fill="none" stroke="{{ tr.color }}" stroke-width="1.4" vector-effect="non-scaling-stroke"></path>
+            </svg>
+          </sc-if>
+          <div style="position:absolute;top:0;bottom:0;left:{{ hoverPct }}%;border-left:1px solid var(--ink-900);pointer-events:none;display:{{ hoverDisplay }}"></div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showTraces&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Таймлайн&quot;},&quot;traceHeight&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:72,&quot;min&quot;:40,&quot;max&quot;:140,&quot;step&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Таймлайн&quot;}}">
+class Component extends DCLogic {
+  state = { hover: null };
+  constructor(p) { super(p); this.data = this.gen(); }
+  gen() {
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const T = 400, dt = 0.5, N = T / dt;
+    const mk = (name, color, rate, thr, tau) => {
+      const v = [], spikes = []; let x = -65, ref = 0;
+      for (let i = 0; i < N; i++) {
+        const t = i * dt;
+        if (t < 30) { v.push(-65); continue; }
+        const drive = rate * (0.6 + 0.6 * Math.sin(t / 37) + 0.4 * rnd());
+        if (ref > 0) { ref -= dt; x += (-65 - x) * dt / 4; }
+        else { x += ((-65 - x) / tau + drive) * dt; if (x > thr) { spikes.push(t); x = -40; ref = 3; } }
+        v.push(x);
+      }
+      return { name, color, v, spikes, T };
+    };
+    return [mk('IN', '#1E7AD1', 2.2, -52, 12), mk('E', '#2E7D57', 0.9, -50, 22), mk('I', '#C24039', 2.4, -53, 10)];
+  }
+  path(v, T, close) {
+    const n = v.length, lo = -66, hi = -39;
+    let d = '';
+    for (let i = 0; i < n; i += 2) { const x = (i / n) * 400, y = 100 - ((v[i] - lo) / (hi - lo)) * 100; d += (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1); }
+    return close ? d + 'L400 100L0 100Z' : d;
+  }
+  renderVals() {
+    const T = 400, h = this.state.hover;
+    const tracks = this.data.map(d => {
+      const idx = h == null ? -1 : Math.min(d.v.length - 1, Math.round((h / T) * d.v.length));
+      return {
+        name: d.name, color: d.color, count: d.spikes.length, rate: (d.spikes.length / (T / 1000)).toFixed(0),
+        spikes: d.spikes.map(t => ({ pct: (t / T) * 100 })),
+        path: this.path(d.v, T, false), fill: this.path(d.v, T, true),
+        hoverV: idx < 0 ? '' : d.v[idx].toFixed(1) + ' мВ'
+      };
+    });
+    return {
+      tracks, showTraces: this.props.showTraces ?? true, traceH: this.props.traceHeight ?? 72,
+      ticks: [0, 100, 200, 300].map(t => ({ pct: t / 4, label: t === 0 ? '0 мс' : t })),
+      hoverPct: h ?? 0, hoverDisplay: h == null ? 'none' : 'block',
+      hoverLabel: h == null ? 'наведите на таймлайн' : 't = ' + ((h / 100) * T).toFixed(1) + ' мс',
+      onMove: e => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ hover: Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100)) }); },
+      onLeave: () => this.setState({ hover: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

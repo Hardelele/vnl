@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="design_doc_mode" content="canvas">
+  <link rel="stylesheet" href="_ds/reckue-design-system-18ab0e3d-2e3d-4a82-847e-17bbfda826f2/styles.css">
+  <script src="_ds/reckue-design-system-18ab0e3d-2e3d-4a82-847e-17bbfda826f2/_ds_bundle.js"></script>
+  <style>body{margin:0;background:var(--surface-page);font-family:Roboto,sans-serif;color:var(--text-primary)} a{color:var(--sky-600)} a:hover{color:var(--sky-700)}</style>
+</helmet>
+<section style="padding:32px;display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start">
+
+  <div id="2a" style="width:880px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <a href="#2a" style="font-family:'Roboto Mono',monospace;font-size:11px;font-weight:500;padding:2px 7px;border-radius:5px;background:var(--ink-900);color:#fff;text-decoration:none">2a</a>
+      <div style="font-size:14px;font-weight:500">E в фокусе: входы падают на трассу</div>
+      <div style="font-size:12px;color:var(--text-muted)">IN сверху, I снизу, окна воздействия закрашены на трассе E</div>
+    </div>
+    <div style="background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 1px 2px rgba(22,24,30,.06);overflow:hidden">
+      <div style="display:grid;grid-template-columns:132px minmax(0,1fr)">
+        <div style="border-right:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:12px 14px;display:flex;flex-direction:column;gap:4px;justify-content:center">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#1E7AD1"></span><span style="font-size:13px;font-weight:500">IN → E</span></div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-muted)">возбуждение</div>
+        </div>
+        <div style="position:relative;height:26px;border-bottom:1px solid var(--border-subtle)">
+          <sc-for list="{{ inSpikes }}" as="s" hint-placeholder-count="10">
+            <div style="position:absolute;bottom:0;left:{{ s.pct }}%;width:2px;height:14px;background:#1E7AD1;border-radius:1px 1px 0 0"></div>
+          </sc-for>
+        </div>
+        <div style="border-right:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:12px 14px;display:flex;flex-direction:column;gap:4px;justify-content:center">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#16181E"></span><span style="font-size:15px;font-weight:500">E.soma:v</span></div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-muted)">{{ eCount }} спайков</div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ hoverE }}</div>
+        </div>
+        <div style="position:relative;border-bottom:1px solid var(--border-subtle);cursor:crosshair" onMouseMove="{{ onMove }}" onMouseLeave="{{ onLeave }}">
+          <sc-for list="{{ inSpikes }}" as="s" hint-placeholder-count="10">
+            <div style="position:absolute;top:0;bottom:0;left:{{ s.pct }}%;width:{{ winPct }}%;background:#1E7AD1;opacity:.10"></div>
+          </sc-for>
+          <sc-for list="{{ iSpikes }}" as="s" hint-placeholder-count="10">
+            <div style="position:absolute;top:0;bottom:0;left:{{ s.pct }}%;width:{{ winPct }}%;background:#C24039;opacity:.13"></div>
+          </sc-for>
+          <svg viewBox="0 0 400 100" preserveAspectRatio="none" style="display:block;width:100%;height:150px;position:relative">
+            <path d="{{ ePath }}" fill="none" stroke="#16181E" stroke-width="1.5" vector-effect="non-scaling-stroke"></path>
+          </svg>
+          <div style="position:absolute;top:6px;left:8px;font-family:'Roboto Mono',monospace;font-size:10px;color:var(--text-muted)">−40 мВ</div>
+          <div style="position:absolute;bottom:6px;left:8px;font-family:'Roboto Mono',monospace;font-size:10px;color:var(--text-muted)">−65 мВ</div>
+          <div style="position:absolute;top:0;bottom:0;left:{{ hoverPct }}%;border-left:1px solid var(--ink-900);pointer-events:none;display:{{ hoverDisplay }}"></div>
+        </div>
+        <div style="border-right:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:12px 14px;display:flex;flex-direction:column;gap:4px;justify-content:center">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#C24039"></span><span style="font-size:13px;font-weight:500">I → E</span></div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-muted)">торможение</div>
+        </div>
+        <div style="position:relative;height:26px;border-bottom:1px solid var(--border-subtle)">
+          <sc-for list="{{ iSpikes }}" as="s" hint-placeholder-count="10">
+            <div style="position:absolute;top:0;left:{{ s.pct }}%;width:2px;height:14px;background:#C24039;border-radius:0 0 1px 1px"></div>
+          </sc-for>
+        </div>
+        <div style="border-right:1px solid var(--border-subtle);padding:12px 14px;display:flex;flex-direction:column;gap:4px;justify-content:center">
+          <div style="font-size:13px;font-weight:500">Баланс входа</div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-muted)">g<sub>E</sub> − g<sub>I</sub></div>
+          <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ hoverNet }}</div>
+        </div>
+        <div style="position:relative">
+          <svg viewBox="0 0 400 100" preserveAspectRatio="none" style="display:block;width:100%;height:64px">
+            <path d="{{ gEFill }}" fill="#1E7AD1" opacity=".55"></path>
+            <path d="{{ gIFill }}" fill="#C24039" opacity=".55"></path>
+            <line x1="0" y1="50" x2="400" y2="50" stroke="#CDD3DC" vector-effect="non-scaling-stroke"></line>
+          </svg>
+          <div style="position:absolute;top:0;bottom:0;left:{{ hoverPct }}%;border-left:1px solid var(--ink-900);pointer-events:none;display:{{ hoverDisplay }}"></div>
+        </div>
+      </div>
+      <div style="position:relative;height:26px;border-top:1px solid var(--border-subtle);margin-left:132px;background:var(--surface-subtle)">
+        <sc-for list="{{ ticks }}" as="t" hint-placeholder-count="5">
+          <div style="position:absolute;top:0;bottom:0;left:{{ t.pct }}%;border-left:1px solid var(--border-default)"></div>
+          <div style="position:absolute;top:6px;left:calc({{ t.pct }}% + 5px);font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ t.label }}</div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <div id="2b" style="width:880px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <a href="#2b" style="font-family:'Roboto Mono',monospace;font-size:11px;font-weight:500;padding:2px 7px;border-radius:5px;background:var(--ink-900);color:#fff;text-decoration:none">2b</a>
+      <div style="font-size:14px;font-weight:500">Ответ E на спайк: усреднённые окна</div>
+      <div style="font-size:12px;color:var(--text-muted)">трасса E окрашена доминирующим входом + средний отклик E после спайка IN и I</div>
+    </div>
+    <div style="background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 1px 2px rgba(22,24,30,.06);overflow:hidden">
+      <div style="padding:14px 16px 6px;display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-size:13px;font-weight:500">E.soma:v <span style="color:var(--text-muted);font-weight:400">· цвет = что сильнее в этот момент</span></div>
+        <div style="display:flex;gap:14px;font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:3px;background:#1E7AD1;border-radius:1px"></span>IN сильнее</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:3px;background:#C24039;border-radius:1px"></span>I сильнее</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:3px;background:#A6ADBA;border-radius:1px"></span>тихо</span>
+        </div>
+      </div>
+      <div style="position:relative;margin:0 16px">
+        <svg viewBox="0 0 400 100" preserveAspectRatio="none" style="display:block;width:100%;height:150px">
+          <path d="{{ eQuiet }}" fill="none" stroke="#A6ADBA" stroke-width="1.5" vector-effect="non-scaling-stroke"></path>
+          <path d="{{ eExc }}" fill="none" stroke="#1E7AD1" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+          <path d="{{ eInh }}" fill="none" stroke="#C24039" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+        </svg>
+        <div style="position:relative;height:22px;border-top:1px solid var(--border-subtle)">
+          <sc-for list="{{ ticks }}" as="t" hint-placeholder-count="5">
+            <div style="position:absolute;top:4px;left:{{ t.pct }}%;font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ t.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--border-subtle)">
+        <sc-for list="{{ stas }}" as="k" hint-placeholder-count="2">
+          <div style="padding:14px 16px;border-right:1px solid var(--border-subtle)">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+              <div style="font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:{{ k.color }}"></span>{{ k.title }}</div>
+              <div style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--text-muted)">n = {{ k.n }} · Δ {{ k.delta }} мВ</div>
+            </div>
+            <div style="position:relative">
+              <svg viewBox="0 0 100 60" preserveAspectRatio="none" style="display:block;width:100%;height:96px">
+                <path d="{{ k.band }}" fill="{{ k.color }}" opacity=".12"></path>
+                <line x1="40" y1="0" x2="40" y2="60" stroke="#CDD3DC" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+                <path d="{{ k.path }}" fill="none" stroke="{{ k.color }}" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+              </svg>
+              <div style="display:flex;justify-content:space-between;font-family:'Roboto Mono',monospace;font-size:10px;color:var(--text-muted);margin-top:4px">
+                <span>−20 мс</span><span style="margin-left:22%">спайк {{ k.src }}</span><span>+30 мс</span>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { hover: null };
+  constructor(p) { super(p); this.data = this.gen(); }
+  gen() {
+    let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const T = 400, dt = 0.5, N = T / dt;
+    const train = (rate, thr, tau, ph) => { const sp = []; let x = -65, ref = 0;
+      for (let i = 0; i < N; i++) { const t = i * dt; if (t < 30) continue;
+        const drive = rate * (0.6 + 0.6 * Math.sin(t / 37 + ph) + 0.4 * rnd());
+        if (ref > 0) { ref -= dt; x += (-65 - x) * dt / 4; } else { x += ((-65 - x) / tau + drive) * dt; if (x > thr) { sp.push(t); x = -40; ref = 3; } } }
+      return sp; };
+    const IN = train(2.2, -52, 12, 0), I = train(2.4, -53, 10, 1.6);
+    const gE = new Float32Array(N), gI = new Float32Array(N), v = new Float32Array(N);
+    let ge = 0, gi = 0, x = -65, ref = 0, ii = 0, ji = 0;
+    for (let i = 0; i < N; i++) { const t = i * dt;
+      while (ii < IN.length && IN[ii] <= t) { ge += 1.4; ii++; }
+      while (ji < I.length && I[ji] <= t) { gi += 1.6; ji++; }
+      ge *= Math.exp(-dt / 4); gi *= Math.exp(-dt / 6); gE[i] = ge; gI[i] = gi;
+      if (t < 30) { v[i] = -65; continue; }
+      if (ref > 0) { ref -= dt; x += (-65 - x) * dt / 4; } else { x += ((-65 - x) / 20 + 0.5 + ge - gi * 0.9) * dt; if (x > -50) { x = -40; ref = 3; } }
+      v[i] = Math.max(-72, x); }
+    return { T, dt, IN, I, gE, gI, v };
+  }
+  y(val) { return 100 - ((val - (-72)) / (-38 + 72)) * 100; }
+  renderVals() {
+    const { T, dt, IN, I, gE, gI, v } = this.data, N = v.length, h = this.state.hover;
+    const xs = i => ((i / N) * 400).toFixed(1);
+    let ePath = ''; for (let i = 0; i < N; i += 2) ePath += (i ? 'L' : 'M') + xs(i) + ' ' + this.y(v[i]).toFixed(1);
+    const gMax = 6; let gEFill = 'M0 50', gIFill = 'M0 50';
+    for (let i = 0; i < N; i += 2) { gEFill += 'L' + xs(i) + ' ' + (50 - Math.min(50, gE[i] / gMax * 50)).toFixed(1); gIFill += 'L' + xs(i) + ' ' + (50 + Math.min(50, gI[i] / gMax * 50)).toFixed(1); }
+    gEFill += 'L400 50Z'; gIFill += 'L400 50Z';
+    // 2b: segment E path by dominant input
+    let eQuiet = '', eExc = '', eInh = '';
+    for (let i = 2; i < N; i += 2) { const seg = 'M' + xs(i - 2) + ' ' + this.y(v[i - 2]).toFixed(1) + 'L' + xs(i) + ' ' + this.y(v[i]).toFixed(1);
+      const d = gE[i] - gI[i]; if (gE[i] < 0.6 && gI[i] < 0.6) eQuiet += seg; else if (d >= 0) eExc += seg; else eInh += seg; }
+    const sta = (sp, color, title, src) => { const pre = 40, post = 60, acc = new Float64Array(pre + post); let n = 0;
+      for (const t of sp) { const c = Math.round(t / dt); if (c - pre < 0 || c + post >= N) continue; n++; for (let k = 0; k < pre + post; k++) acc[k] += v[c - pre + k]; }
+      let lo = 1e9, hi = -1e9; const m = Array.from(acc, a => a / Math.max(1, n)); m.forEach(a => { lo = Math.min(lo, a); hi = Math.max(hi, a); });
+      const yy = a => (55 - ((a - lo) / Math.max(1e-6, hi - lo)) * 50).toFixed(1);
+      let path = ''; m.forEach((a, k) => path += (k ? 'L' : 'M') + (k / (pre + post) * 100).toFixed(1) + ' ' + yy(a));
+      const band = 'M40 0L100 0L100 60L40 60Z';
+      const base = m.slice(0, pre).reduce((a, b) => a + b, 0) / pre; const peak = m.slice(pre, pre + 30).reduce((a, b) => a + b, 0) / 30;
+      return { color, title, src, n, path, band, delta: (peak - base > 0 ? '+' : '') + (peak - base).toFixed(1) }; };
+    const idx = h == null ? -1 : Math.min(N - 1, Math.round((h / 100) * N));
+    return {
+      inSpikes: IN.map(t => ({ pct: t / T * 100 })), iSpikes: I.map(t => ({ pct: t / T * 100 })), winPct: 5 / T * 100,
+      eCount: (() => { let c = 0; for (let i = 1; i < N; i++) if (v[i] > -41 && v[i - 1] < -45) c++; return c; })(),
+      ePath, gEFill, gIFill, eQuiet, eExc, eInh,
+      stas: [sta(IN, '#1E7AD1', 'E после спайка IN', 'IN'), sta(I, '#C24039', 'E после спайка I', 'I')],
+      ticks: [0, 100, 200, 300].map(t => ({ pct: t / 4, label: t === 0 ? '0 мс' : t })),
+      hoverPct: h ?? 0, hoverDisplay: h == null ? 'none' : 'block',
+      hoverE: idx < 0 ? '' : v[idx].toFixed(1) + ' мВ · ' + (idx * dt).toFixed(0) + ' мс',
+      hoverNet: idx < 0 ? '' : (gE[idx] - gI[idx] > 0 ? '+' : '') + (gE[idx] - gI[idx]).toFixed(2),
+      onMove: e => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ hover: Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100)) }); },
+      onLeave: () => this.setState({ hover: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -12,8 +12,14 @@ export default defineConfig({
       '@design': fileURLToPath(new URL('../design/reckue', import.meta.url)),
     },
   },
-  server: { fs: { allow: ['..'] } },
-  // Сборка кладётся туда, откуда её открывает `vnl app`.
+  server: {
+    fs: { allow: ['..'] },
+    // Библиотека живёт в Python, а интерфейс в разработке -- на своём порту.
+    // Прокси вместо CORS: разрешать чужой источник ради собственного сервера
+    // значило бы держать открытой дверь, которая нужна только в разработке.
+    proxy: { '/api': { target: 'http://127.0.0.1:8765', changeOrigin: false } },
+  },
+  // Сборка кладётся туда, откуда её отдаёт `vnl serve --ui ui/dist`.
   build: { outDir: 'dist', emptyOutDir: true },
   test: { environment: 'jsdom', globals: true },
 })

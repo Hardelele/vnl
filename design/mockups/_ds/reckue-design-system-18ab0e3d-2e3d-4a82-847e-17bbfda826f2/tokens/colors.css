@@ -1,0 +1,83 @@
+/* Reckue color system
+   Restrained monochrome + a single blue accent.
+   The key brand color "Ink" is a near-black dark gray with a faint blue cast —
+   it reads as black to the eye but is never pure #000. */
+:root {
+  /* ---- Ink: the core neutral ramp (cool, faint blue undertone) ---- */
+  --ink-950: #101216; /* deepest, backgrounds on dark */
+  --ink-900: #16181E; /* KEY BRAND COLOR — reads as black */
+  --ink-800: #1E212A;
+  --ink-700: #2A2E39;
+  --ink-600: #3B4150;
+  --ink-500: #565D6E;
+  --ink-400: #7A8291;
+  --ink-300: #A6ADBA;
+  --ink-200: #CDD3DC;
+  --ink-100: #E5E9EF;
+  --ink-75:  #EFF2F6;
+  --ink-50:  #F5F7F9;
+  --white:   #FFFFFF;
+
+  /* ---- Sky: the single accent, used sparingly ----
+     Reckue reads as sky-blue. The accent is a deep, usable sky that keeps
+     white-text contrast on the primary button; brighter sky tints carry the
+     softer accent touches (selection, highlights, the wordmark dot). */
+  --sky-700: #175FA8; /* hover / active — deepest */
+  --sky-600: #1E7AD1; /* primary accent (solid fills, white text) */
+  --sky-500: #3F9BEE; /* bright sky — accents on dark, highlights */
+  --sky-400: #6FB7F5;
+  --sky-300: #A6D4F9;
+  --sky-200: #CBE6FB;
+  --sky-100: #E4F1FD;
+  --sky-50:  #F1F8FE;
+
+  /* Backward-compatible blue aliases → sky ramp */
+  --blue-700: var(--sky-700);
+  --blue-600: var(--sky-600);
+  --blue-500: var(--sky-500);
+  --blue-300: var(--sky-300);
+  --blue-100: var(--sky-100);
+  --blue-50:  var(--sky-50);
+
+  /* ---- Functional status (muted, used only for meaning) ---- */
+  --green-600: #2E7D57;
+  --green-100: #DCEFE5;
+  --amber-600: #B47318;
+  --amber-100: #F6EAD3;
+  --red-600:   #C24039;
+  --red-100:   #F7E0DE;
+
+  /* ================= Semantic aliases ================= */
+  --text-primary:   var(--ink-900);
+  --text-secondary: var(--ink-500);
+  --text-muted:     var(--ink-400);
+  --text-inverse:   var(--white);
+  --text-accent:    var(--sky-600);
+  --text-on-accent: var(--white);
+
+  --surface-page:    var(--ink-50);
+  --surface-card:    var(--white);
+  --surface-subtle:  var(--ink-75);
+  --surface-sunken:  var(--ink-100);
+  --surface-inverse: var(--ink-900);
+  --surface-accent:  var(--sky-600);
+  --surface-accent-subtle: var(--sky-50);
+  --surface-selected: var(--sky-100); /* row/selection highlight — a careful sky note */
+
+  --border-subtle:  var(--ink-100);
+  --border-default: var(--ink-200);
+  --border-strong:  var(--ink-300);
+  --border-accent:  var(--sky-600);
+  --border-focus:   var(--sky-500);
+
+  --accent:         var(--sky-600);
+  --accent-hover:   var(--sky-700);
+  --accent-active:  var(--sky-700);
+  --accent-bright:  var(--sky-500); /* brighter sky for accents on dark surfaces */
+
+  --status-success: var(--green-600);
+  --status-warning: var(--amber-600);
+  --status-danger:  var(--red-600);
+
+  --focus-ring: 0 0 0 3px var(--sky-100);
+}

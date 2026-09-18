@@ -1,0 +1,61 @@
+/* Миниатюра схемы. Размер задаёт карточка, пропорции держит viewBox. */
+
+.thumbnail {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.thumbnail-empty {
+  fill: none;
+  stroke: var(--line);
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.thumbnail-cell rect {
+  fill: var(--panel);
+  stroke: var(--exc);
+  stroke-width: 1.4;
+}
+
+.thumbnail-cell text {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  fill: var(--ink);
+}
+
+.thumbnail-cell.is-inh rect {
+  stroke: var(--inh);
+}
+
+.thumbnail-link line {
+  stroke: var(--line-strong);
+  stroke-width: 1.4;
+}
+
+.thumbnail-link .thumbnail-cap {
+  fill: var(--exc);
+  stroke: none;
+}
+
+.thumbnail-link.is-inh line {
+  stroke: var(--inh);
+}
+
+.thumbnail-link.is-inh .thumbnail-cap {
+  fill: none;
+  stroke: var(--inh);
+  stroke-width: 2;
+}
+
+/* Модуляция -- не путь сигнала, поэтому пунктир и другой цвет. */
+.thumbnail-link.is-mod line {
+  stroke: var(--mod);
+  stroke-dasharray: 4 3;
+}
+
+.thumbnail-link.is-mod .thumbnail-cap {
+  fill: var(--mod);
+}

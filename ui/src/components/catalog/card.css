@@ -1,0 +1,94 @@
+/* Карточка паттерна. Кнопка, а не div с onClick: её должно быть видно с
+   клавиатуры и слышно программе чтения с экрана. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgb(22 24 30 / 6%);
+  cursor: pointer;
+  overflow: hidden;
+  font: inherit;
+  color: inherit;
+  transition:
+    box-shadow var(--duration-fast, 0.16s) var(--ease-standard, ease),
+    border-color var(--duration-fast, 0.16s) var(--ease-standard, ease);
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgb(22 24 30 / 10%);
+  border-color: var(--line-strong);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.card-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 110px;
+  padding: var(--space-2);
+  background: var(--subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) 14px 14px;
+}
+
+.card-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.card-badge {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+}
+
+.card-badge.is-ready {
+  background: var(--green-100);
+  color: var(--green-600);
+}
+
+.card-badge.is-draft {
+  background: var(--amber-100);
+  color: var(--amber-600);
+}
+
+.card-meta {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.card-problem {
+  font-size: 11px;
+  color: var(--status-warning);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

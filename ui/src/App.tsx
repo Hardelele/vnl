@@ -1,123 +1,49 @@
 /**
- * Оболочка приложения: загрузка прогона, выбор нейрона, инспектор.
+ * Оболочка: панель сверху и один экран под ней.
  *
- * Пока здесь один экран. Обзорная активность сети и схема встанут сюда же
- * над инспектором, когда переедут из статического рендерера, — состояние
- * (выбранный нейрон, курсор времени) уже общее и ждёт их.
+ * Роутера нет намеренно. Экранов два с половиной, адресная строка локального
+ * инструмента никому не нужна, а библиотека роутинга привела бы за собой
+ * собственное состояние рядом с уже имеющимся.
  */
 
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 
-import { loadRun, type RunView } from './model/run'
-import { NeuronInspector } from './components/inspector/NeuronInspector'
-import { selectNeuron, useUi } from './state/store'
-import './App.css'
+import { LibraryScreen } from './components/catalog/LibraryScreen'
+import { RunScreen } from './components/run/RunScreen'
+import { AppBar, type Screen, type Tab } from './components/shell/AppBar'
+import { PATTERNS, counted } from './lib/plural'
+import { useCatalog } from './state/catalog'
+
+const TABS: Tab[] = [
+  { id: 'library', label: 'Библиотека' },
+  { id: 'sandbox', label: 'Песочница', pending: 'Появится вместе с холстом (#479)' },
+  { id: 'run', label: 'Прогон' },
+]
 
 export function App() {
-  const [view, setView] = useState<RunView | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const selected = useUi((state) => state.selected)
+  const [screen, setScreen] = useState<Screen>('library')
 
-  useEffect(() => {
-    let alive = true
-    loadRun()
-      .then((loaded) => {
-        if (!alive) return
-        setView(loaded)
-        // Открываем на клетке, за которой в модели следят подробнее всего:
-        // у неё больше всего записей, значит её и разглядывают.
-        selectNeuron(mostRecorded(loaded))
-      })
-      .catch((reason: Error) => alive && setError(reason.message))
-    return () => {
-      alive = false
+  // Из стора берутся только простые величины. Селектор, собирающий объект,
+  // возвращал бы каждый раз новый -- а `useSyncExternalStore` считает это
+  // изменением состояния и уходит в бесконечную перерисовку.
+  const offline = useCatalog((state) => state.offline)
+  const loading = useCatalog((state) => state.loading)
+  const total = useCatalog((state) => state.catalog?.total ?? null)
+
+  const status = useMemo(() => {
+    if (offline) return { tone: 'off' as const, text: 'сервер библиотеки не отвечает' }
+    if (total !== null) {
+      return { tone: 'ok' as const, text: `библиотека · ${counted(total, PATTERNS)}` }
     }
-  }, [])
-
-  if (error) {
-    return (
-      <main className="app">
-        <h1 className="app-title">VNL</h1>
-        <p className="app-error">{error}</p>
-        <p className="app-hint mono">
-          vnl data examples/ffi.vnl -o ui/public/run.json
-        </p>
-      </main>
-    )
-  }
-
-  if (!view) {
-    return (
-      <main className="app">
-        <p className="app-hint">Загрузка прогона…</p>
-      </main>
-    )
-  }
-
-  const { model } = view
+    return { tone: 'idle' as const, text: loading ? 'читаем библиотеку…' : 'библиотека' }
+  }, [offline, loading, total])
 
   return (
-    <main className="app">
-      <header className="app-head">
-        <div>
-          <h1 className="app-title">{model.name}</h1>
-          <p className="app-sub mono">
-            {model.source ?? 'модель VNL'} · уровень {model.run.level} ·{' '}
-            {model.run.duration} мс · шаг {model.run.dt} мс · seed{' '}
-            {model.run.seed}
-          </p>
-        </div>
-      </header>
-
-      <nav className="app-picker" aria-label="Нейроны">
-        {view.neuronIds().map((id) => {
-          const neuron = view.neuron(id)
-          return (
-            <button
-              key={id}
-              type="button"
-              className={`app-chip${selected === id ? ' app-chip-on' : ''}`}
-              onClick={() => selectNeuron(id)}
-            >
-              <span
-                className={`app-chip-dot ${
-                  neuron?.inhibitory ? 'app-chip-inh' : 'app-chip-exc'
-                }`}
-              />
-              {id}
-              <span className="app-chip-count mono">
-                {view.spikesOf(id).length}
-              </span>
-            </button>
-          )
-        })}
-      </nav>
-
-      <section className="app-panel">
-        {selected ? (
-          <NeuronInspector view={view} id={selected} />
-        ) : (
-          <p className="app-hint">Выберите нейрон.</p>
-        )}
-      </section>
-    </main>
+    <div className="shell">
+      <AppBar tabs={TABS} current={screen} onPick={setScreen} status={status} />
+      <main className="shell-screen">
+        {screen === 'run' ? <RunScreen /> : <LibraryScreen />}
+      </main>
+    </div>
   )
-}
-
-/** Клетка, за которой следят внимательнее всего: у неё больше всего записей. */
-function mostRecorded(view: RunView): string | null {
-  const counts = new Map<string, number>()
-  for (const recording of view.model.recordings) {
-    const id = recording.target.instance
-    counts.set(id, (counts.get(id) ?? 0) + 1)
-  }
-  let best: string | null = null
-  let bestCount = -1
-  for (const [id, count] of counts) {
-    if (count > bestCount) {
-      best = id
-      bestCount = count
-    }
-  }
-  return best ?? view.neuronIds()[0] ?? null
 }

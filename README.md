@@ -126,6 +126,35 @@ routing, and it reads a finished run from a file. The exchange format is
 described in `src/vnl/api.py`, its TypeScript mirror in
 `ui/src/model/types.ts`. Change them together or not at all.
 
+### The pattern library
+
+A finished microcircuit is saved as a pattern and later inserted into another
+schema as a block with ports. The library and the sandboxes are files under
+`.vnl/`, and the interface talks to them through a local server:
+
+```bash
+vnl serve                        # library at http://127.0.0.1:8765
+cd ui && npm run dev             # the interface proxies /api here
+```
+
+The server is built on `http.server` from the standard library and listens on
+`127.0.0.1` only. The core has no dependencies, and that property is worth more
+than convenient validation: `pip install -e .` installs the whole tool. The
+server also serves a built interface itself — `vnl serve --ui ui/dist --open`.
+
+![The pattern library](docs/img/library.png)
+
+The catalog is grouped by the scale of the construction: L1 for cells and
+connections, L2 for microcircuits, L3 for networks. A draft looks like a draft
+and says what it is missing instead of hiding until it is finished.
+
+Search and filters are computed in Python (`vnl/catalog.py`), not in React: the
+same operations will reach Claude over MCP, and a second implementation of the
+word «matches» would drift from the first unnoticed. A catalog thumbnail is
+drawn from the pattern's own schema instead of sitting next to it as an image,
+so it cannot fall behind what is inside: the amber dashed line on it is the same
+neuromodulator as on the full schematic.
+
 ## Parameter sweep
 
 «What happens if I move the delay» cannot be answered by one run: a different
@@ -230,7 +259,9 @@ script plus a list of losses», not a model quietly trimmed down.
 - the run page, laid out by ELK;
 - parameter sweep: several runs on one screen;
 - a React interface with the neuron inspector;
-- 91 tests for the core and 17 for the interface. The core has no dependencies:
+- patterns, sandboxes and the store: a searchable library and a local server
+  for the interface;
+- 162 tests for the core and 51 for the interface. The core has no dependencies:
   Node and ELK are only for the picture, React only for the interface.
 
 ## What is not there yet
