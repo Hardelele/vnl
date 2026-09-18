@@ -29,7 +29,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Iterable, Literal
 
 from . import ir
 
@@ -123,6 +123,27 @@ class Pattern:
             body=body,
             ports=list(ports or []),
             demo=demo if (demo.stimuli or demo.recordings) else None,
+        )
+
+    @staticmethod
+    def empty(
+        name: str,
+        level: CatalogLevel = "L2",
+        taken: Iterable[str] = (),
+    ) -> "Pattern":
+        """Пустой черновик -- то, что открывает «Добавить» в библиотеке.
+
+        Черновик кладётся в библиотеку сразу, а не после первой правки: иначе
+        «продолжу позже» держалось бы только на незакрытой вкладке. Пустой он
+        честно показывает, чего ему не хватает (`validate`), и удаляется одним
+        действием, если передумали.
+        """
+        return Pattern(
+            id=_unique(_slug(name), taken),
+            name=name,
+            level=level,
+            status="draft",
+            body=ir.Model(name=name),
         )
 
     @property
@@ -301,6 +322,17 @@ class Sandbox:
         forked.status = "draft"
         forked.created_at = forked.updated_at = _now()
         return forked
+
+
+def _unique(base: str, taken: Iterable[str]) -> str:
+    """Свободный идентификатор: одноимённый паттерн не должен затирать чужой."""
+    used = set(taken)
+    if base not in used:
+        return base
+    counter = 2
+    while f"{base}-{counter}" in used:
+        counter += 1
+    return f"{base}-{counter}"
 
 
 def _slug(name: str) -> str:

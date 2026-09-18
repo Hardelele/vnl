@@ -1,4 +1,4 @@
-"""Командная строка: vnl check | run | view | data | export | graph."""
+"""Командная строка: vnl check | run | view | data | export | graph | serve."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from .backends.netpyne_export import export as netpyne_export
 from .ir import Model
 from .resolve import Diagnostic, ValidationError, load
 from .sim import simulate
+from .store import StoreError
 
 
 def _read(path: str) -> tuple[Model, list[Diagnostic]]:
@@ -177,6 +178,30 @@ def cmd_graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    # Импорт внутри команды: остальным командам сервер не нужен, а `vnl check`
+    # не должен тянуть за собой сокеты.
+    from .server import create_server
+
+    server = create_server(args.root, port=args.port, ui=args.ui, quiet=args.quiet)
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}"
+    print(f"хранилище: {Path(args.root).resolve()}")
+    print(f"библиотека: {url}/api/catalog")
+    if args.ui:
+        print(f"интерфейс: {url}")
+    if args.open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        # Ctrl+C -- обычный способ остановить локальный инструмент, не сбой.
+        print()
+    finally:
+        server.server_close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vnl", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -226,9 +251,27 @@ def main(argv: list[str] | None = None) -> int:
     graph.add_argument("-o", "--out")
     graph.set_defaults(func=cmd_graph)
 
+    serve = sub.add_parser(
+        "serve", help="локальный сервер библиотеки паттернов и песочниц"
+    )
+    serve.add_argument(
+        "--root", default=".vnl", help="каталог хранилища (по умолчанию .vnl)"
+    )
+    serve.add_argument("--port", type=int, default=8765, help="порт (0 -- любой свободный)")
+    serve.add_argument("--ui", help="каталог собранного интерфейса, например ui/dist")
+    serve.add_argument("--open", action="store_true", help="открыть в браузере")
+    serve.add_argument(
+        "--quiet", action="store_true", help="не писать строку на каждый запрос"
+    )
+    serve.set_defaults(func=cmd_serve)
+
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except StoreError as exc:
+        # Хранилища нет или интерфейс не собран -- это про запуск, а не про модель.
+        print(exc, file=sys.stderr)
+        return 1
     except ValidationError as exc:
         # Модель не прошла проверку -- это нормальный исход работы, а не сбой
         # программы, поэтому печатаем диагностику, а не трассу стека.

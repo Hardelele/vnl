@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Sequence
 
 from . import ir
+from .catalog import STATUS_NAMES, Query, facets, search
+from .patterns import LEVEL_NAMES
 from .sim import SimResult
 
 # Версия формата. Фронтенд проверяет её и отказывается читать чужое.
@@ -249,6 +251,153 @@ def run_payload(
     if sweep is not None:
         payload["sweep"] = sweep_payload(sweep, model)
     return payload
+
+
+# --- библиотека паттернов -------------------------------------------------
+
+
+def scheme_payload(model: ir.Model) -> dict[str, Any]:
+    """Схема паттерна для миниатюры: кто есть и кто с кем связан.
+
+    Миниатюра в каталоге рисуется из схемы, а не лежит картинкой рядом,
+    поэтому здесь ровно то, что нужно для маленького рисунка: тормозность
+    клетки, направление связи и её род. Раскладку считает интерфейс.
+
+    Нейромодулятор -- такая же линия, как контакт, хотя механизм другой: он
+    ведёт от источника к клетке, на контакт которой действует. Без него
+    микросхема, вся суть которой в модуляции, выглядела бы в каталоге как
+    обычная цепочка.
+    """
+    edges: list[dict[str, Any]] = [
+        {
+            "id": contact.id,
+            "from": contact.pre.instance,
+            "to": contact.post.instance,
+            "kind": "inh" if ir.is_inhibitory_receptor(contact.receptor) else "exc",
+        }
+        for contact in model.contacts
+    ]
+    for modulator in model.modulators.values():
+        governed = [
+            contact
+            for contact in model.contacts
+            if contact.plasticity.modulator == modulator.id
+        ]
+        for source in modulator.sources:
+            for contact in governed:
+                edges.append(
+                    {
+                        "id": f"mod:{modulator.id}:{source}:{contact.id}",
+                        "from": source,
+                        "to": contact.post.instance,
+                        "kind": "mod",
+                    }
+                )
+    return {
+        "neurons": [
+            {
+                "id": instance.id,
+                "inhibitory": ir.is_inhibitory_cell(model.cell_type_of(instance.id)),
+            }
+            for instance in model.instances.values()
+        ],
+        "edges": edges,
+    }
+
+
+def _demo_payload(demo: Any) -> dict[str, Any]:
+    duration = demo.run.duration
+    return {
+        "stimuli": [_stimulus(stim, duration) for stim in demo.stimuli],
+        "recordings": [
+            {
+                "id": recording.id,
+                "target": _site(recording.target),
+                "var": recording.var,
+                "key": trace_key(recording),
+            }
+            for recording in demo.recordings
+        ],
+        "run": {
+            "dt": demo.run.dt,
+            "duration": duration,
+            "level": demo.run.level,
+            "seed": demo.run.seed,
+        },
+    }
+
+
+def pattern_payload(pattern: Any, body: bool = False) -> dict[str, Any]:
+    """Паттерн для каталога; с `body=True` -- ещё и вся начинка для карточки.
+
+    Каталогу тело не нужно: библиотека на сотню микросхем прислала бы
+    мегабайты ради списка имён. Карточка (#478) просит `body` отдельно.
+
+    `problems` -- это `Pattern.validate()`, а не «проверено на сервере»:
+    черновик обязан открываться и показывать, чего ему не хватает, иначе
+    незавершённое нельзя ни сохранить, ни продолжить.
+    """
+    payload: dict[str, Any] = {
+        "id": pattern.id,
+        "name": pattern.name,
+        "level": pattern.level,
+        "levelName": pattern.level_name,
+        "status": pattern.status,
+        "statusName": STATUS_NAMES.get(pattern.status, pattern.status),
+        "ports": [
+            {
+                "name": port.name,
+                "direction": port.direction,
+                "site": _site(port.site),
+                "note": port.note,
+            }
+            for port in pattern.ports
+        ],
+        "counts": {
+            "neurons": len(pattern.body.instances),
+            "contacts": len(pattern.body.contacts),
+            "ports": len(pattern.ports),
+        },
+        "scheme": scheme_payload(pattern.body),
+        "demo": _demo_payload(pattern.demo) if pattern.demo else None,
+        "problems": pattern.validate(),
+        "createdAt": pattern.created_at,
+        "updatedAt": pattern.updated_at,
+    }
+    if body:
+        payload["body"] = model_payload(pattern.body)
+    return payload
+
+
+def catalog_payload(library: Sequence[Any], query: Query | None = None) -> dict[str, Any]:
+    """Библиотека после отбора -- вместе с тем, из чего отбирали.
+
+    Отбор и счётчики чипов считаются здесь одним вызовом: разойдись они -- и
+    фильтр показывал бы «L2 (7)», отдавая четыре паттерна, а искать причину
+    такого пришлось бы в двух местах сразу.
+    """
+    query = query or Query()
+    chosen = search(library, query)
+    counts = facets(library)
+    return {
+        "schema": SCHEMA_VERSION,
+        "query": {
+            "text": query.text,
+            "levels": list(query.levels),
+            "statuses": list(query.statuses),
+        },
+        "total": len(library),
+        "matched": len(chosen),
+        "levels": [
+            {"id": level, "name": name, "count": counts["level"].get(level, 0)}
+            for level, name in LEVEL_NAMES.items()
+        ],
+        "statuses": [
+            {"id": status, "name": name, "count": counts["status"].get(status, 0)}
+            for status, name in STATUS_NAMES.items()
+        ],
+        "patterns": [pattern_payload(pattern) for pattern in chosen],
+    }
 
 
 def dumps(payload: dict[str, Any], pretty: bool = False) -> str:
