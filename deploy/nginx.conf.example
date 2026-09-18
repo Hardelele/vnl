@@ -1,0 +1,163 @@
+# Обратный прокси для VNL. Пример: скопировать, подставить домен и пути,
+# положить в /etc/nginx/sites-available/vnl и включить симлинком.
+#
+#   sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/vnl
+#   sudo ln -s /etc/nginx/sites-available/vnl /etc/nginx/sites-enabled/vnl
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# ---------------------------------------------------------------------------
+# Почему авторизация здесь обязательна, а не «желательна»
+# ---------------------------------------------------------------------------
+# У приложения нет ни пользователей, ни паролей, ни ролей -- и это не забытая
+# задача, а точное описание того, для чего оно писалось: один человек, один
+# локальный порт. Как только этот порт выставлен в сеть, на нём оказывается
+# полностью открытый API, который умеет:
+#
+#   POST   /api/patterns        -- создать паттерн в библиотеке,
+#   DELETE /api/patterns/<id>   -- удалить паттерн безвозвратно,
+#   POST   /api/sim             -- запустить симуляцию (это счёт в потоках сервера).
+#
+# То есть любой, кто дошёл до порта, может стереть чужую работу и загрузить
+# машину счётом. Никакого подтверждения, никакой корзины, никакого журнала, по
+# которому можно откатиться, у приложения нет. Поэтому единственная защита --
+# здесь, на прокси, и её нельзя выключить «на время»: блок `auth_basic` ниже
+# обязателен, в том числе на /api/. Если он закомментирован, сайт публиковать
+# нельзя.
+#
+# ---------------------------------------------------------------------------
+# Почему `proxy_set_header Host localhost;`
+# ---------------------------------------------------------------------------
+# Приложение проверяет заголовок `Host` и пускает только `localhost`,
+# `127.0.0.1`, `::1`. Это его вторая (после привязки к loopback) защита: она
+# закрывает обращение к локальному порту из чужой страницы в браузере --
+# DNS rebinding, когда постороннее имя указывает на 127.0.0.1 и скрипт с чужого
+# сайта начинает ходить в локальный инструмент.
+#
+# По умолчанию nginx передаёт наверх `Host` от клиента, то есть `vnl.example.com`.
+# В списке разрешённых его нет, и приложение ответит 403 на каждый запрос --
+# симптом выглядит как «прокси настроен, а сайт не работает». Поэтому Host
+# подменяется на `localhost` явно: наружу имя остаётся настоящим, а к приложению
+# идёт то, которое оно считает своим.
+#
+# Настоящее имя при этом не теряется: оно уезжает в X-Forwarded-Host, и если
+# однажды приложению понадобится знать, под каким адресом его открыли, брать
+# надо оттуда.
+#
+# Менять список разрешённых имён в приложении ради «правильного» Host не нужно:
+# проверка стоит дёшево и защищает даже в тот момент, когда прокси настроен с
+# ошибкой.
+
+# Апстрим -- тот самый loopback-порт: и docker (ports: 127.0.0.1:8765:8765), и
+# systemd (vnl serve --port 8765) выставляют его одинаково, конфиг для обоих один.
+upstream vnl {
+    server 127.0.0.1:8765;
+    keepalive 8;
+}
+
+# HTTP только для редиректа и проверки ACME. Инструмент без авторизации по
+# открытому HTTP -- это пароль basic auth, отданный в открытом виде.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name vnl.example.com;
+
+    # Место под выдачу сертификата: certbot --webroot -w /var/www/certbot
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name vnl.example.com;
+
+    # HTTP/2 объявляется по-разному в зависимости от версии, и неверная строка
+    # валит весь nginx, а не только этот vhost. `nginx -v` и одно из двух:
+    #   nginx >= 1.25.1:  http2 on;
+    #   nginx <  1.25.1:  listen 443 ssl http2;  (вместо строки listen выше)
+    # Без HTTP/2 инструмент работает; с ним просто быстрее грузится интерфейс.
+    # http2 on;
+
+    # --- место под TLS ----------------------------------------------------
+    # Пути от certbot: sudo certbot certonly --webroot -w /var/www/certbot \
+    #     -d vnl.example.com
+    ssl_certificate     /etc/letsencrypt/live/vnl.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vnl.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:vnl_tls:10m;
+    ssl_session_timeout 1d;
+    # HSTS включать после того, как HTTPS заведомо работает: откатиться назад
+    # браузеры уже не дадут.
+    # add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # --- авторизация ------------------------------------------------------
+    # Файл паролей:
+    #   sudo apt-get install apache2-utils
+    #   sudo htpasswd -c /etc/nginx/vnl.htpasswd <имя>
+    #   sudo chown root:www-data /etc/nginx/vnl.htpasswd && sudo chmod 640 /etc/nginx/vnl.htpasswd
+    #
+    # Объявлено на уровне server, чтобы распространялось на все location сразу:
+    # авторизация, забытая в одном блоке, -- это открытый API, а не мелкая
+    # недоделка. Если понадобится исключение (например, ACME), его делают явным
+    # location с `auth_basic off;` и только для путей, которые ничего не отдают.
+    auth_basic           "VNL";
+    auth_basic_user_file /etc/nginx/vnl.htpasswd;
+
+    # Тело запроса: схема паттерна -- это JSON на десятки килобайт, но не на
+    # десятки мегабайт. Предел отсекает случайную заливку не того файла.
+    client_max_body_size 8m;
+
+    access_log /var/log/nginx/vnl.access.log;
+    error_log  /var/log/nginx/vnl.error.log;
+
+    location / {
+        proxy_pass http://vnl;
+        proxy_http_version 1.1;
+
+        # Главная строка этого файла. Почему именно localhost -- см. вверху.
+        proxy_set_header Host localhost;
+
+        # Настоящее имя и схема -- отдельными заголовками, не вместо Host.
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP         $remote_addr;
+
+        # Приложение отдаёт обычные ответы, без WebSocket: интерфейс узнаёт о
+        # ходе симуляции опросом GET /api/sim/<id>?since=<n>. Поэтому Upgrade
+        # здесь не нужен, а keepalive к апстриму -- нужен.
+        proxy_set_header Connection "";
+
+        # Симуляция стартует быстро, но ответ приходит после шага расчёта.
+        # Короткий read_timeout рвал бы опрос на тяжёлой модели.
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+
+        # Ответы API помечены Cache-Control: no-store самим приложением, а
+        # статика интерфейса -- с хешами в именах. Своего кэша прокси не держит.
+        proxy_buffering off;
+    }
+
+    # Проверка живости для монитора: тот же обработчик, но без пароля -- иначе
+    # монитор придётся учить basic auth. Отдаёт версию, число паттернов и число
+    # открытых симуляций; ничего не меняет и ничего не раскрывает о содержимом
+    # библиотеки. Если и это лишнее -- убрать блок целиком, монитор обойдётся
+    # проверкой TCP-порта.
+    location = /api/health {
+        auth_basic off;
+        # allow 10.0.0.0/8;   # ограничить сетью монитора, если она известна
+        # deny all;
+        proxy_pass http://vnl;
+        proxy_http_version 1.1;
+        proxy_set_header Host localhost;
+        proxy_set_header Connection "";
+        access_log off;
+    }
+}

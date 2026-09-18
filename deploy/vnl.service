@@ -1,0 +1,99 @@
+# Служба VNL без docker.
+#
+#   sudo cp deploy/vnl.service /etc/systemd/system/vnl.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vnl
+#
+# Подразумевается раскладка, которую делает deploy/install.sh:
+#   /opt/vnl          -- код (git checkout), владелец vnl
+#   /opt/vnl/.venv    -- окружение Python с установленным пакетом
+#   /opt/vnl/ui/dist  -- собранный интерфейс
+#   /var/lib/vnl      -- хранилище: patterns/, sandboxes/ (данные, не код)
+
+[Unit]
+Description=VNL: библиотека нейронных микросхем
+Documentation=file:///opt/vnl/README.ru.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Ровно один процесс. Симуляции считаются в фоновых потоках этого же процесса и
+# живут в его памяти: второй экземпляр службы не увидит сессий первого, поэтому
+# ни воркеров, ни второй копии здесь быть не должно.
+Type=exec
+User=vnl
+Group=vnl
+WorkingDirectory=/opt/vnl
+
+# Хранилище задано явным путём и лежит вне кода: выкладка новой версии меняет
+# /opt/vnl и не касается /var/lib/vnl. StateDirectory создаёт каталог с нужным
+# владельцем сам, если его ещё нет.
+StateDirectory=vnl
+StateDirectoryMode=0750
+
+# Сервер сам привязывается к 127.0.0.1 -- наружу его выпускает nginx.
+# --quiet: строку на каждый запрос уже пишет nginx, дублировать её в журнале
+# незачем. Убрать, если нужны обращения приложения отдельно.
+ExecStart=/opt/vnl/.venv/bin/vnl serve \
+    --root /var/lib/vnl \
+    --ui /opt/vnl/ui/dist \
+    --port 8765 \
+    --quiet
+
+# SIGINT, а не SIGTERM: по Ctrl+C приложение штатно гасит потоки симуляций и
+# закрывает сокет (`cmd_serve` ловит KeyboardInterrupt). SIGTERM оборвал бы
+# процесс на полуслове -- запись в хранилище атомарная, так что данные целы, но
+# останавливаться чисто всё же лучше.
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+Restart=on-failure
+RestartSec=3
+
+# Логи -- в журнал; читать `journalctl -u vnl -f`.
+StandardOutput=journal
+StandardError=journal
+# Python буферизует вывод, когда пишет не в терминал: без этого сообщения
+# появлялись бы в журнале с задержкой.
+Environment=PYTHONUNBUFFERED=1
+
+# --- ограничения ------------------------------------------------------------
+# Приложение читает код и пишет только в хранилище. Всё остальное ему закрыто:
+# у него нет авторизации, и если до него однажды доберутся, полномочий процесса
+# должно хватать ровно на его собственные файлы.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+# Никаких capability: порт 8765 высокий, привилегий для его открытия не нужно.
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Хранилище -- единственное место, куда разрешена запись (StateDirectory даёт
+# это право само; строка оставлена явной, чтобы правку пути было видно).
+ReadWritePaths=/var/lib/vnl
+# Наружу приложение не ходит: ни обновлений, ни телеметрии, ни зависимостей в
+# рантайме. Сокет ему нужен только локальный.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+# Тяжёлая модель не должна валить хост. Числа -- отправная точка, поднимать по
+# месту (`systemctl show vnl -p MemoryCurrent` покажет, сколько занято сейчас).
+MemoryMax=2G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,45 @@
+# Что не должно попадать в контекст сборки.
+#
+# Смысл двойной: контекст не тащит сотни мегабайт node_modules, и в образ не
+# приезжают локальные артефакты -- в первую очередь `.vnl/`, чужое хранилище с
+# чужими паттернами. Данные на сервере приходят из тома, а не из образа.
+
+.git/
+.gitignore
+.dockerignore
+
+# Локальное хранилище разработчика. В образе ему места нет ни при каких условиях.
+.vnl/
+
+# Сборочный мусор Python.
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Интерфейс: зависимости и сборка делаются внутри образа, локальные копии только
+# мешают (node_modules с бинарями под Windows в linux-образе не работает).
+ui/node_modules/
+ui/dist/
+ui/*.tsbuildinfo
+# Демонстрационный прогон на 700 КБ; библиотеке он не нужен.
+ui/public/run.json
+
+# Тексты, тесты и примеры в рантайме не участвуют.
+README.md
+README.ru.md
+docs/
+tests/
+examples/
+tools/
+design/mockups/
+
+# Сам каталог выкладки: в образ из него едет только entrypoint.py, остальное --
+# конфиги для хоста.
+deploy/compose.yml
+deploy/nginx.conf.example
+deploy/vnl.service
+deploy/install.sh
+deploy/readme.md
