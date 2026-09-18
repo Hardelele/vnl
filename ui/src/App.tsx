@@ -1,15 +1,19 @@
 /**
  * Оболочка: панель сверху и один экран под ней.
  *
- * Роутера нет намеренно. Экранов два с половиной, адресная строка локального
- * инструмента никому не нужна, а библиотека роутинга привела бы за собой
- * собственное состояние рядом с уже имеющимся.
+ * Отдельного экрана прогона нет намеренно. Симуляция -- не расчёт с отчётом в
+ * конце, а среда с управляемым временем: схема, её текущее состояние и
+ * таймлайн живут вместе, в карточке паттерна и в песочнице. Поэтому и
+ * инспектор нейрона встанет внутрь них, а не рядом отдельной вкладкой.
+ *
+ * Роутера нет по той же причине, по какой нет и отчёта: экранов два, адресная
+ * строка локального инструмента никому не нужна, а библиотека роутинга привела
+ * бы за собой собственное состояние рядом с уже имеющимся.
  */
 
 import { useMemo, useState } from 'react'
 
 import { LibraryScreen } from './components/catalog/LibraryScreen'
-import { RunScreen } from './components/run/RunScreen'
 import { AppBar, type Screen, type Tab } from './components/shell/AppBar'
 import { PATTERNS, counted } from './lib/plural'
 import { useCatalog } from './state/catalog'
@@ -17,7 +21,6 @@ import { useCatalog } from './state/catalog'
 const TABS: Tab[] = [
   { id: 'library', label: 'Библиотека' },
   { id: 'sandbox', label: 'Песочница', pending: 'Появится вместе с холстом (#479)' },
-  { id: 'run', label: 'Прогон' },
 ]
 
 export function App() {
@@ -42,7 +45,7 @@ export function App() {
     <div className="shell">
       <AppBar tabs={TABS} current={screen} onPick={setScreen} status={status} />
       <main className="shell-screen">
-        {screen === 'run' ? <RunScreen /> : <LibraryScreen />}
+        <LibraryScreen />
       </main>
     </div>
   )

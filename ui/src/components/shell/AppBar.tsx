@@ -9,7 +9,7 @@
 
 import './shell.css'
 
-export type Screen = 'library' | 'sandbox' | 'run'
+export type Screen = 'library' | 'sandbox'
 
 export interface Tab {
   id: Screen

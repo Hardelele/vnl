@@ -4,6 +4,19 @@
 NEURON на каждое движение мыши в редакторе нельзя. Всё, что теряется при
 переходе L2 -> L1 (прежде всего положение синапса на дендрите), сворачивается
 по явным правилам и попадает в отчёт деградации, а не исчезает молча.
+
+Движок шаговый. Симуляция в интерфейсе -- это среда с управляемым временем, а
+не расчёт с отчётом в конце: время идёт, его останавливают, отматывают назад и
+продолжают с выбранного момента. Поэтому здесь есть `step_once`/`advance`,
+снимок состояния и восстановление из него, а `run()` -- всего лишь «считать до
+конца», как раньше.
+
+Что входит в снимок, определяется одним вопросом: что нужно, чтобы продолжение
+после восстановления совпало с непрерывным прогоном. Это потенциалы и
+рефрактерность, проводимости, ресурсы Цодыкса--Маркрама, следы STDP,
+обучаемые веса, уровни нейромодуляторов, очередь задержанных передач -- и
+состояние генератора случайных чисел. Без последнего пуассоновский стимул
+после отката пойдёт другим, и «то же самое место» окажется другим местом.
 """
 
 from __future__ import annotations
@@ -28,6 +41,20 @@ class SimResult:
 
     def spike_count(self) -> dict[str, int]:
         return {name: len(times) for name, times in self.spikes.items()}
+
+    def truncate(self, samples: int) -> None:
+        """Отрезать всё, что записано после `samples` отсчётов.
+
+        Откат во времени стирает прежнее будущее: держать его в трассах
+        значило бы показывать на графике то, чего в этой симуляции уже нет.
+        """
+        del self.times[samples:]
+        for values in self.traces.values():
+            del values[samples:]
+        for name, times in self.spikes.items():
+            self.spikes[name] = [
+                time for time in times if round(time / self.dt) < samples
+            ]
 
 
 @dataclass
@@ -55,6 +82,30 @@ class _Synapse:
     last_spike: float | None = None
     pre_trace: float = 0.0
     eligibility: float = 0.0
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """Состояние симулятора на конкретном шаге.
+
+    Непрозрачен снаружи: снимать и восстанавливать его умеет только сам
+    симулятор. Хранится по значению, поэтому снимок не «уедет» вслед за
+    продолжающейся симуляцией.
+    """
+
+    step: int
+    time: float
+    #: Имя клетки -> её состояние.
+    cells: dict[str, tuple]
+    #: Состояния синапсов в порядке `Simulator.all_synapses`.
+    synapses: tuple[tuple, ...]
+    #: Шаг доставки -> список (номер синапса, амплитуда).
+    pending: dict[int, tuple[tuple[int, float], ...]]
+    modulator_level: dict[str, float]
+    #: Состояние генератора: без него повтор разойдётся с исходным прогоном.
+    rng: tuple
+    #: Сколько отсчётов записано к этому моменту.
+    samples: int
 
 
 def _degrade(model: ir.Model, contact: ir.Contact) -> tuple[float, float, str | None]:
@@ -133,6 +184,20 @@ class Simulator:
 
         self.pending: dict[int, list[tuple[_Synapse, float]]] = {}
         self.modulator_level: dict[str, float] = {m: 0.0 for m in model.modulators}
+
+        # Общий порядок синапсов. Очередь задержанных передач ссылается на
+        # объекты, а снимок хранится по значению -- значит в нём нужен номер,
+        # по которому синапс находится обратно.
+        self.all_synapses: list[_Synapse] = [
+            *self.synapses,
+            *self.stim_synapses.values(),
+        ]
+        self._synapse_index = {
+            id(synapse): number for number, synapse in enumerate(self.all_synapses)
+        }
+
+        self.step = 0
+        self.total_steps = int(round(model.run.duration / self.dt))
 
         self.result = SimResult(dt=self.dt, times=[])
         for instance_id in self.cells:
@@ -333,18 +398,116 @@ class Simulator:
                 )
             self.result.traces[key].append(value)
 
+    # --- ход времени ----------------------------------------------------
+
+    def step_once(self) -> bool:
+        """Один шаг `dt`. `False` -- прогон дошёл до конца длительности."""
+        if self.step >= self.total_steps:
+            return False
+        self.time = self.step * self.dt
+        self._stimulate()
+        self._deliver(self.step)
+        self._integrate()
+        self._propagate()
+        self._plasticity_step()
+        self.result.times.append(self.time)
+        self._record()
+        self.step += 1
+        return True
+
+    def advance(self, steps: int) -> int:
+        """Сколько шагов удалось сделать -- меньше запрошенного у конца прогона."""
+        done = 0
+        for _ in range(steps):
+            if not self.step_once():
+                break
+            done += 1
+        return done
+
+    @property
+    def finished(self) -> bool:
+        return self.step >= self.total_steps
+
     def run(self) -> SimResult:
-        steps = int(round(self.model.run.duration / self.dt))
-        for step in range(steps):
-            self.time = step * self.dt
-            self._stimulate()
-            self._deliver(step)
-            self._integrate()
-            self._propagate()
-            self._plasticity_step()
-            self.result.times.append(self.time)
-            self._record()
+        """Считать до конца. Прежний способ: он же шаги, только все сразу."""
+        while self.step_once():
+            pass
         return self.result
+
+    # --- снимок и откат ---------------------------------------------------
+
+    def snapshot(self) -> Snapshot:
+        index = self._synapse_index
+        return Snapshot(
+            step=self.step,
+            time=self.time,
+            cells={
+                name: (
+                    cell.v,
+                    cell.threshold_offset,
+                    cell.refractory_left,
+                    dict(cell.conductance),
+                    cell.current,
+                    cell.spiked,
+                    cell.post_trace,
+                )
+                for name, cell in self.cells.items()
+            },
+            synapses=tuple(
+                (
+                    synapse.weight,
+                    synapse.x,
+                    synapse.u,
+                    synapse.last_spike,
+                    synapse.pre_trace,
+                    synapse.eligibility,
+                )
+                for synapse in self.all_synapses
+            ),
+            pending={
+                step: tuple(
+                    (index[id(synapse)], amplitude) for synapse, amplitude in items
+                )
+                for step, items in self.pending.items()
+                if items
+            },
+            modulator_level=dict(self.modulator_level),
+            rng=self.rng.getstate(),
+            samples=len(self.result.times),
+        )
+
+    def restore(self, state: Snapshot) -> None:
+        """Вернуть симулятор в снятое состояние вместе с записанным к тому часу."""
+        self.step = state.step
+        self.time = state.time
+        for name, values in state.cells.items():
+            cell = self.cells[name]
+            (
+                cell.v,
+                cell.threshold_offset,
+                cell.refractory_left,
+                conductance,
+                cell.current,
+                cell.spiked,
+                cell.post_trace,
+            ) = values
+            cell.conductance = dict(conductance)
+        for synapse, values in zip(self.all_synapses, state.synapses):
+            (
+                synapse.weight,
+                synapse.x,
+                synapse.u,
+                synapse.last_spike,
+                synapse.pre_trace,
+                synapse.eligibility,
+            ) = values
+        self.pending = {
+            step: [(self.all_synapses[number], amplitude) for number, amplitude in items]
+            for step, items in state.pending.items()
+        }
+        self.modulator_level = dict(state.modulator_level)
+        self.rng.setstate(state.rng)
+        self.result.truncate(state.samples)
 
 
 def simulate(model: ir.Model) -> SimResult:
