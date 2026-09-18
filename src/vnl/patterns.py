@@ -146,6 +146,20 @@ class Pattern:
             body=ir.Model(name=name),
         )
 
+    def demo_model(self) -> ir.Model:
+        """Модель для демонстрационного запуска: тело плюс витрина.
+
+        Обратная сборка к `from_model`. Стимулы и записи хранятся отдельно
+        именно ради этого: в чужую сеть они не едут, а показать паттерн в
+        одиночку без них нельзя -- сеть без драйва молчит.
+        """
+        model = copy.deepcopy(self.body)
+        if self.demo is not None:
+            model.stimuli = copy.deepcopy(self.demo.stimuli)
+            model.recordings = copy.deepcopy(self.demo.recordings)
+            model.run = copy.deepcopy(self.demo.run)
+        return model
+
     @property
     def level_name(self) -> str:
         return LEVEL_NAMES.get(self.level, self.level)

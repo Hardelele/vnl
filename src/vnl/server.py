@@ -37,6 +37,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__, api
 from .catalog import Query
+from .live import Pool, SessionError
 from .patterns import LEVEL_NAMES, Pattern, PatternError
 from .store import Store, StoreError
 
@@ -48,6 +49,9 @@ class Api:
 
     def __init__(self, store: Store) -> None:
         self.store = store
+        # Симуляции живут между запросами: время идёт, даже когда никто не
+        # спрашивает. Поэтому сессии держит сервер, а не запрос.
+        self.pool = Pool()
 
     def health(self) -> dict[str, Any]:
         """Живые данные для строки состояния, а не подпись из макета (#483)."""
@@ -57,6 +61,7 @@ class Api:
             "root": str(self.store.root),
             "patterns": len(self.store.patterns()),
             "sandboxes": len(self.store.sandboxes()),
+            "simulations": len(self.pool),
         }
 
     def catalog(self, params: dict[str, list[str]]) -> dict[str, Any]:
@@ -77,6 +82,65 @@ class Api:
         pattern = Pattern.empty(name, level, taken)  # type: ignore[arg-type]
         self.store.save_pattern(pattern)
         return api.pattern_payload(pattern, body=True)
+
+    # --- симуляция --------------------------------------------------------
+
+    def open_sim(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Открыть симуляцию демонстрационного запуска паттерна."""
+        pattern_id = str(body.get("pattern") or "")
+        if not pattern_id:
+            raise PatternError("не сказано, что запускать: нужен pattern")
+        pattern = self.store.load_pattern(pattern_id)
+        model = pattern.demo_model()
+        if not model.instances:
+            raise PatternError(
+                f"в паттерне «{pattern.name}» нет ни одного нейрона: запускать нечего"
+            )
+        options: dict[str, Any] = {}
+        if body.get("pace"):
+            options["pace"] = float(body["pace"])
+        session = self.pool.open(model, source=f"паттерн «{pattern.name}»", **options)
+        return session.update()
+
+    @staticmethod
+    def _since(params: dict[str, list[str]]) -> int:
+        """Сколько отсчётов у интерфейса уже есть."""
+        raw = (params.get("since") or ["0"])[0]
+        try:
+            return max(0, int(raw))
+        except ValueError as exc:
+            raise ValueError(f"since должно быть числом, а не {raw!r}") from exc
+
+    def sim(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
+        return self.pool.get(sim_id).update(self._since(params))
+
+    def sim_start(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
+        session = self.pool.get(sim_id)
+        session.start()
+        return session.update(self._since(params))
+
+    def sim_pause(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
+        session = self.pool.get(sim_id)
+        session.pause()
+        return session.update(self._since(params))
+
+    def sim_reset(self, sim_id: str) -> dict[str, Any]:
+        session = self.pool.get(sim_id)
+        session.reset()
+        return session.update()
+
+    def sim_seek(self, sim_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        session = self.pool.get(sim_id)
+        try:
+            moment = float(body.get("time"))  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("нужно время в мс: {\"time\": 120.0}") from exc
+        session.seek(moment)
+        return session.update()
+
+    def close_sim(self, sim_id: str) -> dict[str, Any]:
+        self.pool.close(sim_id)
+        return {"closed": sim_id}
 
     def delete_pattern(self, pattern_id: str) -> dict[str, Any]:
         # Читаем перед удалением, чтобы «такого нет» отличалось от «удалено».
@@ -114,6 +178,23 @@ def routes(service: Api) -> list[Route]:
         ),
         Route("GET", re.compile(r"^/api/patterns/([^/]+)$"), service.pattern),
         Route("DELETE", re.compile(r"^/api/patterns/([^/]+)$"), service.delete_pattern),
+        Route("POST", re.compile(r"^/api/sim$"), service.open_sim, wants="body", ok=201),
+        Route("GET", re.compile(r"^/api/sim/([^/]+)$"), service.sim, wants="params"),
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/start$"),
+            service.sim_start,
+            wants="params",
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/pause$"),
+            service.sim_pause,
+            wants="params",
+        ),
+        Route("POST", re.compile(r"^/api/sim/([^/]+)/reset$"), service.sim_reset),
+        Route("POST", re.compile(r"^/api/sim/([^/]+)/seek$"), service.sim_seek, wants="body"),
+        Route("DELETE", re.compile(r"^/api/sim/([^/]+)$"), service.close_sim),
     ]
 
 
@@ -169,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
             elif route.wants == "body":
                 arguments.append(self._body())
             payload = route.call(*arguments)
-        except StoreError as exc:
+        except (StoreError, SessionError) as exc:
             self._send(404, {"error": str(exc)})
         except (PatternError, ValueError) as exc:
             # Неготовая схема и неверный запрос -- нормальный исход, а не сбой:

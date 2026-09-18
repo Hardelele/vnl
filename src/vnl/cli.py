@@ -198,6 +198,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # Ctrl+C -- обычный способ остановить локальный инструмент, не сбой.
         print()
     finally:
+        # Симуляции считают в своих потоках: их надо остановить самим, а не
+        # надеяться, что процесс завершится раньше, чем они успеют навредить.
+        server.RequestHandlerClass.service.pool.close_all()  # type: ignore[attr-defined]
         server.server_close()
     return 0
 

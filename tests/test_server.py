@@ -7,6 +7,7 @@
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -239,3 +240,98 @@ def test_a_path_cannot_escape_the_ui(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+# --- симуляция ------------------------------------------------------------
+
+
+def test_a_simulation_opens_paused_at_zero(base):
+    status, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    assert status == 201
+    assert sim["state"] == "paused"
+    assert sim["time"] == 0.0
+    assert sim["samples"] == 0
+    assert sim["source"] == "паттерн «FFI»"
+    assert set(sim["cells"]) == {"IN", "E", "I"}
+
+
+def test_a_simulation_needs_something_to_run(base):
+    _, draft = ask(base, "POST", "/api/patterns", {"name": "Пустой"})
+    status, payload = ask(base, "POST", "/api/sim", {"pattern": draft["id"]})
+    assert status == 400
+    assert "нет ни одного нейрона" in payload["error"]
+
+    assert ask(base, "POST", "/api/sim", {})[0] == 400
+    assert ask(base, "POST", "/api/sim", {"pattern": "нет"})[0] == 404
+
+
+def test_time_flows_after_start(base):
+    _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi", "pace": 2000})
+    ask(base, "POST", f"/api/sim/{sim['id']}/start")
+
+    # Время идёт в фоне, поэтому ждём появления отсчётов, а не фиксированную паузу.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        _, live = ask(base, "GET", f"/api/sim/{sim['id']}")
+        if live["samples"]:
+            break
+    assert live["samples"] > 0, "за пять секунд симуляция не сдвинулась"
+    assert live["time"] > 0
+
+    _, paused = ask(base, "POST", f"/api/sim/{sim['id']}/pause")
+    assert paused["state"] in ("paused", "finished")
+
+
+def test_an_update_asks_only_for_the_new_part(base):
+    _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi", "pace": 2000})
+    ask(base, "POST", f"/api/sim/{sim['id']}/start")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        _, live = ask(base, "GET", f"/api/sim/{sim['id']}")
+        if live["samples"] > 10:
+            break
+    ask(base, "POST", f"/api/sim/{sim['id']}/pause")
+
+    _, delta = ask(base, "GET", f"/api/sim/{sim['id']}?since={live['samples']}")
+    assert delta["from"] == live["samples"]
+    assert delta["rewound"] is False
+
+    _, ahead = ask(base, "GET", f"/api/sim/{sim['id']}?since=999999")
+    assert ahead["rewound"] is True, "интерфейс впереди сессии -- значит время отмотали"
+
+    assert ask(base, "GET", f"/api/sim/{sim['id']}?since=вчера")[0] == 400
+
+
+def test_seek_pauses_and_puts_time_where_asked(base):
+    _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi", "pace": 2000})
+    ask(base, "POST", f"/api/sim/{sim['id']}/start")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        _, live = ask(base, "GET", f"/api/sim/{sim['id']}")
+        if live["time"] > 40:
+            break
+
+    _, back = ask(base, "POST", f"/api/sim/{sim['id']}/seek", {"time": 20.0})
+    assert back["state"] == "paused"
+    assert back["time"] == pytest.approx(20.0, abs=back["dt"])
+    assert ask(base, "POST", f"/api/sim/{sim['id']}/seek", {})[0] == 400
+
+
+def test_reset_brings_the_simulation_back_to_the_start(base):
+    _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi", "pace": 2000})
+    ask(base, "POST", f"/api/sim/{sim['id']}/start")
+    _, fresh = ask(base, "POST", f"/api/sim/{sim['id']}/reset")
+    assert fresh["time"] == 0.0
+    assert fresh["samples"] == 0
+    assert fresh["state"] == "paused"
+
+
+def test_a_closed_simulation_is_gone(base):
+    _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    assert ask(base, "GET", "/api/health")[1]["simulations"] == 1
+
+    status, payload = ask(base, "DELETE", f"/api/sim/{sim['id']}")
+    assert status == 200
+    assert payload["closed"] == sim["id"]
+    assert ask(base, "GET", f"/api/sim/{sim['id']}")[0] == 404
+    assert ask(base, "GET", "/api/health")[1]["simulations"] == 0
