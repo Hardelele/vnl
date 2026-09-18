@@ -432,6 +432,78 @@ def _spikes_figure(
     return _figure(key, "spikes", stat, "tr-plot-spikes", "".join(body), "", "")
 
 
+# Сколько зон у скраббера. Каждая зона несёт заранее посчитанную строку
+# значений, поэтому число -- компромисс между шагом курсора и весом страницы.
+SCRUB_ZONES = 80
+
+# Короткая пометка вида величины в строке курсора: без неё две записи с
+# одной клетки (v и g) читаются как одно и то же число.
+_SCRUB_MARK = {
+    "v": "",
+    "spikes": "",
+    "g": " g",
+    "g_exc": " g+",
+    "g_inh": " g−",
+    "w": " w",
+}
+_SCRUB_DIGITS = {"v": 1, "g": 2, "g_exc": 2, "g_inh": 2, "w": 2}
+
+
+def _scrub_value(
+    kind: str, values: list[float], start: int, stop: int
+) -> str:
+    """Что показать в точке курсора: число или факт разряда."""
+    if kind == "spikes":
+        fired = any(value >= 0.5 for value in values[start:stop])
+        return "●" if fired else "·"
+    index = min(len(values) - 1, start)
+    return _fmt(values[index], _SCRUB_DIGITS.get(kind, 2))
+
+
+def _scrub(
+    frame: _Frame,
+    series: list[tuple[str, str, list[float]]],
+    zones: int = SCRUB_ZONES,
+) -> str:
+    """Курсор по времени: перемещение по таймлайну без единой строчки JS.
+
+    Страница обязана оставаться статикой, поэтому «скраббер» -- это набор
+    узких hover-зон поверх всех графиков: наведение зажигает сквозную
+    вертикальную линию и печатает значения всех трасс в этой точке.
+    Значения посчитаны заранее -- это и есть плата за отсутствие скрипта,
+    поэтому зон сто, а не тысяча: шаг курсора мельче пикселя не нужен.
+    """
+    if not series:
+        return ""
+
+    parts = [
+        '<div class="tr-scrub">'
+        '<span class="tr-hint">наведите курсор: значения в этой точке</span>'
+    ]
+    for index in range(zones):
+        middle = (index + 0.5) / zones * frame.duration
+        chunks = [f"{middle:.0f} мс"]
+        for label, kind, values in series:
+            start = min(len(values) - 1, index * len(values) // zones)
+            stop = max(start + 1, (index + 1) * len(values) // zones)
+            chunks.append(f"{label} {_scrub_value(kind, values, start, stop)}")
+        # У краёв подпись не центрируем, иначе она вылезет за блок.
+        align = ""
+        if index < zones * 0.12:
+            align = " tr-read-l"
+        elif index > zones * 0.88:
+            align = " tr-read-r"
+        # Подпись живёт в зоне, но позиционируется от слоя целиком: на
+        # узком экране её проще развернуть на всю ширину, чем обрезать.
+        parts.append(
+            '<span class="tr-hit">'
+            f'<span class="tr-read{align}" style="left:{index / zones * 100:.2f}%">'
+            f'{esc(" · ".join(chunks))}</span></span>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _time_axis(frame: _Frame) -> str:
     """Одна ось времени под всем блоком: подписи круглые и общие для всех."""
     last = len(frame.ticks) - 1
@@ -580,8 +652,70 @@ section.tr-card { padding: 0; overflow: hidden; }
 .tr-tick:first-child { transform: none; }
 .tr-tick-last { transform: translateX(-100%); }
 
+/* Скраббер: сквозной курсор по времени. Раскладка держится на том, что
+   зоны накрывают ровно колонку графиков -- тот же трек, что и у строк. */
+.tr-block { position: relative; }
+.tr-bar { height: 14px; }
+.tr-scrub {
+  position: absolute;
+  left: var(--track-label, 168px);
+  right: 0;
+  top: var(--space-5);
+  bottom: var(--space-5);
+  z-index: 1;
+}
+.tr-hint {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--muted);
+}
+.tr-scrub:hover .tr-hint { opacity: 0; }
+/* Зоны -- флекс-полоски равной ширины: тогда подпись можно позиционировать
+   от всего слоя, а не от зоны, и на узком экране развернуть её во всю ширину.
+   Курсор рисуем внутренней тенью, а не рамкой: рамка сдвинула бы раскладку. */
+.tr-scrub { display: flex; }
+.tr-hit { flex: 1 1 0; }
+.tr-hit:hover { box-shadow: inset 1px 0 0 var(--ink); }
+.tr-read {
+  position: absolute;
+  top: 0;
+  display: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--ink);
+  background: var(--panel);
+  padding: 0 var(--space-1);
+}
+.tr-read-l { transform: none; }
+.tr-read-r { transform: translateX(-100%); }
+.tr-hit:hover .tr-read { display: block; }
+/* На тач-устройствах hover не существует -- слой только мешал бы. */
+@media (hover: none) {
+  .tr-scrub { display: none; }
+  .tr-bar { display: none; }
+}
+
 @media (max-width: 520px) {
   .tr-stat { margin-left: 0; width: 100%; }
+  /* Узко: строка курсора не влезает рядом с ним -- кладём её на всю
+     ширину блока и разрешаем перенос. */
+  .tr-bar { height: 28px; }
+  .tr-read, .tr-read-l, .tr-read-r {
+    left: 0 !important;
+    right: 0;
+    transform: none;
+    white-space: normal;
+    font-size: 10px;
+    padding: 0;
+  }
 }
 """
 
@@ -639,12 +773,17 @@ def render(model: ir.Model, result: SimResult) -> str:
             )
     voltage_scale = _shared_voltage_scale(prepared)
 
+    # Ряды для скраббера: строка курсора должна перечислять все записи в
+    # том же порядке, в каком они нарисованы.
+    series: list[tuple[str, str, list[float]]] = []
+
     for key, values in result.traces.items():
         if not values:
             continue
         times = result.times[: len(values)]
         head, _, kind = key.partition(":")
         instance = head.split(".")[0]
+        series.append((instance + _SCRUB_MARK.get(kind, " " + kind), kind, values))
 
         if kind == "spikes":
             figures.append(
@@ -682,7 +821,9 @@ def render(model: ir.Model, result: SimResult) -> str:
     return (
         "<h2>Трассы</h2>"
         '<section class="tr-card"><div class="tr-block">'
+        '<div class="tr-bar"></div>'
         + "".join(figures)
         + _time_axis(frame)
+        + _scrub(frame, series)
         + "</div></section>"
     )

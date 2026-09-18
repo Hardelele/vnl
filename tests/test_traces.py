@@ -169,3 +169,30 @@ def test_voltage_traces_share_one_scale_when_comparable():
         scales.append(re.findall(r'class="tr-lvl"[^>]*>([^<]+)<', figure))
     assert len(scales) == 2
     assert scales[0] == scales[1]
+
+
+def test_scrubber_lets_you_move_along_the_timeline_without_js():
+    """Перемещение по таймлайну сделано зонами hover, а не скриптом."""
+    _, _, block = block_for("disinhibition")
+    assert "<script" not in block and "onmouse" not in block.lower()
+    assert block.count('class="tr-hit"') == traces.SCRUB_ZONES
+    assert block.count('class="tr-read') == traces.SCRUB_ZONES
+    assert "tr-scrub" in block
+
+
+def test_scrubber_shows_real_values_at_that_time():
+    """Число в строке курсора -- это значение трассы в этой точке."""
+    model, result, block = block_for("disinhibition")
+    reads = re.findall(r'class="tr-read[^"]*"[^>]*>([^<]+)<', block)
+    assert len(reads) == traces.SCRUB_ZONES
+
+    zone = traces.SCRUB_ZONES // 2
+    text = reads[zone]
+    expected_time = (zone + 0.5) / traces.SCRUB_ZONES * model.run.duration
+    assert text.startswith(f"{expected_time:.0f} мс")
+
+    values = result.traces["PYR.soma:v"]
+    index = zone * len(values) // traces.SCRUB_ZONES
+    assert f"PYR {values[index]:.1f}".replace("-", "−") in text
+    # спайки показываем событием, а не числом
+    assert text.endswith("●") or text.endswith("·")
