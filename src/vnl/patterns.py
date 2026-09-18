@@ -210,6 +210,34 @@ class Link:
 
 
 @dataclass
+class SandboxStimulus:
+    """Стимул проекта. Целью может быть и порт блока, и отдельный нейрон."""
+
+    id: str
+    target: Endpoint
+    kind: str = "poisson"
+    receptor: str = "ampa"
+    amplitude: float = 0.0
+    rate: float = 0.0
+    times: tuple[float, ...] = ()
+    start: float = 0.0
+    stop: float = float("inf")
+
+
+@dataclass
+class SandboxRecording:
+    """Запись проекта.
+
+    У блока из нескольких нейронов нет собственного потенциала, поэтому
+    записать «блок» нельзя: цель всегда конкретная точка -- порт или нейрон.
+    """
+
+    id: str
+    target: Endpoint
+    var: str = "v"
+
+
+@dataclass
 class Sandbox:
     """Проект: экземпляры паттернов, отдельные нейроны, связи и эксперимент."""
 
@@ -220,8 +248,8 @@ class Sandbox:
     neurons: dict[str, ir.Instance] = field(default_factory=dict)
     links: list[Link] = field(default_factory=list)
     modulators: dict[str, ir.Modulator] = field(default_factory=dict)
-    stimuli: list[ir.Stimulus] = field(default_factory=list)
-    recordings: list[ir.Recording] = field(default_factory=list)
+    stimuli: list[SandboxStimulus] = field(default_factory=list)
+    recordings: list[SandboxRecording] = field(default_factory=list)
     run: ir.RunSpec = field(default_factory=ir.RunSpec)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
@@ -350,8 +378,8 @@ def extract_pattern(
             body.contacts.append(
                 ir.Contact(
                     id=link.id,
-                    pre=_resolve_endpoint(sandbox, link.source),
-                    post=_resolve_endpoint(sandbox, link.target),
+                    pre=resolve_endpoint(sandbox, link.source),
+                    post=resolve_endpoint(sandbox, link.target),
                     receptor=link.receptor,
                     weight=link.weight,
                     delay=link.delay,
@@ -364,7 +392,7 @@ def extract_pattern(
                 Port(
                     name=_port_name(link.target, "in"),
                     direction="in",
-                    site=_resolve_endpoint(sandbox, link.target),
+                    site=resolve_endpoint(sandbox, link.target),
                     note=f"сюда приходила связь {link.id}",
                 )
             )
@@ -377,7 +405,7 @@ def extract_pattern(
                 Port(
                     name=_port_name(link.source, "out"),
                     direction="out",
-                    site=_resolve_endpoint(sandbox, link.source),
+                    site=resolve_endpoint(sandbox, link.source),
                     note=f"отсюда уходила связь {link.id}",
                 )
             )
@@ -423,7 +451,7 @@ def _port_name(endpoint: Endpoint, direction: str) -> str:
     return f"{prefix}_{endpoint.instance}"
 
 
-def _resolve_endpoint(sandbox: Sandbox, endpoint: Endpoint) -> ir.Site:
+def resolve_endpoint(sandbox: Sandbox, endpoint: Endpoint) -> ir.Site:
     """Конец связи -> точка внутри развёрнутой сети."""
     if endpoint.is_port:
         block = sandbox.instance(endpoint.instance)
