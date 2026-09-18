@@ -6,4 +6,4 @@ __pycache__/
 *.csv
 *.dot
 .preview/
-*.html
+examples/*.html

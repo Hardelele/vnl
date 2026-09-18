@@ -1,4 +1,4 @@
-"""Командная строка: vnl check | run | view | export | graph."""
+"""Командная строка: vnl check | run | view | data | export | graph."""
 
 from __future__ import annotations
 
@@ -129,6 +129,26 @@ def cmd_view(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data(args: argparse.Namespace) -> int:
+    """Прогон в JSON -- то, чем живёт интерфейс."""
+    try:
+        model, diagnostics = _read(args.file)
+    except ValidationError as exc:
+        _print_diagnostics(exc.diagnostics)
+        return 1
+    _print_diagnostics(diagnostics)
+
+    from .api import dumps, run_payload
+
+    payload = run_payload(model, simulate(model), diagnostics)
+    out = Path(args.out or Path(args.file).with_suffix(".json"))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(dumps(payload, pretty=args.pretty), encoding="utf-8")
+    size = out.stat().st_size / 1024
+    print(f"данные прогона: {out} ({size:.0f} КБ)")
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     try:
         model, diagnostics = _read(args.file)
@@ -206,6 +226,14 @@ def main(argv: list[str] | None = None) -> int:
         help="движок раскладки схемы (по умолчанию auto: ELK, если доступен)",
     )
     view.set_defaults(func=cmd_view)
+
+    data = sub.add_parser("data", help="выгрузить прогон в JSON для интерфейса")
+    data.add_argument("file")
+    data.add_argument("-o", "--out")
+    data.add_argument(
+        "--pretty", action="store_true", help="читаемый JSON с отступами"
+    )
+    data.set_defaults(func=cmd_data)
 
     export = sub.add_parser("export", help="сгенерировать скрипт NetPyNE")
     export.add_argument("file")

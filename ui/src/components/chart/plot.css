@@ -1,0 +1,144 @@
+.plot {
+  margin: 0;
+}
+
+.plot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.plot-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.plot-kind {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.plot-stat {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Левая колонка ровно такой же ширины, как у всех блоков на временной оси:
+   иначе «общая ось» существует только на словах. */
+.plot-row {
+  display: grid;
+  grid-template-columns: var(--track-label) 1fr;
+  align-items: stretch;
+}
+
+.plot-gutter {
+  position: relative;
+}
+
+.plot-level {
+  position: absolute;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--faint);
+}
+
+.plot-area {
+  position: relative;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+}
+
+.plot-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.plot-grid,
+.plot-grid-y {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.plot-grid-y {
+  opacity: 0.6;
+}
+
+.plot-line {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+
+.plot-dashed {
+  stroke-dasharray: 5 4;
+}
+
+.plot-fill {
+  opacity: 0.16;
+  stroke: none;
+}
+
+.plot-marker {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.plot-marker-label {
+  position: absolute;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.plot-event {
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Курсор времени общий для всех графиков: он и есть способ сопоставить
+   событие на одной трассе с состоянием на другой. */
+.plot-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.plot-axis-row {
+  margin-top: var(--space-1);
+}
+
+.plot-axis {
+  position: relative;
+  height: 18px;
+}
+
+.plot-tick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.plot-tick-first {
+  transform: none;
+}
+
+.plot-tick-last {
+  transform: translateX(-100%);
+}

@@ -268,3 +268,46 @@ def test_receptor_sign_comes_from_its_reversal_potential():
     assert is_inhibitory_receptor("gaba_a") and is_inhibitory_receptor("gaba_b")
     assert not is_inhibitory_receptor("ampa")
     assert not is_inhibitory_receptor("nicotinic")
+
+
+# --- выгрузка для интерфейса ----------------------------------------------
+
+
+def test_payload_carries_everything_the_ui_needs():
+    from vnl.api import SCHEMA_VERSION, run_payload
+
+    model, diagnostics = load(example("ffi"), source="examples/ffi.vnl")
+    payload = run_payload(model, simulate(model), diagnostics)
+
+    assert payload["schema"] == SCHEMA_VERSION
+    assert {n["id"] for n in payload["model"]["neurons"]} == set(model.instances)
+    assert len(payload["model"]["contacts"]) == len(model.contacts)
+    # Ключи трасс совпадают с теми, что называет модель: интерфейс ищет по ним.
+    assert {r["key"] for r in payload["model"]["recordings"]} == set(
+        payload["result"]["traces"]
+    )
+
+
+def test_payload_is_json_without_infinities():
+    """json.dumps проглотит Infinity, а JSON.parse в браузере -- нет."""
+    import json
+
+    from vnl.api import dumps, run_payload
+
+    source = example("ffi").replace("stop=380ms", "stop=400ms")
+    model, _ = load(source)
+    text = dumps(run_payload(model, simulate(model)))
+    assert "Infinity" not in text
+    json.loads(text)
+
+
+def test_payload_marks_inhibitory_side_for_the_ui():
+    from vnl.api import run_payload
+
+    model, _ = load(example("ffi"))
+    payload = run_payload(model, simulate(model))
+    by_id = {c["id"]: c for c in payload["model"]["contacts"]}
+    inhibitory = [c for c in by_id.values() if c["inhibitory"]]
+
+    assert inhibitory, "в feed-forward inhibition обязан быть тормозный контакт"
+    assert all(c["receptor"].startswith("gaba") for c in inhibitory)
