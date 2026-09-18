@@ -1,0 +1,55 @@
+# Растормаживание: VIP тормозит SST, SST тормозит пирамиду.
+# Активация VIP снимает тормоз с пирамиды -- это «gate», а не «драйв».
+# Вход на пирамиду пластичен по правилу с подкреплением: след
+# пригодности копится всё время, а в вес переходит только под дофамином.
+
+model disinhibition
+
+cell pyr : excitatory, glutamate { tau_m = 15ms  threshold = -50mV }
+cell sst : inhibitory, gaba      { tau_m = 10ms  threshold = -52mV }
+cell vip : inhibitory, gaba      { tau_m =  8ms  threshold = -52mV }
+cell relay : excitatory, glutamate { tau_m = 8ms  threshold = -50mV }
+
+neuron IN  : relay
+neuron VIP : vip
+neuron SST : sst
+neuron PYR : pyr
+neuron VTA : relay
+
+modulator dopamine : dopamine from VTA { gain = 1.0  tau = 200ms }
+
+IN.axon -> PYR.soma {
+    receptor   = ampa
+    weight     = 2.2nS
+    delay      = 1.0ms
+    plasticity = stdp_rl {
+        a_plus          = 0.0002
+        a_minus         = 0.00022
+        tau_eligibility = 500ms
+        w_max           = 6nS
+        modulator       = dopamine
+    }
+}
+
+SST.axon -> PYR.soma {
+    receptor = gaba_a
+    weight   = 2.5nS
+    delay    = 1.2ms
+}
+
+VIP.axon -> SST.soma {
+    receptor = gaba_a
+    weight   = 3.0nS
+    delay    = 1.0ms
+}
+
+stim drive  -> IN.soma  : poisson rate=250Hz weight=1.5nS start=0ms   stop=600ms
+stim tonic  -> SST.soma : poisson rate=200Hz weight=1.5nS start=0ms   stop=600ms
+stim gate   -> VIP.soma : poisson rate=300Hz weight=1.8nS start=200ms stop=400ms
+stim reward -> VTA.soma : spikes weight=3nS times="420 425 430 435"
+
+record PYR.soma.v
+record PYR.soma.w
+record SST.soma.spikes
+
+run { dt = 0.1ms  duration = 600ms  level = L1  seed = 3 }

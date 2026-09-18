@@ -1,0 +1,35 @@
+# Короткотечная динамика синапса: пачка из восьми одинаковых спайков.
+# У депрессирующего контакта ответы гаснут, у фасилитирующего -- нарастают.
+# Один и тот же вход, вся разница -- в блоке dynamics.
+
+model depression
+
+cell relay  : excitatory, glutamate { tau_m = 8ms   threshold = -50mV  refractory = 6ms }
+cell target : excitatory, glutamate { tau_m = 20ms  threshold = -20mV }
+
+neuron IN   : relay
+neuron DEP  : target
+neuron FAC  : target
+
+IN.axon -> DEP.soma {
+    receptor   = ampa
+    weight     = 1.2nS
+    delay      = 1.0ms
+    depression = { u = 0.6, tau_rec = 400ms }
+}
+
+IN.axon -> FAC.soma {
+    receptor     = ampa
+    weight       = 1.2nS
+    delay        = 1.0ms
+    facilitation = { u = 0.12, tau_facil = 300ms, tau_rec = 60ms }
+}
+
+stim burst -> IN.soma : spikes weight=3nS times="50 70 90 110 130 150 170 190"
+
+record DEP.soma.v
+record FAC.soma.v
+record DEP.soma.g
+record FAC.soma.g
+
+run { dt = 0.1ms  duration = 300ms  level = L1  seed = 1 }

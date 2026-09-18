@@ -1,0 +1,58 @@
+# Feed-forward inhibition: вход возбуждает и пирамиду, и корзинчатую клетку,
+# тормозный нейрон приходит на сому с задержкой и обрезает окно интеграции.
+
+model ffi
+
+morphology pyr {
+    soma           len=20um  diam=20um
+    dend.apical[3] len=200um diam=2um  lambda=250um
+    axon           len=500um diam=1um
+}
+
+cell relay : excitatory, glutamate {
+    tau_m     = 10ms
+    threshold = -50mV
+}
+
+cell pyr_l5 : excitatory, glutamate {
+    morphology = pyr
+    tau_m      = 15ms
+    threshold  = -50mV
+    adaptation = 1.5mV
+}
+
+cell pv : inhibitory, gaba {
+    tau_m      = 6ms
+    threshold  = -52mV
+    refractory = 1ms
+}
+
+neuron IN : relay
+neuron E  : pyr_l5
+neuron I  : pv
+
+IN.axon -> E.dend.apical[1]@0.6 {
+    receptor   = ampa
+    weight     = 3nS
+    delay      = 1.0ms
+}
+
+IN.axon -> I.soma {
+    receptor   = ampa
+    weight     = 1.5nS
+    delay      = 1.0ms
+}
+
+I.axon -> E.soma {
+    receptor = gaba_a
+    weight   = 0.9nS
+    delay    = 1.4ms
+}
+
+stim drive -> IN.soma : poisson rate=250Hz weight=1.5nS start=20ms stop=380ms
+
+record IN.soma.v
+record E.soma.v
+record I.soma.v
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }
