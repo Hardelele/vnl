@@ -52,4 +52,10 @@ record PYR.soma.v
 record PYR.soma.w
 record SST.soma.spikes
 
+# Суть растормаживания: пока VIP давит SST, торможение, приходящее
+# на пирамиду, слабеет. Без этих двух записей мотив приходится объяснять
+# словами вместо того, чтобы показать.
+record SST.soma.g_inh
+record PYR.soma.g_inh
+
 run { dt = 0.1ms  duration = 600ms  level = L1  seed = 3 }

@@ -455,7 +455,7 @@ def _scrub_value(
     """Что показать в точке курсора: число или факт разряда."""
     if kind == "spikes":
         fired = any(value >= 0.5 for value in values[start:stop])
-        return "●" if fired else "·"
+        return "●" if fired else "○"
     index = min(len(values) - 1, start)
     return _fmt(values[index], _SCRUB_DIGITS.get(kind, 2))
 

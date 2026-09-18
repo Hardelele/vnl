@@ -311,3 +311,26 @@ def test_payload_marks_inhibitory_side_for_the_ui():
 
     assert inhibitory, "в feed-forward inhibition обязан быть тормозный контакт"
     assert all(c["receptor"].startswith("gaba") for c in inhibitory)
+
+
+def test_disinhibition_actually_releases_the_pyramid():
+    """Мотив обязан работать, а не только называться растормаживанием."""
+    model, _ = load(example("disinhibition"))
+    with_gate = simulate(model)
+
+    closed, _ = load(example("disinhibition"))
+    closed.stimuli = [s for s in closed.stimuli if s.id != "gate"]
+    without_gate = simulate(closed)
+
+    def during(result, name: str) -> int:
+        return sum(1 for time in result.spikes[name] if 200.0 <= time < 400.0)
+
+    # VIP давит SST, и тормоз с пирамиды снимается.
+    assert during(with_gate, "SST") < during(without_gate, "SST")
+    assert during(with_gate, "PYR") > during(without_gate, "PYR")
+
+    # То же самое в проводимостях: торможение на пирамиде в окне слабее.
+    inhibition = with_gate.traces["PYR.soma:g_inh"]
+    window = slice(int(200 / model.run.dt), int(400 / model.run.dt))
+    rest = inhibition[: int(200 / model.run.dt)]
+    assert sum(inhibition[window]) / len(inhibition[window]) < sum(rest) / len(rest)

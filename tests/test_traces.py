@@ -195,4 +195,5 @@ def test_scrubber_shows_real_values_at_that_time():
     index = zone * len(values) // traces.SCRUB_ZONES
     assert f"PYR {values[index]:.1f}".replace("-", "−") in text
     # спайки показываем событием, а не числом
-    assert text.endswith("●") or text.endswith("·")
+    # Событие показано отметкой, а не числом; позиция в строке не важна.
+    assert "SST ●" in text or "SST ○" in text
