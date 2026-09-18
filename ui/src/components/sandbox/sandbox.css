@@ -1,0 +1,261 @@
+/* Песочница: панель, три колонки, таймлайн под холстом. */
+
+.sb {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  min-height: 0;
+}
+
+.sb-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.sb-name {
+  font-size: var(--text-md, 16px);
+  font-weight: var(--weight-medium);
+}
+
+.sb-run {
+  font-size: var(--text-xs);
+  color: var(--faint);
+  margin-right: auto;
+}
+
+.sb-dirty {
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+.sb-dirty.is-on {
+  color: var(--status-warning);
+}
+
+.sb-body {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 280px;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 1100px) {
+  .sb-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sb-left,
+.sb-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sb-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: var(--space-2);
+}
+
+.sb-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+
+.sb-list {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.sb-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 7px var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+.sb-pick {
+  cursor: pointer;
+}
+
+.sb-pick:hover {
+  background: var(--subtle);
+}
+
+.sb-pick.is-on {
+  background: var(--selected);
+}
+
+.sb-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-level,
+.sb-kind {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.sb-plus {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sb-plus:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+
+.sb-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 7px var(--space-4);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.sb-field input,
+.sb-field select {
+  width: 110px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.sb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.sb-actions .btn-secondary {
+  height: 30px;
+  font-size: var(--text-sm);
+}
+
+.sb-alert,
+.sb-warn {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  font-size: var(--text-sm);
+}
+
+.sb-alert {
+  border: 1px solid var(--status-danger);
+  color: var(--status-danger);
+}
+
+.sb-warn {
+  background: var(--subtle);
+  color: var(--muted);
+}
+
+.sb-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Экран выбора проекта, пока ни один не открыт. */
+.sb-empty {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space-10) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.sb-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
+}
+
+.sb-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  padding: var(--space-3) var(--space-4);
+}
+
+.sb-projects {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.sb-project {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sb-project:hover {
+  border-color: var(--line-strong);
+}
+
+.sb-project-name {
+  font-weight: var(--weight-medium);
+}
+
+.sb-project-meta {
+  font-size: var(--text-xs);
+  color: var(--faint);
+}

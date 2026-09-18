@@ -289,6 +289,11 @@ class Sandbox:
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 
+    @staticmethod
+    def empty(name: str, taken: Iterable[str] = ()) -> "Sandbox":
+        """Новый проект. Идентификатор -- из имени, чтобы файл читался глазами."""
+        return Sandbox(id=_unique(_slug(name), taken), name=name)
+
     def instance(self, instance_id: str) -> PatternInstance:
         for item in self.instances:
             if item.id == instance_id:

@@ -182,9 +182,9 @@ def test_delete_removes_the_draft(base):
 
 
 def test_unknown_route_is_named(base):
-    status, payload = ask(base, "GET", "/api/sandboxes")
+    status, payload = ask(base, "GET", "/api/такого-нет")
     assert status == 404
-    assert "/api/sandboxes" in payload["error"]
+    assert "/api/такого-нет" in payload["error"]
 
 
 def test_a_request_from_another_host_is_refused(base):
@@ -335,3 +335,189 @@ def test_a_closed_simulation_is_gone(base):
     assert payload["closed"] == sim["id"]
     assert ask(base, "GET", f"/api/sim/{sim['id']}")[0] == 404
     assert ask(base, "GET", "/api/health")[1]["simulations"] == 0
+
+
+# --- песочница ------------------------------------------------------------
+
+
+def sandbox_with_two_blocks(base) -> str:
+    """Проект, в котором стоят два экземпляра одного паттерна."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Проба"})
+    ask(base, "POST", f"/api/sandboxes/{project['id']}/blocks", {"pattern": "ffi"})
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/blocks",
+        {"pattern": "ffi", "position": [200, 0]},
+    )
+    return project["id"]
+
+
+def test_a_new_sandbox_is_empty_and_saved(base):
+    status, project = ask(base, "POST", "/api/sandboxes", {"name": "Проба"})
+    assert status == 201
+    assert project["blocks"] == []
+    assert project["dirty"] is False, "только что созданный проект уже лежит в файле"
+    assert project["canUndo"] is False
+
+    _, listing = ask(base, "GET", "/api/sandboxes")
+    assert [item["id"] for item in listing["sandboxes"]] == [project["id"]]
+
+
+def test_a_block_carries_the_snapshot_it_was_inserted_with(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+
+    assert len(project["blocks"]) == 2
+    first, second = project["blocks"]
+    assert first["id"] != second["id"], "два экземпляра одного паттерна -- разные блоки"
+    assert first["patternId"] == "ffi"
+    assert {port["name"] for port in first["ports"]} == {"in", "out"}
+    # Блок на холсте -- один объект с портами, но схема внутри известна.
+    assert len(first["scheme"]["neurons"]) == 3
+    assert second["position"] == [200, 0]
+    assert project["dirty"] is True
+
+
+def test_connecting_two_blocks_makes_a_real_link(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+
+    status, linked = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {
+            "source": {"instance": first, "port": "out"},
+            "target": {"instance": second, "port": "in"},
+            "weight": 2.0,
+            "delay": 1.5,
+        },
+    )
+    assert status == 201
+    link = linked["links"][0]
+    assert link["source"]["instance"] == first
+    assert link["target"]["port"] == "in"
+    assert link["weight"] == 2.0
+    assert link["inhibitory"] is False
+
+    _, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/links/{link['id']}",
+        {"receptor": "gaba_a", "weight": 3.0},
+    )
+    assert changed["links"][0]["inhibitory"] is True
+    assert changed["links"][0]["weight"] == 3.0
+
+
+def test_a_link_into_a_missing_port_is_refused(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {
+            "source": {"instance": first, "port": "нет"},
+            "target": {"instance": second, "port": "in"},
+        },
+    )
+    _, after = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    assert after["problems"], "несуществующий порт должен мешать запуску"
+
+
+def test_a_sandbox_runs_with_the_same_time_control(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {
+            "source": {"instance": first, "port": "out"},
+            "target": {"instance": second, "port": "in"},
+        },
+    )
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": first, "port": "in"}, "rate": 250, "amplitude": 1.5},
+    )
+    _, recorded = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/recordings",
+        {"target": {"instance": second, "port": "out"}},
+    )
+    assert recorded["problems"] == [], "схема собрана целиком"
+
+    status, sim = ask(base, "POST", "/api/sim", {"sandbox": sandbox})
+    assert status == 201
+    assert "песочница" in sim["source"]
+    # Блоки развёрнуты в настоящие клетки: их имена с приставкой экземпляра.
+    assert len(sim["cells"]) == 6
+
+
+def test_a_broken_sandbox_names_the_reason_instead_of_running(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Пустая"})
+    status, payload = ask(base, "POST", "/api/sim", {"sandbox": project["id"]})
+    assert status == 400
+    assert "не готова" in payload["error"]
+
+
+def test_undo_takes_back_the_last_change(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert len(undone["blocks"]) == 1
+    assert undone["canUndo"] is True
+
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    _, empty = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    assert empty["blocks"] == []
+    assert empty["canUndo"] is False
+
+
+def test_removing_a_block_takes_its_links(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {
+            "source": {"instance": first, "port": "out"},
+            "target": {"instance": second, "port": "in"},
+        },
+    )
+
+    _, after = ask(base, "DELETE", f"/api/sandboxes/{sandbox}/objects/{second}")
+    assert [block["id"] for block in after["blocks"]] == [first]
+    assert after["links"] == [], "связь висела на удалённом блоке"
+
+
+def test_saving_puts_the_project_on_disk(base, tmp_path):
+    sandbox = sandbox_with_two_blocks(base)
+    _, saved = ask(base, "POST", f"/api/sandboxes/{sandbox}/save")
+    assert saved["dirty"] is False
+
+    # Проверяем файлом, а не ответом: сохранение -- это про диск.
+    assert len(Store(tmp_path).load_sandbox(sandbox).instances) == 2
+
+
+def test_moving_a_block_is_not_a_change_of_physics(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+
+    _, moved = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/move", {"id": first, "position": [40, 90]}
+    )
+    assert moved["blocks"][0]["position"] == [40, 90]
+    assert moved["problems"] == moved["problems"]

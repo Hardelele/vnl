@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from mimetypes import guess_type
@@ -37,8 +38,18 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__, api
 from .catalog import Query
+from .compose import compose
 from .live import Pool, SessionError
-from .patterns import LEVEL_NAMES, Pattern, PatternError
+from .patterns import (
+    LEVEL_NAMES,
+    Endpoint,
+    Pattern,
+    PatternError,
+    Sandbox,
+    SandboxRecording,
+    SandboxStimulus,
+)
+from .project import Project
 from .store import Store, StoreError
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
@@ -52,6 +63,10 @@ class Api:
         # Симуляции живут между запросами: время идёт, даже когда никто не
         # спрашивает. Поэтому сессии держит сервер, а не запрос.
         self.pool = Pool()
+        # Открытые проекты. В файле лежит песочница, а история правок и отмена
+        # живут в `Project` -- значит между запросами он должен жить тоже.
+        self._projects: dict[str, Project] = {}
+        self._projects_lock = threading.Lock()
 
     def health(self) -> dict[str, Any]:
         """Живые данные для строки состояния, а не подпись из макета (#483)."""
@@ -86,21 +101,47 @@ class Api:
     # --- симуляция --------------------------------------------------------
 
     def open_sim(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Открыть симуляцию демонстрационного запуска паттерна."""
+        """Открыть симуляцию: витрину паттерна или собранную песочницу.
+
+        Управление временем в карточке и на холсте одно и то же, поэтому и
+        сессия одна -- разной остаётся только модель, которую считаем.
+        """
+        if body.get("sandbox"):
+            return self._open_sandbox_sim(str(body["sandbox"]), body)
+
         pattern_id = str(body.get("pattern") or "")
         if not pattern_id:
-            raise PatternError("не сказано, что запускать: нужен pattern")
+            raise PatternError("не сказано, что запускать: нужен pattern или sandbox")
         pattern = self.store.load_pattern(pattern_id)
         model = pattern.demo_model()
         if not model.instances:
             raise PatternError(
                 f"в паттерне «{pattern.name}» нет ни одного нейрона: запускать нечего"
             )
-        options: dict[str, Any] = {}
-        if body.get("pace"):
-            options["pace"] = float(body["pace"])
-        session = self.pool.open(model, source=f"паттерн «{pattern.name}»", **options)
+        session = self.pool.open(
+            model, source=f"паттерн «{pattern.name}»", **self._pace(body)
+        )
         return session.update()
+
+    def _open_sandbox_sim(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        built = compose(project.sandbox)
+        if built.problems:
+            # Причины перечисляются все сразу: чинить схему по одной ошибке за
+            # запуск -- это столько запусков, сколько ошибок.
+            raise PatternError(
+                "схема не готова к запуску: " + "; ".join(built.problems)
+            )
+        session = self.pool.open(
+            built.model,
+            source=f"песочница «{project.sandbox.name}»",
+            **self._pace(body),
+        )
+        return session.update()
+
+    @staticmethod
+    def _pace(body: dict[str, Any]) -> dict[str, Any]:
+        return {"pace": float(body["pace"])} if body.get("pace") else {}
 
     @staticmethod
     def _since(params: dict[str, list[str]]) -> int:
@@ -141,6 +182,155 @@ class Api:
     def close_sim(self, sim_id: str) -> dict[str, Any]:
         self.pool.close(sim_id)
         return {"closed": sim_id}
+
+    # --- песочница --------------------------------------------------------
+
+    def _project(self, sandbox_id: str) -> Project:
+        """Открытый проект. История и отмена живут в нём, а не в файле."""
+        with self._projects_lock:
+            project = self._projects.get(sandbox_id)
+            if project is None:
+                project = Project(self.store.load_sandbox(sandbox_id), self.store)
+                self._projects[sandbox_id] = project
+            return project
+
+    @staticmethod
+    def _endpoint(data: Any, what: str) -> Endpoint:
+        if not isinstance(data, dict) or not data.get("instance"):
+            raise PatternError(
+                f"{what}: нужен конец связи вида "
+                '{"instance": "ffi", "port": "in"}'
+            )
+        return Endpoint(
+            instance=str(data["instance"]),
+            port=data.get("port") or None,
+            section=str(data.get("section") or "soma"),
+            fraction=float(data.get("fraction", 0.5)),
+        )
+
+    def sandboxes(self) -> dict[str, Any]:
+        return {
+            "schema": api.SCHEMA_VERSION,
+            "sandboxes": [
+                {
+                    "id": sandbox.id,
+                    "name": sandbox.name,
+                    "blocks": len(sandbox.instances),
+                    "links": len(sandbox.links),
+                    "updatedAt": sandbox.updated_at,
+                }
+                for sandbox in self.store.sandboxes()
+            ],
+        }
+
+    def create_sandbox(self, body: dict[str, Any]) -> dict[str, Any]:
+        name = str(body.get("name") or "").strip() or "Песочница"
+        taken = [item.id for item in self.store.sandboxes()]
+        sandbox = Sandbox.empty(name, taken)
+        self.store.save_sandbox(sandbox)
+        project = Project(sandbox, self.store)
+        with self._projects_lock:
+            self._projects[sandbox.id] = project
+        return api.sandbox_payload(project)
+
+    def sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        return api.sandbox_payload(self._project(sandbox_id))
+
+    def add_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Вставить паттерн блоком. В проект кладётся снимок, а не ссылка."""
+        pattern_id = str(body.get("pattern") or "")
+        if not pattern_id:
+            raise PatternError("не сказано, что вставлять: нужен pattern")
+        project = self._project(sandbox_id)
+        position = body.get("position") or [0.0, 0.0]
+        project.insert_pattern(
+            self.store.load_pattern(pattern_id),
+            label=body.get("label"),
+            position=(float(position[0]), float(position[1])),
+        )
+        return api.sandbox_payload(project)
+
+    def connect(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Связь между блоками -- настоящий контакт между внутренними точками."""
+        project = self._project(sandbox_id)
+        params = {
+            key: float(body[key])
+            for key in ("weight", "delay")
+            if body.get(key) is not None
+        }
+        if body.get("receptor"):
+            params["receptor"] = str(body["receptor"])
+        project.connect(
+            self._endpoint(body.get("source"), "источник"),
+            self._endpoint(body.get("target"), "цель"),
+            link_id=body.get("id"),
+            **params,
+        )
+        return api.sandbox_payload(project)
+
+    def link_params(
+        self, sandbox_id: str, link_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        params: dict[str, Any] = {}
+        for key in ("weight", "delay"):
+            if body.get(key) is not None:
+                params[key] = float(body[key])
+        if body.get("receptor"):
+            params["receptor"] = str(body["receptor"])
+        if not params:
+            raise PatternError("нечего менять: ожидались weight, delay или receptor")
+        project.set_parameters(link_id, **params)
+        return api.sandbox_payload(project)
+
+    def move_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        position = body.get("position") or [0.0, 0.0]
+        project.move(str(body.get("id") or ""), (float(position[0]), float(position[1])))
+        return api.sandbox_payload(project)
+
+    def add_stimulus(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Драйв проекта. Без него собранная сеть молчит и смотреть не на что."""
+        project = self._project(sandbox_id)
+        sandbox = project.sandbox
+        target = self._endpoint(body.get("target"), "цель стимула")
+        stimulus = SandboxStimulus(
+            id=str(body.get("id") or f"drive{len(sandbox.stimuli) + 1}"),
+            target=target,
+            kind=str(body.get("kind") or "poisson"),
+            rate=float(body.get("rate", 250.0)),
+            amplitude=float(body.get("amplitude", 1.5)),
+            start=float(body.get("start", 0.0)),
+            stop=float(body.get("stop", sandbox.run.duration)),
+        )
+        project.stimulate(stimulus)
+        return api.sandbox_payload(project)
+
+    def add_recording(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        sandbox = project.sandbox
+        recording = SandboxRecording(
+            id=str(body.get("id") or f"r{len(sandbox.recordings) + 1}"),
+            target=self._endpoint(body.get("target"), "цель записи"),
+            var=str(body.get("var") or "v"),
+        )
+        project.record(recording)
+        return api.sandbox_payload(project)
+
+    def remove_object(self, sandbox_id: str, object_id: str) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        project.remove(object_id)
+        return api.sandbox_payload(project)
+
+    def undo(self, sandbox_id: str) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        project.undo()
+        return api.sandbox_payload(project)
+
+    def save_sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        project.save()
+        return api.sandbox_payload(project)
 
     def delete_pattern(self, pattern_id: str) -> dict[str, Any]:
         # Читаем перед удалением, чтобы «такого нет» отличалось от «удалено».
@@ -195,6 +385,64 @@ def routes(service: Api) -> list[Route]:
         Route("POST", re.compile(r"^/api/sim/([^/]+)/reset$"), service.sim_reset),
         Route("POST", re.compile(r"^/api/sim/([^/]+)/seek$"), service.sim_seek, wants="body"),
         Route("DELETE", re.compile(r"^/api/sim/([^/]+)$"), service.close_sim),
+        Route("GET", re.compile(r"^/api/sandboxes$"), service.sandboxes),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes$"),
+            service.create_sandbox,
+            wants="body",
+            ok=201,
+        ),
+        Route("GET", re.compile(r"^/api/sandboxes/([^/]+)$"), service.sandbox),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/blocks$"),
+            service.add_block,
+            wants="body",
+            ok=201,
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/links$"),
+            service.connect,
+            wants="body",
+            ok=201,
+        ),
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/links/([^/]+)$"),
+            service.link_params,
+            wants="body",
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/move$"),
+            service.move_block,
+            wants="body",
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/stimuli$"),
+            service.add_stimulus,
+            wants="body",
+            ok=201,
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/recordings$"),
+            service.add_recording,
+            wants="body",
+            ok=201,
+        ),
+        Route(
+            "DELETE",
+            re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)$"),
+            service.remove_object,
+        ),
+        Route("POST", re.compile(r"^/api/sandboxes/([^/]+)/undo$"), service.undo),
+        Route(
+            "POST", re.compile(r"^/api/sandboxes/([^/]+)/save$"), service.save_sandbox
+        ),
     ]
 
 
@@ -218,6 +466,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self._handle("DELETE")
+
+    def do_PATCH(self) -> None:
+        self._handle("PATCH")
 
     # --- разбор -----------------------------------------------------------
 

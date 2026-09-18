@@ -52,7 +52,7 @@ describe('открытие симуляции', () => {
       every: timer.every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
 
     expect(control.store.getState().id).toBe('sim1')
     expect(control.store.getState().state).toBe('paused')
@@ -65,7 +65,7 @@ describe('открытие симуляции', () => {
       every: manualTimer().every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
 
     expect(control.store.getState().offline).toBe(true)
     expect(control.store.getState().error).toContain('vnl serve')
@@ -85,7 +85,7 @@ describe('ход времени', () => {
       every: timer.every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
     await control.start()
     expect(timer.armed).toBe(true)
 
@@ -106,7 +106,7 @@ describe('ход времени', () => {
       every: timer.every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
     await control.start()
     await control.pause()
 
@@ -122,7 +122,7 @@ describe('ход времени', () => {
       every: timer.every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
     await control.start()
     timer.tick()
     await Promise.resolve()
@@ -151,7 +151,7 @@ describe('буфер', () => {
       every: manualTimer().every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
     await control.start()
 
     expect(control.store.getState().traces['E.soma:v']).toEqual([-65, -64, -63, -62])
@@ -169,7 +169,7 @@ describe('буфер', () => {
       every: manualTimer().every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
     await control.seek(0.2)
 
     // Дорисовать новое будущее к старому значило бы показать график, которого
@@ -189,7 +189,7 @@ describe('закрытие', () => {
       every: timer.every,
     })
 
-    await control.open('ffi')
+    await control.open({ pattern: 'ffi' })
     await control.start()
     await control.close()
 

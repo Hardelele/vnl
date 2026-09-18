@@ -24,6 +24,7 @@ import {
   startSim,
   type CellState,
   type SimState,
+  type SimTarget,
   type SimUpdate,
 } from '../model/sim'
 import { createStore, type Store } from './store'
@@ -65,7 +66,7 @@ const EMPTY: SimView = {
 }
 
 export interface SimPorts {
-  open: (pattern: string) => Promise<SimUpdate>
+  open: (target: SimTarget) => Promise<SimUpdate>
   read: (id: string, since: number) => Promise<SimUpdate>
   start: (id: string, since: number) => Promise<SimUpdate>
   pause: (id: string, since: number) => Promise<SimUpdate>
@@ -92,7 +93,7 @@ const DEFAULT_PORTS: SimPorts = {
 
 export interface SimController {
   store: Store<SimView>
-  open: (pattern: string) => Promise<void>
+  open: (target: SimTarget) => Promise<void>
   start: () => Promise<void>
   pause: () => Promise<void>
   reset: () => Promise<void>
@@ -173,11 +174,11 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
   return {
     store,
 
-    async open(pattern) {
+    async open(target) {
       unwatch()
       store.setState({ ...EMPTY, busy: true })
       try {
-        absorb(await io.open(pattern))
+        absorb(await io.open(target))
         store.setState({ busy: false })
       } catch (reason) {
         fail(reason)

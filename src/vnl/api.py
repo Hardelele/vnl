@@ -400,6 +400,100 @@ def catalog_payload(library: Sequence[Any], query: Query | None = None) -> dict[
     }
 
 
+# --- песочница ------------------------------------------------------------
+
+
+def _endpoint(endpoint: Any) -> dict[str, Any]:
+    return {
+        "instance": endpoint.instance,
+        "port": endpoint.port,
+        "section": endpoint.section,
+        "fraction": endpoint.fraction,
+    }
+
+
+def sandbox_payload(project: Any) -> dict[str, Any]:
+    """Всё состояние песочницы одним куском.
+
+    Три представления макета -- холст, дерево объектов и свойства -- это один
+    и тот же ответ, разложенный по-разному. Отдавать им разные срезы значило бы
+    завести три правды о проекте: изменение видно сразу везде только тогда,
+    когда источник один.
+    """
+    sandbox = project.sandbox
+    return {
+        "schema": SCHEMA_VERSION,
+        "id": sandbox.id,
+        "name": sandbox.name,
+        "blocks": [
+            {
+                "id": block.id,
+                "patternId": block.pattern_id,
+                "label": block.label,
+                "position": list(block.position),
+                "ports": [
+                    {
+                        "name": port.name,
+                        "direction": port.direction,
+                        "site": _site(port.site),
+                        "note": port.note,
+                    }
+                    for port in block.snapshot.ports
+                ],
+                "counts": {
+                    "neurons": len(block.snapshot.body.instances),
+                    "contacts": len(block.snapshot.body.contacts),
+                },
+                "scheme": scheme_payload(block.snapshot.body),
+            }
+            for block in sandbox.instances
+        ],
+        "neurons": [
+            {"id": neuron.id, "cellType": neuron.cell_type}
+            for neuron in sandbox.neurons.values()
+        ],
+        "links": [
+            {
+                "id": link.id,
+                "source": _endpoint(link.source),
+                "target": _endpoint(link.target),
+                "receptor": link.receptor,
+                "inhibitory": ir.is_inhibitory_receptor(link.receptor),
+                "weight": link.weight,
+                "delay": link.delay,
+            }
+            for link in sandbox.links
+        ],
+        "stimuli": [
+            {
+                "id": stim.id,
+                "target": _endpoint(stim.target),
+                "kind": stim.kind,
+                "rate": stim.rate,
+                "amplitude": stim.amplitude,
+                "start": stim.start,
+                "stop": min(stim.stop, sandbox.run.duration),
+            }
+            for stim in sandbox.stimuli
+        ],
+        "recordings": [
+            {"id": rec.id, "target": _endpoint(rec.target), "var": rec.var}
+            for rec in sandbox.recordings
+        ],
+        "run": {
+            "dt": sandbox.run.dt,
+            "duration": sandbox.run.duration,
+            "level": sandbox.run.level,
+            "seed": sandbox.run.seed,
+        },
+        # Факты о проекте, а не подписи из макета (#483).
+        "dirty": project.dirty,
+        "canUndo": project.can_undo,
+        "problems": project.check(),
+        "updatedAt": sandbox.updated_at,
+    }
+
+
 def dumps(payload: dict[str, Any], pretty: bool = False) -> str:
     """JSON без экранирования кириллицы: файл читают и глазами."""
     return json.dumps(

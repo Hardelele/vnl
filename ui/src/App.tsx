@@ -14,13 +14,14 @@ import { useMemo, useState } from 'react'
 
 import { LibraryScreen } from './components/catalog/LibraryScreen'
 import { PatternScreen } from './components/pattern/PatternScreen'
+import { SandboxScreen } from './components/sandbox/SandboxScreen'
 import { AppBar, type Screen, type Tab } from './components/shell/AppBar'
 import { PATTERNS, counted } from './lib/plural'
 import { useCatalog } from './state/catalog'
 
 const TABS: Tab[] = [
   { id: 'library', label: 'Библиотека' },
-  { id: 'sandbox', label: 'Песочница', pending: 'Появится вместе с холстом (#479)' },
+  { id: 'sandbox', label: 'Песочница' },
 ]
 
 export function App() {
@@ -55,7 +56,9 @@ export function App() {
         status={status}
       />
       <main className="shell-screen">
-        {pattern ? (
+        {screen === 'sandbox' ? (
+          <SandboxScreen />
+        ) : pattern ? (
           <PatternScreen id={pattern} onBack={() => setPattern(null)} />
         ) : (
           <LibraryScreen onOpen={setPattern} />

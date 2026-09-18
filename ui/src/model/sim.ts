@@ -64,9 +64,11 @@ function post<T>(path: string, body?: unknown): Promise<T> {
   })
 }
 
-/** Открыть симуляцию демонстрационного запуска паттерна. */
-export function openSim(pattern: string): Promise<SimUpdate> {
-  return post<SimUpdate>('/sim', { pattern })
+/** Что считаем: витрину паттерна или собранную песочницу. */
+export type SimTarget = { pattern: string } | { sandbox: string }
+
+export function openSim(target: SimTarget): Promise<SimUpdate> {
+  return post<SimUpdate>('/sim', target)
 }
 
 export function readSim(id: string, since: number): Promise<SimUpdate> {

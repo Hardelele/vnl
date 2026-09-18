@@ -1,0 +1,104 @@
+/* Холст песочницы. */
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--panel);
+  border-radius: 12px;
+  touch-action: none;
+}
+
+.cv-block rect {
+  fill: var(--panel);
+  stroke: var(--line-strong);
+  stroke-width: 1.4;
+  cursor: grab;
+}
+
+.cv-block.is-on rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+/* Активность блока: внутри кто-то разрядился прямо сейчас. */
+.cv-block.is-spiking rect {
+  fill: var(--selected);
+}
+
+.cv-label {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: var(--weight-medium);
+  fill: var(--ink);
+  pointer-events: none;
+}
+
+.cv-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--faint);
+  pointer-events: none;
+}
+
+.cv-port circle {
+  fill: var(--panel);
+  stroke: var(--exc);
+  stroke-width: 1.6;
+  cursor: crosshair;
+}
+
+.cv-port.is-mod circle {
+  stroke: var(--mod);
+}
+
+/* Порт, от которого тянется связь: ждёт второго щелчка. */
+.cv-port.is-waiting circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.cv-port-name {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+.cv-link .cv-wire {
+  stroke: var(--line-strong);
+  stroke-width: 1.6;
+}
+
+/* Невидимая широкая линия: попасть в связь мышью иначе почти нельзя. */
+.cv-link .cv-hit {
+  stroke: transparent;
+  stroke-width: 12;
+  cursor: pointer;
+}
+
+.cv-link .cv-cap {
+  fill: var(--exc);
+  stroke: none;
+}
+
+.cv-link.is-inh .cv-wire {
+  stroke: var(--inh);
+}
+
+.cv-link.is-inh .cv-cap {
+  fill: none;
+  stroke: var(--inh);
+  stroke-width: 2.4;
+}
+
+.cv-link.is-on .cv-wire {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+
+.cv-empty {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  fill: var(--faint);
+}

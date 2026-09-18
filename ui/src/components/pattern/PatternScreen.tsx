@@ -46,7 +46,7 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
       .then((loaded) => alive && setPattern(loaded))
       .catch((reason: Error) => alive && setError(reason.message))
     // Симуляция открывается сразу: карточка без неё -- просто картинка.
-    void control.open(id)
+    void control.open({ pattern: id })
     return () => {
       alive = false
       void control.close()
