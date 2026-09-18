@@ -263,7 +263,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # не должен тянуть за собой сокеты.
     from .server import create_server
 
-    server = create_server(args.root, port=args.port, ui=args.ui, quiet=args.quiet)
+    server = create_server(
+        args.root, port=args.port, ui=args.ui, quiet=args.quiet, bind=args.bind
+    )
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}"
     print(f"хранилище: {Path(args.root).resolve()}")
@@ -360,6 +362,11 @@ def main(argv: list[str] | None = None) -> int:
         "--root", default=".vnl", help="каталог хранилища (по умолчанию .vnl)"
     )
     serve.add_argument("--port", type=int, default=8765, help="порт (0 -- любой свободный)")
+    serve.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="адрес, который слушать; менять нужно только в контейнере",
+    )
     serve.add_argument("--ui", help="каталог собранного интерфейса, например ui/dist")
     serve.add_argument("--open", action="store_true", help="открыть в браузере")
     serve.add_argument(

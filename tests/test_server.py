@@ -521,3 +521,21 @@ def test_moving_a_block_is_not_a_change_of_physics(base):
     )
     assert moved["blocks"][0]["position"] == [40, 90]
     assert moved["problems"] == moved["problems"]
+
+
+def test_the_server_listens_only_to_this_machine_by_default(tmp_path):
+    """Адрес по умолчанию -- loopback: наружу сервер сам не выходит."""
+    server = create_server(tmp_path, port=0, quiet=True)
+    try:
+        assert server.server_address[0] == "127.0.0.1"
+    finally:
+        server.server_close()
+
+
+def test_the_address_can_be_widened_for_a_container(tmp_path):
+    """В контейнере `127.0.0.1` -- его собственный loopback, и порт не доходит."""
+    server = create_server(tmp_path, port=0, quiet=True, bind="0.0.0.0")
+    try:
+        assert server.server_address[0] == "0.0.0.0"
+    finally:
+        server.server_close()
