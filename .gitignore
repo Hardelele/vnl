@@ -5,3 +5,5 @@ __pycache__/
 *.netpyne.py
 *.csv
 *.dot
+.preview/
+*.html

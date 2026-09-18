@@ -1,9 +1,10 @@
-"""Командная строка: vnl check | run | export | graph."""
+"""Командная строка: vnl check | run | view | export | graph."""
 
 from __future__ import annotations
 
 import argparse
 import sys
+import webbrowser
 from pathlib import Path
 
 from . import __version__
@@ -96,6 +97,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_view(args: argparse.Namespace) -> int:
+    try:
+        model, diagnostics = _read(args.file)
+    except ValidationError as exc:
+        _print_diagnostics(exc.diagnostics)
+        return 1
+    _print_diagnostics(diagnostics)
+
+    if model.run.level == "L2":
+        print("для просмотра нужен прогон L1: поставьте level = L1", file=sys.stderr)
+        return 2
+
+    from .report import render
+
+    result = simulate(model)
+    out = Path(args.out or Path(args.file).with_suffix(".html"))
+    out.write_text(render(model, result), encoding="utf-8")
+    print(f"страница: {out}")
+    if args.open:
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     try:
         model, diagnostics = _read(args.file)
@@ -161,6 +185,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("file")
     run.add_argument("--traces", help="куда выгрузить трассы в CSV")
     run.set_defaults(func=cmd_run)
+
+    view = sub.add_parser("view", help="посчитать и собрать HTML со схемой и трассами")
+    view.add_argument("file")
+    view.add_argument("-o", "--out")
+    view.add_argument("--open", action="store_true", help="открыть в браузере")
+    view.set_defaults(func=cmd_view)
 
     export = sub.add_parser("export", help="сгенерировать скрипт NetPyNE")
     export.add_argument("file")
