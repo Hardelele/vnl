@@ -26,7 +26,11 @@ const STATUS_TABS: Array<{ id: PatternStatus | null; label: string }> = [
   { id: 'draft', label: 'Черновик' },
 ]
 
-export function LibraryScreen() {
+export interface LibraryScreenProps {
+  onOpen: (id: string) => void
+}
+
+export function LibraryScreen({ onOpen }: LibraryScreenProps) {
   const state = useCatalog((current) => current)
   const control = catalogController
 
@@ -82,7 +86,7 @@ export function LibraryScreen() {
         </p>
       ) : null}
 
-      {catalog ? <Groups catalog={catalog} /> : null}
+      {catalog ? <Groups catalog={catalog} onOpen={onOpen} /> : null}
     </div>
   )
 }
@@ -95,7 +99,13 @@ function summary(catalog: Catalog | null, loading: boolean): string {
   return `${catalog.matched} из ${catalog.total} ${PATTERNS.many}`
 }
 
-function Groups({ catalog }: { catalog: Catalog }) {
+function Groups({
+  catalog,
+  onOpen,
+}: {
+  catalog: Catalog
+  onOpen: (id: string) => void
+}) {
   const groups = catalog.levels
     .map((level) => ({
       level,
@@ -124,7 +134,11 @@ function Groups({ catalog }: { catalog: Catalog }) {
           </h2>
           <div className="lib-grid">
             {items.map((pattern: Pattern) => (
-              <PatternCard key={pattern.id} pattern={pattern} />
+              <PatternCard
+                key={pattern.id}
+                pattern={pattern}
+                onOpen={(chosen) => onOpen(chosen.id)}
+              />
             ))}
           </div>
         </section>

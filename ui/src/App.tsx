@@ -2,18 +2,18 @@
  * Оболочка: панель сверху и один экран под ней.
  *
  * Отдельного экрана прогона нет намеренно. Симуляция -- не расчёт с отчётом в
- * конце, а среда с управляемым временем: схема, её текущее состояние и
- * таймлайн живут вместе, в карточке паттерна и в песочнице. Поэтому и
- * инспектор нейрона встанет внутрь них, а не рядом отдельной вкладкой.
+ * конце, а среда с управляемым временем: схема, её состояние и таймлайн живут
+ * вместе, на карточке паттерна и в песочнице.
  *
- * Роутера нет по той же причине, по какой нет и отчёта: экранов два, адресная
- * строка локального инструмента никому не нужна, а библиотека роутинга привела
- * бы за собой собственное состояние рядом с уже имеющимся.
+ * Роутера нет: экранов три, адресная строка локального инструмента никому не
+ * нужна, а библиотека роутинга привела бы за собой собственное состояние рядом
+ * с уже имеющимся.
  */
 
 import { useMemo, useState } from 'react'
 
 import { LibraryScreen } from './components/catalog/LibraryScreen'
+import { PatternScreen } from './components/pattern/PatternScreen'
 import { AppBar, type Screen, type Tab } from './components/shell/AppBar'
 import { PATTERNS, counted } from './lib/plural'
 import { useCatalog } from './state/catalog'
@@ -25,6 +25,8 @@ const TABS: Tab[] = [
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('library')
+  /** Открытый паттерн. Он же решает, что показывать поверх библиотеки. */
+  const [pattern, setPattern] = useState<string | null>(null)
 
   // Из стора берутся только простые величины. Селектор, собирающий объект,
   // возвращал бы каждый раз новый -- а `useSyncExternalStore` считает это
@@ -43,9 +45,21 @@ export function App() {
 
   return (
     <div className="shell">
-      <AppBar tabs={TABS} current={screen} onPick={setScreen} status={status} />
+      <AppBar
+        tabs={TABS}
+        current={screen}
+        onPick={(chosen) => {
+          setPattern(null)
+          setScreen(chosen)
+        }}
+        status={status}
+      />
       <main className="shell-screen">
-        <LibraryScreen />
+        {pattern ? (
+          <PatternScreen id={pattern} onBack={() => setPattern(null)} />
+        ) : (
+          <LibraryScreen onOpen={setPattern} />
+        )}
       </main>
     </div>
   )

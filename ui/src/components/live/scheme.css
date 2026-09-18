@@ -1,0 +1,75 @@
+/* Схема паттерна на карточке. Обозначения те же, что у миниатюры каталога. */
+
+.scheme {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.scheme-cell rect {
+  fill: var(--panel);
+  stroke: var(--exc);
+  stroke-width: 1.6;
+}
+
+.scheme-cell.is-inh rect {
+  stroke: var(--inh);
+}
+
+.scheme-cell text {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  fill: var(--ink);
+}
+
+/* Заливка по приближению к порогу. Прозрачность ставится в разметке. */
+.scheme-charge {
+  fill: var(--exc);
+  stroke: none;
+  pointer-events: none;
+}
+
+.scheme-cell.is-inh .scheme-charge {
+  fill: var(--inh);
+}
+
+/* Разряд виден сразу, без анимации: кадр приходит раз в 150 мс, и плавный
+   переход к этому моменту уже опоздал бы. */
+.scheme-cell.is-spiking rect:first-child {
+  stroke-width: 3;
+}
+
+.scheme-cell.is-spiking .scheme-charge {
+  opacity: 1 !important;
+}
+
+.scheme-link line {
+  stroke: var(--line-strong);
+  stroke-width: 1.6;
+}
+
+.scheme-link .scheme-cap {
+  fill: var(--exc);
+  stroke: none;
+}
+
+.scheme-link.is-inh line {
+  stroke: var(--inh);
+}
+
+.scheme-link.is-inh .scheme-cap {
+  fill: none;
+  stroke: var(--inh);
+  stroke-width: 2.4;
+}
+
+.scheme-link.is-mod line {
+  stroke: var(--mod);
+  stroke-dasharray: 5 4;
+}
+
+.scheme-link.is-mod .scheme-cap {
+  fill: var(--mod);
+}
