@@ -41,6 +41,8 @@ export function SandboxScreen() {
   const busy = useSim((state) => state.busy)
   const cells = useSim((state) => state.cells)
   const spikes = useSim((state) => state.spikes)
+  const traces = useSim((state) => state.traces)
+  const dt = useSim((state) => state.dt)
   const simError = useSim((state) => state.error)
 
   useEffect(() => {
@@ -242,8 +244,10 @@ export function SandboxScreen() {
           <Timeline
             duration={duration || project.run.duration}
             time={time}
+            dt={dt}
             order={Object.keys(cells)}
             spikes={spikes}
+            traces={traces}
             inhibitory={inhibitory}
             onSeek={(moment) => void sim.seek(moment)}
             disabled={!duration}

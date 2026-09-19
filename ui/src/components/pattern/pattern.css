@@ -195,3 +195,23 @@
   color: var(--muted);
   font-size: var(--text-sm);
 }
+
+/* Строка, по которой выбирают клетку. */
+.row-pick {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.row-pick:hover {
+  background: var(--subtle);
+}
+
+.row-pick.is-on {
+  background: var(--selected);
+}

@@ -17,6 +17,7 @@ import { LINKS, NEURONS, PORTS, counted } from '../../lib/plural'
 import { loadPattern } from '../../model/catalog'
 import type { Contact, Neuron, PatternDetail } from '../../model/types'
 import { simController, useSim } from '../../state/sim'
+import { Inspector } from '../live/Inspector'
 import { LiveScheme, type Threshold } from '../live/LiveScheme'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
@@ -31,6 +32,8 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const [pattern, setPattern] = useState<PatternDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [engine, setEngine] = useState<'elk' | 'builtin'>('builtin')
+  /** Клетка, открытая в инспекторе. Общая для схемы, таймлайна и списка. */
+  const [neuron, setNeuron] = useState<string | null>(null)
   const remember = useCallback((chosen: 'elk' | 'builtin') => setEngine(chosen), [])
 
   const control = simController
@@ -40,6 +43,8 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const busy = useSim((view) => view.busy)
   const cells = useSim((view) => view.cells)
   const spikes = useSim((view) => view.spikes)
+  const traces = useSim((view) => view.traces)
+  const dt = useSim((view) => view.dt)
   const simError = useSim((view) => view.error)
 
   useEffect(() => {
@@ -143,27 +148,54 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
               cells={cells}
               thresholds={thresholdsOf(pattern)}
               onEngine={remember}
+              selected={neuron}
+              onPick={setNeuron}
             />
           </div>
           <Timeline
             duration={duration || (pattern.demo?.run.duration ?? 1)}
             time={time}
-            order={pattern.body.neurons.map((neuron) => neuron.id)}
+            dt={dt}
+            order={pattern.body.neurons.map((item) => item.id)}
             spikes={spikes}
+            traces={traces}
             inhibitory={Object.fromEntries(
-              pattern.body.neurons.map((neuron) => [neuron.id, neuron.inhibitory]),
+              pattern.body.neurons.map((item) => [item.id, item.inhibitory]),
             )}
             onSeek={(moment) => void control.seek(moment)}
+            selected={neuron}
+            onSelect={setNeuron}
           />
         </section>
 
         <section className="pat-side">
+          {neuron ? (
+            <div className="panel">
+              <Inspector
+                neuron={neuron}
+                model={pattern.body}
+                cells={cells}
+                spikes={spikes}
+                elapsed={time}
+              />
+            </div>
+          ) : null}
+
           <div className="panel">
             <div className="panel-head">
               <span className="panel-title">Нейроны</span>
+              <span className="mono panel-note">
+                {neuron ? 'выбран ' + neuron : 'выберите клетку'}
+              </span>
             </div>
-            {pattern.body.neurons.map((neuron) => (
-              <CellRow key={neuron.id} neuron={neuron} pattern={pattern} />
+            {pattern.body.neurons.map((item) => (
+              <CellRow
+                key={item.id}
+                neuron={item}
+                pattern={pattern}
+                on={item.id === neuron}
+                onPick={() => setNeuron(item.id)}
+              />
             ))}
           </div>
 
@@ -218,18 +250,28 @@ function Crumbs({
   )
 }
 
-function CellRow({ neuron, pattern }: { neuron: Neuron; pattern: PatternDetail }) {
+function CellRow({
+  neuron,
+  pattern,
+  on,
+  onPick,
+}: {
+  neuron: Neuron
+  pattern: PatternDetail
+  on: boolean
+  onPick: () => void
+}) {
   const type = pattern.body.cellTypes[neuron.cellType]
   const point = type?.pointModel
   return (
-    <div className="row">
+    <button type="button" className={`row row-pick${on ? ' is-on' : ''}`} onClick={onPick}>
       <span className={`row-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
       <span className="row-id">{neuron.id}</span>
       <span className="mono row-dim">{neuron.cellType}</span>
       <span className="mono row-dim row-end">
         {point ? `τ ${point.tauM} мс · порог ${point.vThreshold} мВ` : ''}
       </span>
-    </div>
+    </button>
   )
 }
 

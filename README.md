@@ -100,26 +100,29 @@ built-in layered one and the page says so. Pick the engine with
 ## The interface
 
 When you need to work out causality, a page is not enough. The interface lives
-in `ui/` and reads the same run as JSON:
+in `ui/` and talks to a local server:
 
 ```bash
-vnl data examples/ffi.vnl -o ui/public/run.json
-cd ui && npm install && npm run dev
+vnl serve --ui ui/dist                # both at once
+cd ui && npm install && npm run dev   # in development Vite proxies /api here
 ```
 
 ![Neuron inspector](docs/img/inspector.png)
 
-The first screen is the neuron inspector: inputs with their contact site and
-parameters, membrane potential against the threshold, excitatory and inhibitory
-conductance apart, and the balance between them. One time cursor serves every
-plot, and the values under it stay in the header.
+A simulation here is an environment with controllable time, not a computation
+with a report at the end. «Run» starts time and resumes from the current moment,
+«Pause» stops it, «Reset» starts over. The schematic lives with it: a cell fills
+in as it approaches the threshold and flashes on a discharge.
 
-![Response after an input spike](docs/img/spike-triggered-average.png)
+The timeline is the history of that same simulation. One lane per cell, spikes
+and the trace together in it: a discharge and what led to it belong in one
+picture. Hovering shows the values under the pointer; a click puts time at the
+chosen moment — the engine rewinds there through a state snapshot and pauses, so
+what follows is computed from the real state of that millisecond.
 
-Averaging around the source's spikes answers the question «what does this input
-do to the cell». The caption under the plot warns you: this is correlation, not
-what the input does on its own. When two sources fire in sync, each one's window
-shows the neighbour too.
+The selected cell opens in the inspector: what excites and inhibits it, with
+which weight, delay and receptor; its threshold, resting potential, membrane
+time constant and adaptation; how many spikes it fired and at what rate.
 
 Built on Vite and React, without Next: a local tool needs neither SSR nor server
 routing, and it reads a finished run from a file. The exchange format is
@@ -258,7 +261,7 @@ script plus a list of losses», not a model quietly trimmed down.
 - export to NetPyNE with a list of losses, and a DOT graph;
 - the run page, laid out by ELK;
 - parameter sweep: several runs on one screen;
-- a React interface with the neuron inspector;
+- a React interface: library, pattern card and sandbox with controllable time;
 - patterns, sandboxes and the store: a searchable library and a local server
   for the interface;
 - 162 tests for the core and 51 for the interface. The core has no dependencies:

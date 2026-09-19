@@ -74,3 +74,13 @@
 .scheme-link.is-mod .scheme-cap {
   fill: var(--mod);
 }
+
+/* Выбранная клетка -- та же, что открыта в инспекторе. */
+.scheme-cell.is-on rect:first-child {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+
+.scheme-cell.is-pickable rect {
+  cursor: pointer;
+}

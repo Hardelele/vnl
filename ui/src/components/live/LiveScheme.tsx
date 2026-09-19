@@ -30,9 +30,19 @@ export interface LiveSchemeProps {
   thresholds: Record<string, Threshold>
   /** Чем посчитана раскладка -- подпись в шапке панели. */
   onEngine?: (engine: Placement['engine']) => void
+  /** Выбранная клетка: та же, что открыта в инспекторе и подсвечена в таймлайне. */
+  selected?: string | null
+  onPick?: (neuron: string) => void
 }
 
-export function LiveScheme({ scheme, cells, thresholds, onEngine }: LiveSchemeProps) {
+export function LiveScheme({
+  scheme,
+  cells,
+  thresholds,
+  onEngine,
+  selected = null,
+  onPick,
+}: LiveSchemeProps) {
   const fallback = useMemo(() => builtinPlacement(scheme), [scheme])
   const [placement, setPlacement] = useState<Placement>(fallback)
 
@@ -70,6 +80,8 @@ export function LiveScheme({ scheme, cells, thresholds, onEngine }: LiveSchemePr
           node={node}
           state={cells[node.id]}
           scale={thresholds[node.id]}
+          chosen={selected === node.id}
+          onPick={onPick}
         />
       ))}
     </svg>
@@ -88,10 +100,14 @@ function Cell({
   node,
   state,
   scale,
+  chosen,
+  onPick,
 }: {
   node: Placement['nodes'][number]
   state: CellState | undefined
   scale: Threshold | undefined
+  chosen: boolean
+  onPick?: (neuron: string) => void
 }) {
   const level = charge(state, scale)
   const radius = node.inhibitory ? 6 : node.height / 2
@@ -99,7 +115,10 @@ function Cell({
   const x = node.x - node.width / 2
   const y = node.y - node.height / 2
   return (
-    <g className={`scheme-cell ${kind}${state?.spiked ? ' is-spiking' : ''}`}>
+    <g
+      className={`scheme-cell ${kind}${state?.spiked ? ' is-spiking' : ''}${chosen ? ' is-on' : ''}${onPick ? ' is-pickable' : ''}`}
+      onClick={() => onPick?.(node.id)}
+    >
       <rect x={x} y={y} width={node.width} height={node.height} rx={radius} />
       {/* Заливка -- отдельным прямоугольником поверх: так прозрачность меняется
           каждый кадр, не трогая обводку и подпись. */}

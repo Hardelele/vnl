@@ -1,74 +1,40 @@
-/* Таймлайн: растр спайков и курсор времени.
+/* Таймлайн: дорожка на клетку, в ней спайки и трасса.
 
-   Колонки общие на все строки, поэтому тик «100 мс» стоит на одной вертикали
-   в растре, на оси и под курсором. */
+   Колонка имён общая на все строки, поэтому тик «100 мс» стоит на одной
+   вертикали в каждой дорожке, на шкале и под курсором. */
 
 .tl {
-  --tl-name: 64px;
-  --tl-count: 40px;
+  --tl-name: 150px;
+  --tl-lane: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tl-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3) 0;
+}
+
+.tl-hover {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .tl-body {
-  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3) 0 var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-3);
 }
 
-.tl-row {
+.tl-scale,
+.tl-lane {
   display: grid;
-  grid-template-columns: var(--tl-name) 1fr var(--tl-count);
-  align-items: center;
+  grid-template-columns: var(--tl-name) 1fr;
   gap: var(--space-2);
-  height: 16px;
-}
-
-.tl-name {
-  font-size: 11px;
-  color: var(--muted);
-  text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tl-count {
-  font-size: 11px;
-  color: var(--faint);
-}
-
-.tl-track {
-  width: 100%;
-  height: 14px;
-  display: block;
-  overflow: visible;
-}
-
-.tl-base {
-  stroke: var(--line);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-.tl-spike {
-  stroke: var(--exc);
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
-}
-
-.tl-spike.is-inh {
-  stroke: var(--inh);
-}
-
-.tl-tick {
-  stroke: var(--line-strong);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-.tl-axis {
-  height: 8px;
+  align-items: stretch;
 }
 
 .tl-scale {
@@ -77,7 +43,6 @@
 
 .tl-marks {
   position: relative;
-  height: 14px;
 }
 
 .tl-mark {
@@ -88,26 +53,133 @@
   white-space: nowrap;
 }
 
-/* Накладка ловит перемотку и несёт курсор. */
-.tl-overlay {
-  position: absolute;
-  top: var(--space-3);
-  bottom: var(--space-2);
-  left: calc(var(--tl-name) + var(--space-2));
-  right: calc(var(--tl-count) + var(--space-2));
+.tl-name {
+  display: grid;
+  grid-template-rows: auto auto;
+  grid-template-columns: 1fr auto;
+  align-content: center;
+  gap: 2px var(--space-2);
+  padding: 0 var(--space-2) 0 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.tl-name:hover {
+  background: var(--subtle);
+}
+
+.tl-lane.is-on .tl-name {
+  background: var(--selected);
+}
+
+.tl-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--exc);
+}
+
+/* Тормозная клетка -- квадрат: обозначения общие на весь интерфейс. */
+.tl-dot.is-inh {
+  border-radius: 2px;
+  background: var(--inh);
+}
+
+.tl-stat,
+.tl-value {
+  font-size: 10px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.tl-value {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--muted);
+  text-align: right;
+  min-width: 64px;
+}
+
+.tl-field {
+  position: relative;
+  height: var(--tl-lane);
+  border-bottom: 1px solid var(--line);
   cursor: ew-resize;
 }
 
-.tl-body.is-off .tl-overlay {
+.tl-field.is-off {
   cursor: default;
 }
 
+.tl-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.tl-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.tl-spike {
+  stroke: var(--exc);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.tl-spike.is-inh {
+  stroke: var(--inh);
+}
+
+.tl-curve {
+  fill: none;
+  stroke: var(--trace);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.tl-fill {
+  fill: var(--trace);
+  opacity: 0.12;
+  stroke: none;
+}
+
+/* Курсор времени симуляции: где она стоит сейчас. */
 .tl-cursor {
   position: absolute;
   top: 0;
-  bottom: 14px;
+  bottom: 0;
   width: 2px;
   margin-left: -1px;
   background: var(--accent);
+  pointer-events: none;
+}
+
+/* Волосок под указателем: просмотр значений, время он не двигает. */
+.tl-hairline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line-strong);
   pointer-events: none;
 }
