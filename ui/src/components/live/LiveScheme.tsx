@@ -1,24 +1,23 @@
 /**
  * Схема паттерна, живущая вместе с симуляцией.
  *
- * Та же раскладка, что у миниатюры в каталоге: одна схема не должна выглядеть
- * в двух местах по-разному. Разница в том, что здесь фигуры показывают
- * состояние -- насколько клетка подошла к порогу и дала ли она спайк прямо
- * сейчас.
+ * Раскладку считает ELK (`lib/place.ts`) -- тем же движком и теми же
+ * настройками, что и статическая страница прогона. Пока он грузится, рисуется
+ * дешёвая послойная расстановка: пустое место вместо схемы хуже, чем неточная
+ * схема на полсекунды.
  *
- * Заливка считается от настоящего порога клетки, а не от общего для всех
- * диапазона: у тормозных интернейронов порог другой, и общая шкала врала бы
- * про то, насколько клетка близка к разряду.
+ * Фигуры показывают состояние: насколько клетка подошла к порогу и дала ли она
+ * спайк прямо сейчас. Заливка считается от настоящего порога клетки, а не от
+ * общего для всех диапазона -- у тормозных интернейронов порог другой, и общая
+ * шкала врала бы про то, насколько клетка близка к разряду.
  */
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { miniature, type MiniEdge, type MiniNode } from '../../lib/miniature'
+import { builtinPlacement, placeScheme, type Placement } from '../../lib/place'
 import type { Scheme } from '../../model/types'
 import type { CellState } from '../../model/sim'
 import './scheme.css'
-
-const BOX = { width: 560, height: 260, padding: 60 }
 
 export interface Threshold {
   rest: number
@@ -29,22 +28,43 @@ export interface LiveSchemeProps {
   scheme: Scheme
   cells: Record<string, CellState>
   thresholds: Record<string, Threshold>
+  /** Чем посчитана раскладка -- подпись в шапке панели. */
+  onEngine?: (engine: Placement['engine']) => void
 }
 
-export function LiveScheme({ scheme, cells, thresholds }: LiveSchemeProps) {
-  const view = useMemo(() => miniature(scheme, BOX), [scheme])
+export function LiveScheme({ scheme, cells, thresholds, onEngine }: LiveSchemeProps) {
+  const fallback = useMemo(() => builtinPlacement(scheme), [scheme])
+  const [placement, setPlacement] = useState<Placement>(fallback)
+
+  useEffect(() => {
+    let alive = true
+    setPlacement(fallback)
+    placeScheme(scheme)
+      .then((laid) => {
+        if (!alive) return
+        setPlacement(laid)
+        onEngine?.(laid.engine)
+      })
+      // ELK не загрузился или не справился -- остаётся дешёвая раскладка.
+      .catch(() => alive && onEngine?.('builtin'))
+    return () => {
+      alive = false
+    }
+  }, [scheme, fallback, onEngine])
+
+  const pad = 14
 
   return (
     <svg
       className="scheme"
-      viewBox={`0 0 ${view.width} ${view.height}`}
+      viewBox={`${-pad} ${-pad} ${placement.width + pad * 2} ${placement.height + pad * 2}`}
       role="img"
       aria-label="схема паттерна"
     >
-      {view.edges.map((edge) => (
+      {placement.edges.map((edge) => (
         <Edge key={edge.id} edge={edge} />
       ))}
-      {view.nodes.map((node) => (
+      {placement.nodes.map((node) => (
         <Cell
           key={node.id}
           node={node}
@@ -69,28 +89,24 @@ function Cell({
   state,
   scale,
 }: {
-  node: MiniNode
+  node: Placement['nodes'][number]
   state: CellState | undefined
   scale: Threshold | undefined
 }) {
   const level = charge(state, scale)
   const radius = node.inhibitory ? 6 : node.height / 2
   const kind = node.inhibitory ? 'is-inh' : 'is-exc'
+  const x = node.x - node.width / 2
+  const y = node.y - node.height / 2
   return (
     <g className={`scheme-cell ${kind}${state?.spiked ? ' is-spiking' : ''}`}>
-      <rect
-        x={node.x - node.width / 2}
-        y={node.y - node.height / 2}
-        width={node.width}
-        height={node.height}
-        rx={radius}
-      />
-      {/* Заливка -- отдельным прямоугольником поверх: так прозрачность
-          меняется каждый кадр, не трогая обводку и подпись. */}
+      <rect x={x} y={y} width={node.width} height={node.height} rx={radius} />
+      {/* Заливка -- отдельным прямоугольником поверх: так прозрачность меняется
+          каждый кадр, не трогая обводку и подпись. */}
       <rect
         className="scheme-charge"
-        x={node.x - node.width / 2}
-        y={node.y - node.height / 2}
+        x={x}
+        y={y}
         width={node.width}
         height={node.height}
         rx={radius}
@@ -103,25 +119,35 @@ function Cell({
   )
 }
 
-function Edge({ edge }: { edge: MiniEdge }) {
-  const dx = edge.end.x - edge.start.x
-  const dy = edge.end.y - edge.start.y
+function Edge({ edge }: { edge: Placement['edges'][number] }) {
+  const points = edge.points
+  const last = points[points.length - 1]
+  const before = points[points.length - 2] ?? last
+  if (!last || !before) return null
+
+  const dx = last.x - before.x
+  const dy = last.y - before.y
   const length = Math.hypot(dx, dy) || 1
   const ux = dx / length
   const uy = dy / length
+  const path = points
+    .map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`)
+    .join(' ')
+
   return (
     <g className={`scheme-link is-${edge.kind}`}>
-      <line x1={edge.start.x} y1={edge.start.y} x2={edge.end.x} y2={edge.end.y} />
+      <path d={path} fill="none" />
       {edge.kind === 'inh' ? (
+        // Плашка поперёк линии -- торможение.
         <line
           className="scheme-cap"
-          x1={edge.end.x - uy * 6}
-          y1={edge.end.y + ux * 6}
-          x2={edge.end.x + uy * 6}
-          y2={edge.end.y - ux * 6}
+          x1={last.x - uy * 6}
+          y1={last.y + ux * 6}
+          x2={last.x + uy * 6}
+          y2={last.y - ux * 6}
         />
       ) : (
-        <circle className="scheme-cap" cx={edge.end.x} cy={edge.end.y} r={3.5} />
+        <circle className="scheme-cap" cx={last.x} cy={last.y} r={3.5} />
       )}
     </g>
   )

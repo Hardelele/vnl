@@ -45,9 +45,10 @@
   opacity: 1 !important;
 }
 
-.scheme-link line {
+.scheme-link path {
   stroke: var(--line-strong);
   stroke-width: 1.6;
+  stroke-linejoin: round;
 }
 
 .scheme-link .scheme-cap {
@@ -55,7 +56,7 @@
   stroke: none;
 }
 
-.scheme-link.is-inh line {
+.scheme-link.is-inh path {
   stroke: var(--inh);
 }
 
@@ -65,7 +66,7 @@
   stroke-width: 2.4;
 }
 
-.scheme-link.is-mod line {
+.scheme-link.is-mod path {
   stroke: var(--mod);
   stroke-dasharray: 5 4;
 }

@@ -11,7 +11,7 @@
  * занимала бы память.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { LINKS, NEURONS, PORTS, counted } from '../../lib/plural'
 import { loadPattern } from '../../model/catalog'
@@ -30,6 +30,8 @@ export interface PatternScreenProps {
 export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const [pattern, setPattern] = useState<PatternDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [engine, setEngine] = useState<'elk' | 'builtin'>('builtin')
+  const remember = useCallback((chosen: 'elk' | 'builtin') => setEngine(chosen), [])
 
   const control = simController
   const state = useSim((view) => view.state)
@@ -131,13 +133,16 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
         <section className="panel pat-scheme">
           <div className="panel-head">
             <span className="panel-title">Схема</span>
-            <span className="mono panel-note">{pattern.levelName}</span>
+            <span className="mono panel-note">
+              {engine === 'elk' ? 'раскладка ELK' : 'раскладка встроенная'}
+            </span>
           </div>
           <div className="pat-canvas">
             <LiveScheme
               scheme={pattern.scheme}
               cells={cells}
               thresholds={thresholdsOf(pattern)}
+              onEngine={remember}
             />
           </div>
           <Timeline
