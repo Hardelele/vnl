@@ -26,7 +26,7 @@ import { goToLogin, loginAt, useSession } from '../../state/session'
 import { simController, useSim } from '../../state/sim'
 import { LoginHint } from '../shell/Login'
 import { Inspector } from '../live/Inspector'
-import { LiveScheme, type Threshold } from '../live/LiveScheme'
+import { LiveScheme } from '../live/LiveScheme'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import './pattern.css'
@@ -168,7 +168,6 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             <LiveScheme
               scheme={pattern.scheme}
               cells={cells}
-              thresholds={thresholdsOf(pattern)}
               onEngine={remember}
               selected={neuron}
               onPick={setNeuron}
@@ -320,14 +319,4 @@ function LinkRow({ contact }: { contact: Contact }) {
       </span>
     </div>
   )
-}
-
-/** Порог и покой каждой клетки: по ним считается заливка на схеме. */
-function thresholdsOf(pattern: PatternDetail): Record<string, Threshold> {
-  const table: Record<string, Threshold> = {}
-  for (const neuron of pattern.body.neurons) {
-    const point = pattern.body.cellTypes[neuron.cellType]?.pointModel
-    if (point) table[neuron.id] = { rest: point.vRest, threshold: point.vThreshold }
-  }
-  return table
 }

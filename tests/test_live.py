@@ -160,3 +160,91 @@ def test_a_pool_hands_out_and_closes_sessions():
 
     pool.close_all()
     assert len(pool) == 0
+
+
+# --- заряд клетки ---------------------------------------------------------
+#
+# Насколько клетка заряжена -- это доля пути от покоя до порога, и она приходит
+# в интерфейсе вместе с потенциалом. Проверяется здесь не арифметика, а смысл
+# концов шкалы: покой -- ноль, порог -- сто процентов, ниже покоя -- минус.
+
+
+def test_at_rest_the_charge_is_nothing(session):
+    """Покой -- ноль: от него и ведётся отсчёт доли."""
+    cells = session.update()["cells"]
+    # Доля есть у всех клеток, а не только у тех, за которыми ведётся запись:
+    # схема подсвечивается целиком.
+    assert set(cells) == {"IN", "E", "I"}
+    assert all(cell["charge"] == 0.0 for cell in cells.values())
+
+
+def test_at_the_threshold_the_charge_is_whole(session):
+    """Порог -- сто процентов: на нём происходит разряд."""
+    cell = session.simulator.cells["E"]
+    cell.v = cell.model.v_threshold
+    assert session.update()["cells"]["E"]["charge"] == 1.0
+
+
+def test_each_cell_is_measured_by_its_own_threshold(session):
+    """У клеток разные пороги, и каждая считается по своему.
+
+    Общая на всех шкала врала бы про то, насколько клетка близка к разряду:
+    один и тот же потенциал для корзинчатой клетки ближе к порогу, чем для
+    пирамиды, -- в этом половина смысла торможения с опережением.
+    """
+    for name in ("E", "I"):
+        session.simulator.cells[name].v = -57.5
+
+    cells = session.update()["cells"]
+    # E -- пирамида, порог -50 мВ: ровно полпути от покоя -65 мВ.
+    assert cells["E"]["charge"] == 0.5
+    # I -- корзинчатая, порог -52 мВ: тот же потенциал уже 58% пути.
+    assert cells["I"]["charge"] == pytest.approx(7.5 / 13.0, abs=1e-3)
+    assert cells["I"]["charge"] > cells["E"]["charge"]
+
+
+def test_a_discharge_reads_as_a_full_charge(session):
+    """В кадре разряда потенциал уже сброшен, а доля обязана показать сто.
+
+    Иначе спайк выглядел бы на схеме как мгновенно опустевшая клетка -- ровно в
+    тот момент, который нужно увидеть.
+    """
+    while not session.simulator.finished:
+        session.advance_ms(session.dt)
+        spiking = [
+            name for name, cell in session.simulator.cells.items() if cell.spiked
+        ]
+        if spiking:
+            break
+
+    assert spiking, "за прогон не разрядилась ни одна клетка"
+    cells = session.update(since=session.simulator.step)["cells"]
+    for name in spiking:
+        assert cells[name]["charge"] == 1.0
+        # Потенциал при этом уже на `v_reset`: доля говорит о разряде, а не о
+        # том, что осталось от него на мембране.
+        assert cells[name]["v"] == session.simulator.cells[name].model.v_reset
+
+
+def test_inhibition_reads_as_a_charge_below_rest():
+    """Клетка ниже покоя -- отрицательная доля, а не ноль.
+
+    Ноль здесь означал бы «клетка в покое», то есть что тормозный вход ничего не
+    сделал, -- ровно наоборот тому, что произошло. Схема `hyperpolarizing_-
+    inhibition` для этого и сделана: gaba_a с реверсалом -70 мВ тянет мембрану
+    ниже покоя -65 мВ, и на прогоне она доходит до -69.2 мВ.
+    """
+    session = Session("s-inh", model("library/hyperpolarizing_inhibition"))
+    try:
+        lowest = 0.0
+        while not session.simulator.finished:
+            session.advance_ms(0.5)
+            # Приращением, а не целиком: полный ответ переписывал бы все трассы
+            # на каждом шаге, и тест мерил бы скорость машины.
+            cells = session.update(since=session.simulator.step)["cells"]
+            lowest = min(lowest, cells["E"]["charge"])
+    finally:
+        session.close()
+
+    # (-69.2 + 65) / (-50 + 65) = -0.28: доля не обрезана нулём и видна.
+    assert lowest == pytest.approx(-0.28, abs=0.02)

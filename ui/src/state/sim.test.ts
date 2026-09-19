@@ -18,7 +18,8 @@ function update(patch: Partial<SimUpdate> = {}): SimUpdate {
     rewound: false,
     traces: {},
     spikes: {},
-    cells: { E: { v: -65, spiked: false } },
+    // Клетка в покое: потенциал равен покою, и доля заряда -- ноль.
+    cells: { E: { v: -65, spiked: false, charge: 0 } },
     degradation: [],
     ...patch,
   }

@@ -24,6 +24,29 @@
   fill: var(--ink);
 }
 
+/* Заряд числом над клеткой. Кегль мельче имени: имя отвечает на «кто это»,
+   число -- на «сколько набралось», и спорить им за внимание незачем. */
+.scheme-cell .scheme-level {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+/* Ниже покоя: цветом торможения и жирнее, чтобы уход под ноль был виден, а не
+   вычитывался из стрелки. */
+.scheme-cell .scheme-level.is-below {
+  fill: var(--inh);
+  font-weight: var(--weight-medium);
+}
+
+/* Клетка на разряде: её число -- это 100%, и оно должно попасть в глаз вместе
+   со вспышкой фигуры. */
+.scheme-cell.is-spiking .scheme-level {
+  fill: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
 /* Заливка по приближению к порогу. Прозрачность ставится в разметке. */
 .scheme-charge {
   fill: var(--exc);

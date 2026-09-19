@@ -7,27 +7,29 @@
  * схема на полсекунды.
  *
  * Фигуры показывают состояние: насколько клетка подошла к порогу и дала ли она
- * спайк прямо сейчас. Заливка считается от настоящего порога клетки, а не от
- * общего для всех диапазона -- у тормозных интернейронов порог другой, и общая
- * шкала врала бы про то, насколько клетка близка к разряду.
+ * спайк прямо сейчас. Над каждой клеткой стоит её заряд числом -- процент пути
+ * от покоя до порога. Заливка одна и та же на треть и на две трети шкалы
+ * читается одинаково, а вопрос обычно именно такой: сколько уже набралось и
+ * далеко ли до разряда. Поэтому число рядом с фигурой, а не в панели сбоку:
+ * заряд читается там же, где виден разряд, и видно, как одна клетка набирает, а
+ * соседняя её гасит.
+ *
+ * Долю считает сессия по параметрам каждой клетки (`CellState.charge`) -- у
+ * тормозных интернейронов порог другой, и общая шкала врала бы про то,
+ * насколько клетка близка к разряду.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 
+import { chargeLabel } from '../../lib/charge'
 import { builtinPlacement, placeScheme, type Placement } from '../../lib/place'
 import type { Scheme } from '../../model/types'
 import type { CellState } from '../../model/sim'
 import './scheme.css'
 
-export interface Threshold {
-  rest: number
-  threshold: number
-}
-
 export interface LiveSchemeProps {
   scheme: Scheme
   cells: Record<string, CellState>
-  thresholds: Record<string, Threshold>
   /** Чем посчитана раскладка -- подпись в шапке панели. */
   onEngine?: (engine: Placement['engine']) => void
   /** Выбранная клетка: та же, что открыта в инспекторе и подсвечена в таймлайне. */
@@ -38,7 +40,6 @@ export interface LiveSchemeProps {
 export function LiveScheme({
   scheme,
   cells,
-  thresholds,
   onEngine,
   selected = null,
   onPick,
@@ -63,11 +64,13 @@ export function LiveScheme({
   }, [scheme, fallback, onEngine])
 
   const pad = 14
+  // Сверху места больше: там стоят надписи о заряде, и обрезать их нельзя.
+  const padTop = 26
 
   return (
     <svg
       className="scheme"
-      viewBox={`${-pad} ${-pad} ${placement.width + pad * 2} ${placement.height + pad * 2}`}
+      viewBox={`${-pad} ${-padTop} ${placement.width + pad * 2} ${placement.height + padTop + pad}`}
       role="img"
       aria-label="схема паттерна"
     >
@@ -79,7 +82,6 @@ export function LiveScheme({
           key={node.id}
           node={node}
           state={cells[node.id]}
-          scale={thresholds[node.id]}
           chosen={selected === node.id}
           onPick={onPick}
         />
@@ -88,28 +90,31 @@ export function LiveScheme({
   )
 }
 
-/** Насколько клетка подошла к порогу: 0 -- покой, 1 -- разряд. */
-export function charge(state: CellState | undefined, scale: Threshold | undefined): number {
-  if (!state || !scale) return 0
-  const span = scale.threshold - scale.rest
-  if (span <= 0) return 0
-  return Math.min(1, Math.max(0, (state.v - scale.rest) / span))
+/**
+ * Заливка фигуры по заряду: 0 -- пусто, 1 -- полная.
+ *
+ * Обрезана с обоих концов, потому что прозрачность за эти края не выходит.
+ * Ниже покоя и выше номинального порога говорит надпись -- заливке такое не
+ * выразить, и подменять ею число нельзя.
+ */
+export function fill(state: CellState | undefined): number {
+  if (!state) return 0
+  return Math.min(1, Math.max(0, state.charge))
 }
 
 function Cell({
   node,
   state,
-  scale,
   chosen,
   onPick,
 }: {
   node: Placement['nodes'][number]
   state: CellState | undefined
-  scale: Threshold | undefined
   chosen: boolean
   onPick?: (neuron: string) => void
 }) {
-  const level = charge(state, scale)
+  const level = fill(state)
+  const label = chargeLabel(state?.charge)
   const radius = node.inhibitory ? 6 : node.height / 2
   const kind = node.inhibitory ? 'is-inh' : 'is-exc'
   const x = node.x - node.width / 2
@@ -134,6 +139,18 @@ function Cell({
       <text x={node.x} y={node.y} dominantBaseline="central" textAnchor="middle">
         {node.id}
       </text>
+      {/* Заряд числом -- над фигурой: видно и сколько набралось, и что клетку
+          увели ниже покоя. Внутрь не поместить -- там стоит имя клетки. */}
+      {label ? (
+        <text
+          className={`scheme-level${label.below ? ' is-below' : ''}`}
+          x={node.x}
+          y={y - 5}
+          textAnchor="middle"
+        >
+          {label.text}
+        </text>
+      ) : null}
     </g>
   )
 }

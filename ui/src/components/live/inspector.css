@@ -26,6 +26,12 @@
   background: var(--panel);
 }
 
+/* Заряд занимает строку целиком: он главная величина этой сетки, и делить с
+   ним строку нечему -- в сетке из семи ячеек иначе осталась бы дырка. */
+.insp-cell.is-wide {
+  grid-column: 1 / -1;
+}
+
 .insp-label {
   font-size: 11px;
   color: var(--muted);
@@ -35,4 +41,9 @@
   font-size: var(--text-xs);
   color: var(--ink);
   white-space: nowrap;
+}
+
+/* Ниже покоя -- тем же цветом, что надпись над клеткой на схеме. */
+.insp-value.is-below {
+  color: var(--inh);
 }
