@@ -6,6 +6,7 @@ import {
   createSession,
   goToLogin,
   loginAt,
+  loginFrom,
   needsLogin,
   session as singleton,
   whenLeaving,
@@ -109,6 +110,22 @@ describe('состояние входа', () => {
     session.expired()
     expect(needsLogin(store.getState())).toBe(true)
     expect(loginAt(store.getState())).toBe('/auth/login')
+  })
+
+  it('вход помнит, откуда увели', () => {
+    const { session, store } = controller()
+    session.expired()
+    // Корень добавлять незачем: вход и так возвращает туда.
+    expect(loginFrom(store.getState(), '/')).toBe('/auth/login')
+    expect(loginFrom(store.getState(), '/patterns/ffi')).toBe(
+      '/auth/login?next=%2Fpatterns%2Fffi',
+    )
+  })
+
+  it('к адресу входа с параметрами next приклеивается через амперсанд', () => {
+    const { session, store } = controller()
+    session.expired('/auth/login?hint=1')
+    expect(loginFrom(store.getState(), '/x')).toBe('/auth/login?hint=1&next=%2Fx')
   })
 
   it('адрес входа из тела отказа сохраняется как есть', () => {

@@ -622,6 +622,64 @@ def test_full_login_opens_what_was_closed(stand, provider_plan):
     }
 
 
+def test_only_an_own_path_counts_as_a_return_address():
+    """Список того, что адресом возврата не считается, -- часть решения.
+
+    Обратная косая здесь не придирка: часть браузеров читает `/\\evil` как
+    `//evil`, то есть как чужой хост.
+    """
+    assert auth.safe_next("/sandbox?id=1") == "/sandbox?id=1"
+    for bad in (
+        None,
+        "",
+        "sandbox",
+        "//evil.example",
+        "https://evil.example",
+        "/\\evil.example",
+        "/страница\nSet-Cookie: a=b",
+        "/" + "x" * 600,
+    ):
+        assert auth.safe_next(bad) is None, bad
+
+
+def test_login_returns_where_the_person_was_going(stand):
+    """Иначе вход теряет цель: человек шёл в песочницу, а попал на главную."""
+    status, headers, _ = ask(stand, f"{auth.LOGIN_PATH}?next=/sandbox")
+    assert status == 302
+    flow = cookies_of(headers)[auth.FLOW_COOKIE]
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(headers["Location"]).query
+    )["state"][0]
+    status, headers, _ = ask(
+        stand,
+        f"{auth.CALLBACK_PATH}?code=code-1&state={state}",
+        {auth.FLOW_COOKIE: flow},
+    )
+    assert status == 302
+    assert headers["Location"] == "/sandbox"
+
+
+def test_a_foreign_address_is_not_a_place_to_return_to(stand):
+    """Открытый перенаправитель: ссылка на наш вход, уводящая на чужой сайт.
+
+    Проверяется весь проход, а не только `safe_next`: соврать можно и на
+    возврате, поэтому важно, куда в итоге ушёл браузер.
+    """
+    status, headers, _ = ask(stand, f"{auth.LOGIN_PATH}?next=//evil.example/тут")
+    assert status == 302
+    flow = cookies_of(headers)[auth.FLOW_COOKIE]
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(headers["Location"]).query
+    )["state"][0]
+    status, headers, _ = ask(
+        stand,
+        f"{auth.CALLBACK_PATH}?code=code-1&state={state}",
+        {auth.FLOW_COOKIE: flow},
+    )
+    assert status == 302
+    assert headers["Location"] == "/"
+
+
 def test_exchange_sends_verifier_and_client_secret(stand, provider_plan, settings):
     """На token-эндпоинт уходит verifier, а клиент представляется basic'ом."""
     enter(stand)

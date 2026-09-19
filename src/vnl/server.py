@@ -890,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if path == auth.LOGIN_PATH:
-                self._login_start()
+                self._login_start(params)
             elif path == auth.CALLBACK_PATH:
                 self._login_finish(params)
             elif path == auth.LOGOUT_PATH:
@@ -902,15 +902,27 @@ class Handler(BaseHTTPRequestHandler):
             # повод показать причину и дать войти заново.
             self._login_error(str(exc))
 
-    def _login_start(self) -> None:
+    def _login_start(self, params: dict[str, list[str]] | None = None) -> None:
+        """Начало входа. `?next=` -- куда вернуть человека после него.
+
+        Возврат запоминается в той же подписанной куке, что `state` и
+        `code_verifier`, а не передаётся провайдеру: провайдеру незачем знать
+        внутренние адреса приложения, а подписанная кука не даёт подменить
+        адрес по пути. Значение всё равно проверяется -- см. `auth.safe_next`.
+        """
         assert self.provider is not None
         state = auth.new_state()
         verifier = auth.new_verifier()
         url = self.provider.authorize_url(state, verifier)
-        flow = auth.seal(
-            {"state": state, "verifier": verifier, "exp": time.time() + auth.FLOW_TTL},
-            self.provider.settings.secret,
-        )
+        payload: dict[str, Any] = {
+            "state": state,
+            "verifier": verifier,
+            "exp": time.time() + auth.FLOW_TTL,
+        }
+        target = auth.safe_next((params or {}).get("next", [None])[0])
+        if target:
+            payload["next"] = target
+        flow = auth.seal(payload, self.provider.settings.secret)
         self._redirect(
             url,
             cookies=[self._cookie_header(auth.FLOW_COOKIE, flow, auth.FLOW_TTL)],
@@ -941,8 +953,11 @@ class Handler(BaseHTTPRequestHandler):
         payload["idt"] = tokens["id_token"]
         if not self.quiet:
             print(f"вошёл {session.email or session.sub}", file=sys.stderr)
+        # Обратно туда, откуда человека увели на вход. Проверяем второй раз: в
+        # куке значение своё, но проверка на выходе дешевле, чем доверие к тому,
+        # что на входе ничего не изменится.
         self._redirect(
-            "/",
+            auth.safe_next(flow.get("next")) or "/",
             cookies=[
                 self._cookie_header(
                     auth.SESSION_COOKIE,

@@ -118,6 +118,21 @@ export function loginAt(state: SessionState): string {
 }
 
 /**
+ * Тот же адрес, но с указанием, куда вернуть после входа.
+ *
+ * Сервер принимает `?next=` и возвращает браузер туда, проверив, что это путь
+ * внутри приложения (`auth.safe_next`). Сейчас у интерфейса один адрес, и
+ * `next` чаще всего окажется корнем -- но как только на экран можно будет
+ * попасть по ссылке, вход перестанет терять цель сам, без второй правки.
+ */
+export function loginFrom(state: SessionState, here: string): string {
+  const login = loginAt(state)
+  if (!here || here === '/') return login
+  const glue = login.includes('?') ? '&' : '?'
+  return `${login}${glue}next=${encodeURIComponent(here)}`
+}
+
+/**
  * Уход на вход.
  *
  * Отдельной функцией, потому что переход -- решение интерфейса, а не браузера:
@@ -147,7 +162,8 @@ export function whenLeaving(go?: (url: string) => void): void {
 export function goToLogin(): void {
   if (leaving) return
   leaving = true
-  leave(loginAt(session.store.getState()))
+  const here = `${window.location.pathname}${window.location.search}`
+  leave(loginFrom(session.store.getState(), here))
 }
 
 /** Как звать вошедшего. `null` -- никто не вошёл. */
