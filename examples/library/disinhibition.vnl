@@ -1,0 +1,80 @@
+# Растормаживание (disinhibition), VIP -| SST -| PYR.
+#
+# Мотив из пяти клеток: SST тормозит пирамиду, VIP тормозит SST. Активация VIP
+# снимает тормоз с пирамиды -- это «gate», а не «драйв»: сам VIP пирамиду не
+# возбуждает, он только убирает то, что ей мешало. Убери SST -- останется
+# просто торможение, мотив исчезнет.
+#
+# Вход на пирамиду вдобавок пластичен по правилу с подкреплением: след
+# пригодности копится всё время, а в вес переходит только под дофамином.
+#
+# Что видно на прогоне (ЧИСЛА):
+#  * окно работы VIP -- 200-400 мс. PYR даёт 12 спайков в этом окне против 6 за
+#    предыдущие 200 мс и 7 за последующие: снятие тормоза удваивает выход при
+#    неизменном драйве (IN: 28, 31, 26 спайков по тем же окнам);
+#  * торможение, приходящее на PYR, слабеет: средняя g_inh на соме PYR падает
+#    с 1.54 нСм до окна до 0.82 нСм в окне (в 1.9 раза) и возвращается к
+#    2.09 нСм после, потому что SST на время замолкает -- 12 спайков в окне
+#    против 21 до и 27 после;
+#  * вес пластичного входа стоит на 2.2000 нСм всё время, включая окно
+#    растормаживания, и доходит до 3.4215 нСм после подкрепления на 420 мс.
+#
+# Записи SST.soma.g_inh и PYR.soma.g_inh стоят здесь именно поэтому: без них
+# мотив приходится объяснять словами вместо того, чтобы показать.
+
+model disinhibition
+
+cell pyr : excitatory, glutamate { tau_m = 15ms  threshold = -50mV }
+cell sst : inhibitory, gaba      { tau_m = 10ms  threshold = -52mV }
+cell vip : inhibitory, gaba      { tau_m =  8ms  threshold = -52mV }
+cell relay : excitatory, glutamate { tau_m = 8ms  threshold = -50mV }
+
+neuron IN  : relay
+neuron VIP : vip
+neuron SST : sst
+neuron PYR : pyr
+neuron VTA : relay
+
+modulator dopamine : dopamine from VTA { gain = 1.0  tau = 200ms }
+
+IN.soma -> PYR.soma {
+    receptor   = ampa
+    weight     = 2.2nS
+    delay      = 1.0ms
+    plasticity = stdp_rl {
+        a_plus          = 0.0002
+        a_minus         = 0.00022
+        tau_eligibility = 500ms
+        w_max           = 6nS
+        modulator       = dopamine
+    }
+}
+
+SST.soma -> PYR.soma {
+    receptor = gaba_a
+    weight   = 2.5nS
+    delay    = 1.2ms
+}
+
+VIP.soma -> SST.soma {
+    receptor = gaba_a
+    weight   = 3.0nS
+    delay    = 1.0ms
+}
+
+stim drive  -> IN.soma  : poisson rate=250Hz weight=1.5nS start=0ms   stop=600ms
+stim tonic  -> SST.soma : poisson rate=200Hz weight=1.5nS start=0ms   stop=600ms
+stim gate   -> VIP.soma : poisson rate=300Hz weight=1.8nS start=200ms stop=400ms
+stim reward -> VTA.soma : spikes weight=3nS times="420 425 430 435"
+
+record PYR.soma.v
+record PYR.soma.w
+record SST.soma.spikes
+
+# Суть растормаживания: пока VIP давит SST, торможение, приходящее
+# на пирамиду, слабеет. Без этих двух записей мотив приходится объяснять
+# словами вместо того, чтобы показать.
+record SST.soma.g_inh
+record PYR.soma.g_inh
+
+run { dt = 0.1ms  duration = 600ms  level = L1  seed = 3 }

@@ -1,0 +1,39 @@
+# Торможение с обратной связью (feedback / recurrent inhibition).
+#
+# Мотив из трёх клеток: выход E возбуждает тормозную клетку I, а та возвращает
+# торможение на E. Выход сам себя гасит, и частота перестаёт следовать за
+# входом -- это ограничитель, а не фильтр по времени, как FFI. Убери I, и E
+# будет отвечать на каждый входной спайк.
+#
+# Отличие от FFI в схеме, и оно принципиально: там торможение приходит от того
+# же входа (окно интеграции), здесь -- от собственного выхода (частота).
+#
+# Что видно на прогоне (ЧИСЛО): при 37 входных спайках E даёт 16 -- петля
+# срезает выход в 2.3 раза. Проверяется развёрткой по весу обратного контакта:
+# vnl data examples/library/feedback_inhibition.vnl --sweep "c3.weight=0,1.2,2.5,5"
+#   ->  E: 37, 19, 16, 14 спайков. Без петли E повторяет вход один в один (37 из
+# 37), с петлёй выходит на 40 Гц и дальше почти не растёт: лишний вес уже
+# ничего не меняет -- это и есть ограничение частоты.
+
+model feedback_inhibition
+
+cell relay : excitatory, glutamate { tau_m = 8ms   threshold = -50mV  refractory = 4ms }
+cell pyr   : excitatory, glutamate { tau_m = 15ms  threshold = -50mV }
+cell basket : inhibitory, gaba     { tau_m = 6ms   threshold = -52mV  refractory = 1ms }
+
+neuron IN : relay
+neuron E  : pyr
+neuron I  : basket
+
+IN.soma -> E.soma { receptor = ampa  weight = 3.0nS  delay = 1.0ms }
+E.soma  -> I.soma { receptor = ampa  weight = 3.0nS  delay = 1.0ms }
+I.soma  -> E.soma { receptor = gaba_a  weight = 2.5nS  delay = 1.2ms }
+
+stim drive -> IN.soma : poisson rate=250Hz weight=1.5nS start=20ms stop=380ms
+
+record E.soma.spikes
+record E.soma.v
+record E.soma.g_exc
+record E.soma.g_inh
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }

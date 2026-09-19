@@ -1,0 +1,44 @@
+# Рекуррентное возбуждение (recurrent excitation), A -> B -> A.
+#
+# Мотив из трёх клеток: две возбуждающие клетки поддерживают друг друга по
+# кольцу, и активность живёт дольше входа -- эхо, из которого на уровне сетей
+# получается удержание. Убери обратную связь B -> A, и активность кончится
+# вместе с входом.
+#
+# Адаптация клеток кольца (0.5 мВ на спайк, tau 200 мс) здесь обязательна:
+# без неё кольцо не затухает никогда, и вместо памяти получается разгон.
+#
+# Что видно на прогоне (ЧИСЛА): вход работает до 100 мс (последний спайк IN на
+# 94.3 мс), а A разряжается до 234.1 мс -- эхо живёт на 140 мс дольше входа,
+# 26 спайков A против 9 входных. Что дело в обратной связи, показывает
+# развёртка по её весу:
+# vnl data examples/library/recurrent_excitation.vnl --sweep "c3.weight=0,2,4"
+#   ->  A: 7, 9, 26 спайков. Без кольца A только повторяет вход.
+
+model recurrent_excitation
+
+cell relay : excitatory, glutamate { tau_m = 8ms  threshold = -50mV  refractory = 4ms }
+cell loop  : excitatory, glutamate {
+    tau_m          = 12ms
+    threshold      = -50mV
+    refractory     = 3ms
+    adaptation     = 0.5mV
+    tau_adaptation = 200ms
+}
+
+neuron IN : relay
+neuron A  : loop
+neuron B  : loop
+
+IN.soma -> A.soma { receptor = ampa  weight = 2.6nS  delay = 1.0ms }
+A.soma  -> B.soma { receptor = ampa  weight = 4.0nS  delay = 2.5ms }
+B.soma  -> A.soma { receptor = ampa  weight = 4.0nS  delay = 2.5ms }
+
+stim drive -> IN.soma : poisson rate=250Hz weight=1.5nS start=20ms stop=100ms
+
+record A.soma.spikes
+record B.soma.spikes
+record A.soma.v
+record A.soma.g_exc
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 4 }

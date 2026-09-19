@@ -1,0 +1,54 @@
+# Кратковременная фасилитация (short-term facilitation).
+#
+# Механизм одного контакта: `facilitation = { u, tau_facil, tau_rec }`. Каждый
+# спайк поднимает вероятность выброса u, она спадает за tau_facil, и внутри
+# пачки каждый следующий спайк проходит сильнее предыдущего -- обратная
+# депрессии сторона той же модели Цодыкса-Маркрама.
+#
+# Сравнение живёт внутри одного прогона: тот же вход идёт на фасилитирующий
+# контакт (FAC) и на статический контакт того же веса (REF). Приёмники не
+# спайкуют (порог -20 мВ): читается проводимость, эффект в контакте.
+#
+# Что видно на прогоне (ЧИСЛО): пики g на FAC растут с 0.137 нСм на первом
+# спайке пачки до 0.286 нСм на четвёртом -- в 2.1 раза, дальше держатся на
+# 0.28 нСм (u вышла на насыщение). На REF все восемь пиков одинаковы, 1.14 нСм.
+# Пики снимаются с трасс: vnl run examples/library/short_term_facilitation.vnl --traces fac.csv
+
+model short_term_facilitation
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 6ms
+}
+
+cell probe : excitatory, glutamate {
+    tau_m     = 20ms
+    threshold = -20mV
+}
+
+neuron IN  : relay
+neuron FAC : probe
+neuron REF : probe
+
+IN.soma -> FAC.soma {
+    receptor     = ampa
+    weight       = 1.2nS
+    delay        = 1.0ms
+    facilitation = { u = 0.12, tau_facil = 300ms, tau_rec = 60ms }
+}
+
+IN.soma -> REF.soma {
+    receptor = ampa
+    weight   = 1.2nS
+    delay    = 1.0ms
+}
+
+stim burst -> IN.soma : spikes weight=3nS times="50 70 90 110 130 150 170 190"
+
+record FAC.soma.g
+record REF.soma.g
+record FAC.soma.v
+record REF.soma.v
+
+run { dt = 0.1ms  duration = 300ms  level = L1  seed = 1 }

@@ -1,0 +1,35 @@
+# Взаимное торможение (mutual / reciprocal inhibition).
+#
+# Мотив из двух клеток: A тормозит B, B тормозит A. Оба состояния устойчивы, но
+# одновременно активными быть не могут -- кто первый набрал, тот и держит
+# другого. Убери одну из двух связей, и останется обычное торможение с
+# победителем, назначенным заранее.
+#
+# Драйв нарочно почти симметричный: 300 Гц против 240 Гц, разница всего в
+# 1.25 раза. Исход решает схема, а не разница входов.
+#
+# Что видно на прогоне (ЧИСЛА): A даёт 42 спайка, B -- 7, то есть выход
+# расходится в 6 раз при разнице драйва в 1.25 раза. Активность не
+# перекрывается: за весь прогон нет ни одного 10-мс окна, в котором разрядились
+# бы оба (A занимает 27 окон, B -- 6, пересечение 0). g_inh на B доходит до
+# 14.7 нСм -- проигравшего держат, а не просто опережают.
+
+model mutual_inhibition
+
+cell inh : inhibitory, gaba { tau_m = 10ms  threshold = -50mV  refractory = 3ms }
+
+neuron A : inh
+neuron B : inh
+
+A.soma -> B.soma { receptor = gaba_a  weight = 8.0nS  delay = 1.0ms }
+B.soma -> A.soma { receptor = gaba_a  weight = 8.0nS  delay = 1.0ms }
+
+stim drive_a -> A.soma : poisson rate=300Hz weight=1.6nS start=20ms stop=380ms
+stim drive_b -> B.soma : poisson rate=240Hz weight=1.6nS start=20ms stop=380ms
+
+record A.soma.spikes
+record B.soma.spikes
+record A.soma.g_inh
+record B.soma.g_inh
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 11 }

@@ -1,0 +1,45 @@
+# Петля возбуждения и торможения (excitatory-inhibitory recurrent loop).
+#
+# Мотив из трёх клеток: две возбуждающие клетки поддерживают друг друга, обе
+# кормят тормозную, а та давит обеих. Смысл мотива -- рабочая точка: петля не
+# гаснет и не уходит в насыщение, а держит частоту, заданную балансом двух
+# весов. Убери I -- взаимное возбуждение разгонится; убери взаимное
+# возбуждение -- останется обычная обратная связь.
+#
+# Что видно на прогоне (ЧИСЛА): при постоянном драйве 180 Гц E1 даёт 24 спайка,
+# E2 -- 20, I -- 60; торможение работает втрое чаще возбуждения и этим держит
+# точку. Смещается она обоими весами, монотонно и в обе стороны:
+# vnl data examples/library/ei_loop.vnl --sweep "c5.weight=0,1.5,3,6"
+#   ->  E1: 45, 29, 24, 17 спайков (I: 89, 68, 60, 50) -- сильнее тормоз, ниже
+# точка; без тормоза выход почти вдвое выше рабочего;
+# vnl data examples/library/ei_loop.vnl --sweep "c2.weight=0,1.8,3.6"
+#   ->  E1: 20, 24, 29 спайков -- сильнее взаимное возбуждение, выше точка.
+#
+# g_exc и g_inh на E1 пишутся врозь: рабочая точка -- это их отношение, а в
+# сумме оно пропадает.
+
+model ei_loop
+
+cell exc : excitatory, glutamate { tau_m = 12ms  threshold = -50mV  refractory = 3ms }
+cell inh : inhibitory, gaba      { tau_m = 6ms   threshold = -52mV  refractory = 1ms }
+
+neuron E1 : exc
+neuron E2 : exc
+neuron I  : inh
+
+E1.soma -> E2.soma { receptor = ampa  weight = 1.8nS  delay = 1.5ms }
+E2.soma -> E1.soma { receptor = ampa  weight = 1.8nS  delay = 1.5ms }
+E1.soma -> I.soma  { receptor = ampa  weight = 2.5nS  delay = 1.0ms }
+E2.soma -> I.soma  { receptor = ampa  weight = 2.5nS  delay = 1.0ms }
+I.soma  -> E1.soma { receptor = gaba_a  weight = 3.0nS  delay = 1.2ms }
+I.soma  -> E2.soma { receptor = gaba_a  weight = 3.0nS  delay = 1.2ms }
+
+stim drive_1 -> E1.soma : poisson rate=180Hz weight=1.5nS start=20ms stop=480ms
+stim drive_2 -> E2.soma : poisson rate=180Hz weight=1.5nS start=20ms stop=480ms
+
+record E1.soma.spikes
+record I.soma.spikes
+record E1.soma.g_exc
+record E1.soma.g_inh
+
+run { dt = 0.1ms  duration = 500ms  level = L1  seed = 9 }

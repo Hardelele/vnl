@@ -1,0 +1,61 @@
+# Гиперполяризующее торможение (hyperpolarizing inhibition, GABA_A).
+#
+# Механизм одного контакта: тормозная клетка открывает на соме приёмника
+# gaba_a-проводимость с реверсалом -70 мВ, ниже потенциала покоя. Мембрана
+# уходит от порога, и тот же возбуждающий вход перестаёт её пробивать.
+#
+# Драйв на E задан детерминированной пачкой (одни и те же 20 событий), поэтому
+# сравнение «с торможением и без» живёт внутри одного прогона: окно работы I
+# 150-300 мс, вне окна тормоза нет.
+#
+# Что видно на прогоне (ЧИСЛО): E даёт 12 спайков из 20 входных событий --
+# все семь событий вне окна проходят, а в окне 150-300 мс не проходит ни одно
+# (0 спайков из 7). g_inh на соме E доходит до 6.7 нСм, минимум v -69.2 мВ
+# против покоя -65 мВ: мембрану тянет к реверсалу gaba_a -70 мВ, то есть от
+# порога, а не к нему.
+
+model hyperpolarizing_inhibition
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell basket : inhibitory, gaba {
+    tau_m      = 6ms
+    threshold  = -52mV
+    refractory = 1ms
+}
+
+neuron IN : relay
+neuron E  : target
+neuron I  : basket
+
+IN.soma -> E.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+I.soma -> E.soma {
+    receptor = gaba_a
+    weight   = 2.0nS
+    delay    = 1.0ms
+}
+
+stim drive -> IN.soma : spikes weight=3nS times="20 40 60 80 100 120 140 160 180 200 220 240 260 280 300 320 340 360 380 400"
+stim veto  -> I.soma  : poisson rate=250Hz weight=1.8nS start=150ms stop=300ms
+
+record E.soma.spikes
+record E.soma.v
+record E.soma.g_exc
+record E.soma.g_inh
+
+run { dt = 0.1ms  duration = 420ms  level = L1  seed = 5 }

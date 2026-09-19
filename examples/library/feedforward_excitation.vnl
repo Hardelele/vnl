@@ -1,0 +1,49 @@
+# Возбуждение с опережением (feedforward excitation), цепочка A -> B -> C.
+#
+# Мотив из трёх клеток: сигнал идёт вперёд и только вперёд. Убери B -- связь
+# между A и C исчезнет: смысл здесь во взаимодействии, а не в одном контакте.
+# Это база для линий задержки и цепочек последовательной активации.
+#
+# Что видно на прогоне (ЧИСЛО): 8 входных событий проходят всю цепочку без
+# потерь -- A 8, B 8, C 8 спайков. Каждое звено добавляет 3.4 мс: первый спайк
+# A на 20.4 мс, B на 23.8, C на 27.2. Задержка цепочки складывается из звеньев,
+# и это видно числом.
+
+model feedforward_excitation
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+neuron A : relay
+neuron B : target
+neuron C : target
+
+A.soma -> B.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+B.soma -> C.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+stim drive -> A.soma : spikes weight=3nS times="20 60 100 140 180 220 260 300"
+
+record A.soma.spikes
+record B.soma.spikes
+record C.soma.spikes
+record C.soma.v
+
+run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }

@@ -1,0 +1,62 @@
+# Модулируемая пластичность (neuromodulated plasticity, dopamine-gated STDP).
+#
+# Именно модулируемая пластичность, а не «нейромодуляция» вообще: модулятор в
+# движке решает только судьбу накопленного веса. «Дофамин меняет режим работы
+# клетки» (возбудимость, усиление входа) языком пока не выражается, поэтому в
+# библиотеке лежит та часть механизма, которая работает, и названа так, как
+# работает.
+#
+# Механизм одного контакта: `plasticity = stdp_rl { modulator = dopamine }`.
+# Совпадения pre->post копятся следом пригодности, но в вес переходят только
+# тогда, когда разряжается источник модулятора (VTA).
+#
+# Сравнение живёт внутри одного прогона: 300 мс пар pre->post без дофамина
+# против того, что происходит после подкрепления на 320 мс. Двух отдельных
+# прогонов для этого не нужно, и контрольная клетка тоже не нужна -- контроль
+# здесь во времени.
+#
+# Что видно на прогоне (ЧИСЛО): за 300 мс драйва IN даёт 29 спайков, E -- 14,
+# то есть пар накопилось много, а вес всё это время стоит ровно на 2.2000 нСм.
+# Через 4 спайка VTA на 320-335 мс вес уходит на 2.8182 нСм (+0.618 нСм, +28%)
+# и остаётся там. Решает переход именно модулятор: активность его не двигает.
+
+model neuromodulated_plasticity
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m     = 15ms
+    threshold = -50mV
+}
+
+neuron IN  : relay
+neuron E   : target
+neuron VTA : relay
+
+modulator dopamine : dopamine from VTA { gain = 1.0  tau = 200ms }
+
+IN.soma -> E.soma {
+    receptor   = ampa
+    weight     = 2.2nS
+    delay      = 1.0ms
+    plasticity = stdp_rl {
+        a_plus          = 0.0002
+        a_minus         = 0.00022
+        tau_eligibility = 500ms
+        w_max           = 6nS
+        modulator       = dopamine
+    }
+}
+
+stim drive  -> IN.soma  : poisson rate=250Hz weight=1.5nS start=0ms stop=300ms
+stim reward -> VTA.soma : spikes weight=3nS times="320 325 330 335"
+
+record E.soma.w
+record E.soma.v
+record VTA.soma.spikes
+
+run { dt = 0.1ms  duration = 600ms  level = L1  seed = 3 }

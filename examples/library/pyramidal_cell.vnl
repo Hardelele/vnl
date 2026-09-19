@@ -1,0 +1,41 @@
+# Пирамидная клетка (pyramidal cell, L5).
+#
+# Одиночная клетка как блок: контактов внутри нет, ставится на холст и
+# соединяется с чем угодно. Дендритное дерево описано морфологией, поэтому к
+# такому блоку можно подвести контакт не только на сому, но и на конкретную
+# ветвь (`PYR.dend.apical[1]@0.6`) -- при прогоне L1 расстояние свернётся в вес
+# и задержку, и это будет напечатано отчётом деградации.
+#
+# Что видно на прогоне (ЧИСЛО): на драйве 250 Гц пирамида даёт 20 спайков
+# (50 Гц) и адаптируется -- межспайковый интервал растёт с 11.5 мс в начале до
+# 52.6 мс к концу драйва (adaptation = 1.5 мВ на спайк).#
+# Драйв у всех пяти одиночных клеток библиотеки одинаковый -- пуассоновский
+# 250 Гц, вес 1.6 нСм, seed 7, 400 мс, -- поэтому числа на карточках сравнимы
+# между собой: PV 89 спайков, VIP 61, SST 56, релейная 39, пирамида 20.
+
+model pyramidal_cell
+
+morphology pyr {
+    soma           len=20um  diam=20um
+    dend.apical[3] len=200um diam=2um  lambda=250um
+    axon           len=500um diam=1um
+}
+
+cell pyr_l5 : excitatory, glutamate {
+    morphology = pyr
+    tau_m      = 15ms
+    threshold  = -50mV
+    refractory = 2ms
+    adaptation = 1.5mV
+    tau_adaptation = 150ms
+}
+
+neuron PYR : pyr_l5
+
+stim drive -> PYR.soma : poisson rate=250Hz weight=1.6nS start=20ms stop=380ms
+
+record PYR.soma.spikes
+record PYR.soma.v
+record PYR.soma.g_exc
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }

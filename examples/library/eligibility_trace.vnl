@@ -1,0 +1,78 @@
+# След пригодности (eligibility trace).
+#
+# Механизм одного контакта: `tau_eligibility` в `stdp_rl`. Совпадение pre->post
+# не меняет вес сразу, а оставляет на синапсе метку «этот вход недавно
+# участвовал». Метка тает за tau_eligibility и ждёт подкрепления: пришло
+# вовремя -- накопленное переходит в вес, опоздало -- переходить уже нечему.
+# Так закрывается разрыв во времени между действием и наградой.
+#
+# Сравнение живёт внутри одного прогона: два одинаковых пластичных контакта от
+# одного входа и один и тот же дофамин, вся разница -- tau_eligibility 500 мс
+# против 20 мс. Драйв работает до 200 мс, подкрепление приходит на 450 мс: к
+# этому моменту короткий след давно истаял, длинный ещё держится.
+#
+# Что видно на прогоне (ЧИСЛО): за 200 мс драйва накапливается 19 спайков IN и
+# по 9 спайков на каждом приёмнике, в тишине 200-450 мс оба веса стоят на
+# 2.2000 нСм. После подкрепления вес контакта с tau_eligibility = 500 мс
+# уходит на 2.5178 нСм (+0.318 нСм, +14%), а контакта с tau_eligibility = 20 мс
+# остаётся ровно 2.2000 нСм -- не меняется вовсе при том же входе и том же
+# дофамине. Кредит через 250 мс тишины донёс именно след.
+#
+# Сам след записать нечем: `record` умеет v, g, g_exc, g_inh, w и spikes.
+# Поэтому он виден косвенно -- по весу. Записываемая величина `eligibility`
+# просится отдельной правкой движка (реестр RECORDED).
+
+model eligibility_trace
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m     = 15ms
+    threshold = -50mV
+}
+
+neuron IN      : relay
+neuron E_LONG  : target
+neuron E_SHORT : target
+neuron VTA     : relay
+
+modulator dopamine : dopamine from VTA { gain = 1.0  tau = 200ms }
+
+IN.soma -> E_LONG.soma {
+    receptor   = ampa
+    weight     = 2.2nS
+    delay      = 1.0ms
+    plasticity = stdp_rl {
+        a_plus          = 0.0002
+        a_minus         = 0.00022
+        tau_eligibility = 500ms
+        w_max           = 6nS
+        modulator       = dopamine
+    }
+}
+
+IN.soma -> E_SHORT.soma {
+    receptor   = ampa
+    weight     = 2.2nS
+    delay      = 1.0ms
+    plasticity = stdp_rl {
+        a_plus          = 0.0002
+        a_minus         = 0.00022
+        tau_eligibility = 20ms
+        w_max           = 6nS
+        modulator       = dopamine
+    }
+}
+
+stim drive  -> IN.soma  : poisson rate=250Hz weight=1.5nS start=0ms stop=200ms
+stim reward -> VTA.soma : spikes weight=3nS times="450 455 460 465"
+
+record E_LONG.soma.w
+record E_SHORT.soma.w
+record VTA.soma.spikes
+
+run { dt = 0.1ms  duration = 700ms  level = L1  seed = 3 }

@@ -1,0 +1,28 @@
+# Интернейрон VIP (VIP interneuron).
+#
+# Одиночная клетка как блок: тормозная клетка, которая тормозит другие тормозные
+# (прежде всего SST) и этим растормаживает пирамиду. tau_m 8 мс, порог -52 мВ.
+#
+# Что видно на прогоне (ЧИСЛО): на том же драйве VIP даёт 61 спайк (152 Гц) при
+# межспайковом интервале 4.3 мс -- между PV (89) и SST (56).#
+# Драйв у всех пяти одиночных клеток библиотеки одинаковый -- пуассоновский
+# 250 Гц, вес 1.6 нСм, seed 7, 400 мс, -- поэтому числа на карточках сравнимы
+# между собой: PV 89 спайков, VIP 61, SST 56, релейная 39, пирамида 20.
+
+model vip_interneuron
+
+cell vip : inhibitory, gaba {
+    tau_m      = 8ms
+    threshold  = -52mV
+    refractory = 2ms
+}
+
+neuron VIP : vip
+
+stim drive -> VIP.soma : poisson rate=250Hz weight=1.6nS start=20ms stop=380ms
+
+record VIP.soma.spikes
+record VIP.soma.v
+record VIP.soma.g_exc
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }

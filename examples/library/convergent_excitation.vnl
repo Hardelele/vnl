@@ -1,0 +1,62 @@
+# Сходящееся возбуждение (convergent excitation), A,B,C -> X.
+#
+# Мотив из четырёх клеток: три входа садятся на одну клетку, и порог решает,
+# сколько их должно совпасть. Каждый вход по отдельности подпорогов, два
+# совпавших -- надпороговы. Убери один вход -- условие «сколько нужно»
+# перестанет быть условием.
+#
+# Демонстрация перебирает четыре события подряд в одном прогоне: A один (50 мс),
+# B один (100 мс), A и B вместе (150 мс), A, B и C вместе (200 мс).
+#
+# Что видно на прогоне (ЧИСЛО): X даёт 2 спайка на 4 события. Одиночный вход
+# поднимает потенциал X только до -55.7 мВ при пороге -50 мВ (пик g_exc
+# 1.14 нСм) и не проходит; совпадение двух даёт 2.28 нСм и -50.2 мВ -- спайк;
+# совпадение трёх -- 3.42 нСм. Веса всех трёх контактов одинаковы, 1.2 нСм:
+# дело в сумме, а не в каком-то одном входе.
+
+model convergent_excitation
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+neuron A : relay
+neuron B : relay
+neuron C : relay
+neuron X : target
+
+A.soma -> X.soma {
+    receptor = ampa
+    weight   = 1.2nS
+    delay    = 1.0ms
+}
+
+B.soma -> X.soma {
+    receptor = ampa
+    weight   = 1.2nS
+    delay    = 1.0ms
+}
+
+C.soma -> X.soma {
+    receptor = ampa
+    weight   = 1.2nS
+    delay    = 1.0ms
+}
+
+stim drive_a -> A.soma : spikes weight=3nS times="50 150 200"
+stim drive_b -> B.soma : spikes weight=3nS times="100 150 200"
+stim drive_c -> C.soma : spikes weight=3nS times="200"
+
+record X.soma.spikes
+record X.soma.v
+record X.soma.g_exc
+
+run { dt = 0.1ms  duration = 260ms  level = L1  seed = 1 }

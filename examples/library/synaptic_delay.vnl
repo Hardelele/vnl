@@ -1,0 +1,56 @@
+# Задержка проведения (conduction / synaptic delay).
+#
+# Механизм одного контакта: `delay` -- время от спайка источника до открытия
+# проводимости на приёмнике. Два контакта одного источника с разной задержкой
+# разводят одно и то же событие по времени.
+#
+# Сравнение живёт внутри одного прогона: один источник, два приёмника,
+# delay = 1 мс и delay = 10 мс. Два отдельных прогона по времени не совместить.
+#
+# Что видно на прогоне (ЧИСЛО): первый спайк NEAR на 23.8 мс, FAR на 32.8 мс --
+# разница 9.0 мс, ровно разница задержек; так же разведены и все восемь
+# последующих спайков (по 8 спайков у каждого).
+#
+# Второй источник задержки в языке -- место контакта на дендрите: при
+# деградации L2 -> L1 расстояние до сомы сворачивается в вес и добавку к
+# задержке (200 мкм/мс), и это печатается отчётом деградации. Здесь он не
+# используется намеренно: в паттерне должен быть виден один механизм.
+
+model synaptic_delay
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+neuron IN   : relay
+neuron NEAR : target
+neuron FAR  : target
+
+IN.soma -> NEAR.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+IN.soma -> FAR.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 10.0ms
+}
+
+record NEAR.soma.spikes
+record FAR.soma.spikes
+record NEAR.soma.v
+record FAR.soma.v
+
+stim drive -> IN.soma : spikes weight=3nS times="20 60 100 140 180 220 260 300"
+
+run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }

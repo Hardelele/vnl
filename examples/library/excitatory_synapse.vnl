@@ -1,0 +1,44 @@
+# Возбуждающий химический синапс (excitatory synapse, AMPA).
+#
+# Механизм одного контакта: спайк источника открывает AMPA-проводимость на
+# соме приёмника, та тянет мембрану к реверсалу 0 мВ и подводит её к порогу.
+# Больше в паттерне ничего нет: две клетки и один контакт.
+#
+# Что видно на прогоне (ЧИСЛО): восемь входных спайков -> восемь выходных,
+# 8 из 8. Каждый пришедший спайк открывает g_exc до 2.09 нСм и поднимает
+# потенциал E с покоя -65 мВ до порога -50 мВ (максимум v -50.13 мВ).
+# Что эффект живёт в контакте, показывает развёртка по его весу:
+# vnl data examples/library/excitatory_synapse.vnl --sweep "c1.weight=0.4,0.8,1.4,2.2"
+#   ->  E: 0, 0, 0, 8 спайков. Подпорогового веса мало, 2.2 нСм хватает.
+
+model excitatory_synapse
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+neuron IN : relay
+neuron E  : target
+
+IN.soma -> E.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+stim drive -> IN.soma : spikes weight=3nS times="20 60 100 140 180 220 260 300"
+
+record IN.soma.spikes
+record E.soma.spikes
+record E.soma.v
+record E.soma.g_exc
+
+run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }

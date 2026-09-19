@@ -1,0 +1,46 @@
+# Локальное возбуждение и общее торможение (local excitation + global inhibition).
+#
+# Мотив из четырёх клеток: E1 и E2 -- соседи, они поддерживают друг друга; E3
+# соседа не имеет. Все трое кормят общую тормозную клетку, и она давит всех
+# троих. Драйв у всех одинаковый, 240 Гц: побеждает не тот, кого сильнее
+# толкают, а тот, у кого есть сосед. Из этого мотива на уровне сетей
+# получаются bump-структуры -- устойчивое пятно активности.
+#
+# Убери локальное возбуждение -- останется общий тормозный пул; убери общее
+# торможение -- пропадёт конкуренция, и одиночка не проиграет.
+#
+# Что видно на прогоне (ЧИСЛО): при одинаковом драйве соседи дают по 25 спайков
+# (E1 25, E2 25), а одиночка E3 -- 12, то есть вдвое меньше (2.1 раза). GI
+# работает на 52 спайка и держит всех.
+
+model local_excitation_global_inhibition
+
+cell chan : excitatory, glutamate { tau_m = 12ms  threshold = -50mV  refractory = 3ms }
+cell pool : inhibitory, gaba      { tau_m = 8ms   threshold = -52mV  refractory = 1ms }
+
+neuron E1 : chan
+neuron E2 : chan
+neuron E3 : chan
+neuron GI : pool
+
+E1.soma -> E2.soma { receptor = ampa  weight = 2.2nS  delay = 1.5ms }
+E2.soma -> E1.soma { receptor = ampa  weight = 2.2nS  delay = 1.5ms }
+
+E1.soma -> GI.soma { receptor = ampa  weight = 1.6nS  delay = 1.0ms }
+E2.soma -> GI.soma { receptor = ampa  weight = 1.6nS  delay = 1.0ms }
+E3.soma -> GI.soma { receptor = ampa  weight = 1.6nS  delay = 1.0ms }
+
+GI.soma -> E1.soma { receptor = gaba_a  weight = 2.5nS  delay = 1.2ms }
+GI.soma -> E2.soma { receptor = gaba_a  weight = 2.5nS  delay = 1.2ms }
+GI.soma -> E3.soma { receptor = gaba_a  weight = 2.5nS  delay = 1.2ms }
+
+stim drive_1 -> E1.soma : poisson rate=240Hz weight=1.6nS start=20ms stop=380ms
+stim drive_2 -> E2.soma : poisson rate=240Hz weight=1.6nS start=20ms stop=380ms
+stim drive_3 -> E3.soma : poisson rate=240Hz weight=1.6nS start=20ms stop=380ms
+
+record E1.soma.spikes
+record E3.soma.spikes
+record E3.soma.g_inh
+record GI.soma.spikes
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 19 }

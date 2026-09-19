@@ -1,0 +1,77 @@
+# Торможение с опережением (feedforward inhibition, FFI).
+#
+# Мотив из трёх клеток: один вход возбуждает и пирамиду, и корзинчатую клетку,
+# а торможение приходит на сому пирамиды вторым путём -- позже возбуждения на
+# дендрите. Разница путей и обрезает окно интеграции. Убери корзинчатую клетку,
+# и мотива нет: смысл в схеме, а не в отдельном контакте.
+#
+# Что видно на прогоне (ЧИСЛО): выход пирамиды падает с 13 спайков до 6 при
+# появлении торможения. Проверяется развёрткой по весу тормозного контакта:
+# vnl data examples/library/ffi.vnl --sweep "c3.weight=0,0.3,0.9"
+#   ->  E: 13, 11, 6 спайков (IN и I -- по 45 в каждом варианте: вход тот же,
+# корзинчатая работает так же, меняется только тормозный контакт).
+# Окно интеграции видно и по задержке торможения:
+# vnl data examples/library/ffi.vnl --sweep "c3.delay=0.5,1.4,4,10"
+#   ->  E: 5, 6, 7, 9 спайков: чем позже приходит тормоз, тем больше успевает
+# дать пирамида.
+#
+# Записи g_exc и g_inh на соме E ведутся врозь намеренно: в сумме баланс,
+# ради которого мотив существует, пропадает.
+
+model ffi
+
+morphology pyr {
+    soma           len=20um  diam=20um
+    dend.apical[3] len=200um diam=2um  lambda=250um
+    axon           len=500um diam=1um
+}
+
+cell relay : excitatory, glutamate {
+    tau_m     = 10ms
+    threshold = -50mV
+}
+
+cell pyr_l5 : excitatory, glutamate {
+    morphology = pyr
+    tau_m      = 15ms
+    threshold  = -50mV
+    adaptation = 1.5mV
+}
+
+cell pv : inhibitory, gaba {
+    tau_m      = 6ms
+    threshold  = -52mV
+    refractory = 1ms
+}
+
+neuron IN : relay
+neuron E  : pyr_l5
+neuron I  : pv
+
+IN.soma -> E.dend.apical[1]@0.6 {
+    receptor   = ampa
+    weight     = 3nS
+    delay      = 1.0ms
+}
+
+IN.soma -> I.soma {
+    receptor   = ampa
+    weight     = 1.5nS
+    delay      = 1.0ms
+}
+
+I.soma -> E.soma {
+    receptor = gaba_a
+    weight   = 0.9nS
+    delay    = 1.4ms
+}
+
+stim drive -> IN.soma : poisson rate=250Hz weight=1.5nS start=20ms stop=380ms
+
+record IN.soma.v
+record E.soma.v
+record I.soma.v
+record E.soma.g_exc
+record E.soma.g_inh
+
+run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }

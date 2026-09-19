@@ -1,0 +1,56 @@
+# Расходящееся возбуждение (divergent excitation), A -> B,C,D.
+#
+# Мотив из четырёх клеток: один источник раздаёт копию сигнала трём приёмникам.
+# Обратная сторона сходимости: там порог собирал условие из многих входов,
+# здесь одно событие становится общим временем для нескольких путей.
+#
+# Что видно на прогоне (ЧИСЛО): 8 спайков A превращаются в 8 + 8 + 8 = 24
+# спайка на выходах, и все три копии приходят одновременно -- первый спайк
+# B, C и D на 23.8 мс, расхождение 0.0 мс. Копия точная: контакты одинаковы,
+# различаться они начнут только при разных весах и задержках.
+
+model divergent_excitation
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+cell target : excitatory, glutamate {
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 4ms
+}
+
+neuron A : relay
+neuron B : target
+neuron C : target
+neuron D : target
+
+A.soma -> B.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+A.soma -> C.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+A.soma -> D.soma {
+    receptor = ampa
+    weight   = 2.2nS
+    delay    = 1.0ms
+}
+
+stim drive -> A.soma : spikes weight=3nS times="20 60 100 140 180 220 260 300"
+
+record B.soma.spikes
+record C.soma.spikes
+record D.soma.spikes
+record B.soma.v
+
+run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }

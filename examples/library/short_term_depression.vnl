@@ -1,0 +1,56 @@
+# Кратковременная депрессия (short-term depression, Tsodyks-Markram).
+#
+# Механизм одного контакта: `depression = { u, tau_rec }`. Спайк расходует
+# долю u ресурса, ресурс восстанавливается за tau_rec, и внутри пачки каждый
+# следующий спайк проходит слабее предыдущего.
+#
+# Сравнение живёт внутри одного прогона: один и тот же вход идёт на
+# депрессирующий контакт (DEP) и на статический контакт того же веса (REF).
+# Двух отдельных прогонов глазами не сравнить. Приёмники нарочно не спайкуют
+# (порог -20 мВ): читается проводимость, а не спайки, -- эффект в контакте.
+#
+# Что видно на прогоне (ЧИСЛО): пики g на DEP падают с 0.685 нСм на первом
+# спайке пачки до 0.055 нСм на восьмом -- в 12 раз, причём уже к четвёртому
+# спайку ответ меньше первого в 7.7 раза (0.089 нСм). На REF все восемь пиков
+# одинаковы, 1.14 нСм. На мембране: DEP поднимается только до -61.6 мВ,
+# REF -- до -56.3 мВ.
+# Пики снимаются с трасс: vnl run examples/library/short_term_depression.vnl --traces dep.csv
+
+model short_term_depression
+
+cell relay : excitatory, glutamate {
+    tau_m      = 8ms
+    threshold  = -50mV
+    refractory = 6ms
+}
+
+cell probe : excitatory, glutamate {
+    tau_m     = 20ms
+    threshold = -20mV
+}
+
+neuron IN  : relay
+neuron DEP : probe
+neuron REF : probe
+
+IN.soma -> DEP.soma {
+    receptor   = ampa
+    weight     = 1.2nS
+    delay      = 1.0ms
+    depression = { u = 0.6, tau_rec = 400ms }
+}
+
+IN.soma -> REF.soma {
+    receptor = ampa
+    weight   = 1.2nS
+    delay    = 1.0ms
+}
+
+stim burst -> IN.soma : spikes weight=3nS times="50 70 90 110 130 150 170 190"
+
+record DEP.soma.g
+record REF.soma.g
+record DEP.soma.v
+record REF.soma.v
+
+run { dt = 0.1ms  duration = 300ms  level = L1  seed = 1 }
