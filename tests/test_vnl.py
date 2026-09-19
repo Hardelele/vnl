@@ -438,3 +438,47 @@ run { dt = 0.1ms  duration = 10ms }
     assert len(about_axon) == 1
     assert about_axon[0].severity == "warning"
     assert "мембрану всей клетки" in about_axon[0].message
+
+
+# --- ток в клетку ---------------------------------------------------------
+
+
+def current_model(amplitude: str, duration: str = "200ms") -> str:
+    return f"""
+model probe
+cell plain : excitatory, glutamate {{ tau_m = 10ms  threshold = -50mV }}
+neuron C : plain
+stim step -> C.soma : current amplitude={amplitude} start=20ms stop=180ms
+record C.soma.v
+record C.soma.spikes
+run {{ dt = 0.1ms  duration = {duration}  seed = 1 }}
+"""
+
+
+def test_current_holds_the_cell_at_ohms_law():
+    """Установившийся потенциал -- покой плюс I·R, и ни на порядок иначе.
+
+    У дефолтной клетки R = 100 МОм, значит 0.1 нА обязаны поднять мембрану
+    ровно на 10 мВ. Лишний множитель тут означал бы ток в пикоамперах и
+    реобазу в сотни наноампер -- числа, которых в физиологии не бывает.
+    """
+    model, _ = load(current_model("0.1nA"), strict=True)
+    trace = simulate(model).traces["C.soma:v"]
+    assert max(trace) == pytest.approx(-55.0, abs=0.05)
+
+
+def test_rheobase_is_where_ohms_law_says_it_is():
+    """Порог достигается ровно при (порог − покой)/R = 15 мВ / 100 МОм."""
+    below, _ = load(current_model("0.14nA"), strict=True)
+    above, _ = load(current_model("0.16nA"), strict=True)
+    assert simulate(below).spikes["C"] == []
+    assert simulate(above).spikes["C"], "чуть выше реобазы клетка обязана разряжаться"
+
+
+def test_more_current_means_more_spikes():
+    counts = [
+        len(simulate(load(current_model(f"{amplitude}nA"), strict=True)[0]).spikes["C"])
+        for amplitude in (0.16, 0.2, 0.3, 0.5)
+    ]
+    assert counts == sorted(counts)
+    assert counts[0] < counts[-1], "кривая частота-ток обязана расти"

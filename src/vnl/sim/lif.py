@@ -289,7 +289,11 @@ class Simulator:
                 value * (ir.RECEPTORS[receptor][0] - cell.v)
                 for receptor, value in cell.conductance.items()
             )
-            drive = (point.v_rest - cell.v) + point.r_in * cell.current * 0.001
+            # МОм * нА = мВ: сопротивление и ток уже в тех единицах, в
+            # которых считается мембрана, и переводить нечего. Лишний
+            # множитель 1e-3 здесь означал бы, что ток на самом деле в
+            # пикоамперах, а реобаза клетки -- сотни наноампер.
+            drive = (point.v_rest - cell.v) + point.r_in * cell.current
             cell.v += dt / point.tau_m * (drive + synaptic)
             cell.current = 0.0
             cell.threshold_offset = _decay(
