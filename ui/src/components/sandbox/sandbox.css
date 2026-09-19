@@ -16,9 +16,34 @@
   gap: var(--space-2);
 }
 
-.sb-name {
-  font-size: var(--text-md, 16px);
+.sb-pick-project {
+  height: 30px;
+  max-width: 260px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-base);
   font-weight: var(--weight-medium);
+}
+
+.sb-icon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sb-icon:hover {
+  background: var(--subtle);
+  color: var(--ink);
 }
 
 .sb-run {

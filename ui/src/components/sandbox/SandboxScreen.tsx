@@ -80,7 +80,7 @@ export function SandboxScreen() {
         <button
           type="button"
           className="btn-primary"
-          onClick={() => void control.create('Новый проект')}
+          onClick={() => void control.create(nextName(list))}
         >
           Новый проект
         </button>
@@ -93,7 +93,37 @@ export function SandboxScreen() {
   return (
     <div className="sb">
       <header className="sb-bar">
-        <span className="sb-name">{project.name}</span>
+        {/* Список проектов прямо в панели, как в макете: переключаться между
+            ними надо чаще, чем открывать заново, а выход к выбору — отдельно,
+            иначе из проекта не выйти вовсе. */}
+        <select
+          className="sb-pick-project"
+          value={project.id}
+          aria-label="Проект"
+          onChange={(event) => void control.open(event.target.value)}
+        >
+          {rows(list, project).map((row) => (
+            <option key={row.id} value={row.id}>
+              {row.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="sb-icon"
+          title="Новый проект"
+          onClick={() => void control.create(nextName(list))}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          className="sb-icon"
+          title="Закрыть проект и вернуться к списку"
+          onClick={() => control.close()}
+        >
+          ×
+        </button>
         <span className="mono sb-run">
           {project.run.duration} мс · dt {project.run.dt} · seed {project.run.seed}
         </span>
@@ -267,6 +297,22 @@ export function SandboxScreen() {
     if (!simController.store.getState().id) await sim.open({ sandbox: id })
     await sim.start()
   }
+}
+
+/** Имя нового проекта. Одинаковые имена в списке делают его бесполезным. */
+function nextName(list: Array<{ name: string }>): string {
+  const taken = new Set(list.map((row) => row.name))
+  let number = list.length + 1
+  while (taken.has(`Проект ${number}`)) number += 1
+  return `Проект ${number}`
+}
+
+/** Список для выпадающего меню: открытый проект в нём есть всегда. */
+function rows(
+  list: Array<{ id: string; name: string }>,
+  project: { id: string; name: string },
+): Array<{ id: string; name: string }> {
+  return list.some((row) => row.id === project.id) ? list : [project, ...list]
 }
 
 function Row({

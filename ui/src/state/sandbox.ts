@@ -145,7 +145,21 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     },
 
     open: (id: string) => openProject(() => io.open(id)),
-    create: (name: string) => openProject(() => io.create(name)),
+
+    /** Новый проект сразу открывается, а список пополняется -- он в панели. */
+    async create(name: string): Promise<void> {
+      await openProject(() => io.create(name))
+      try {
+        store.setState({ list: await io.list() })
+      } catch {
+        // Список не обновился -- это неудобство, а не потеря: проект открыт.
+      }
+    },
+
+    /** Выйти из проекта к списку. Сам проект остаётся на диске. */
+    close(): void {
+      store.setState({ project: null, selected: null, pending: null, error: null })
+    },
 
     /** Вставить паттерн. Место выбирается так, чтобы блоки не ложились друг на друга. */
     insert(pattern: string): Promise<void> {
