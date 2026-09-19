@@ -588,6 +588,30 @@ def test_rsa_verify_refuses_short_signature():
     assert not auth.rsa_verify(_N, _E, b"\x01\x02", "сообщение".encode())
 
 
+def test_rsa_verify_refuses_wrong_padding():
+    """Набивка -- часть подписи, а не рамка вокруг хеша.
+
+    Здесь блок собран правильно везде, кроме набивки: хеш тот, `DigestInfo`
+    тот, подписано настоящим ключом. Проверка, которая «ищет хеш в хвосте
+    блока», такую подпись примет -- на этом ломались самодельные реализации
+    RSASSA-PKCS1-v1_5. Наша обязана отказать.
+    """
+    signed = "сообщение".encode()
+    size = (_N.bit_length() + 7) // 8
+    digest = hashlib.sha256(signed).digest()
+    prefix = bytes.fromhex("3031300d060960864801650304020105000420")
+    # Вместо 0xff -- нули: хвост блока при этом не изменился ни на байт.
+    block = (
+        b"\x00\x01"
+        + b"\x00" * (size - 3 - len(prefix) - len(digest))
+        + b"\x00"
+        + prefix
+        + digest
+    )
+    signature = pow(int.from_bytes(block, "big"), _D, _N).to_bytes(size, "big")
+    assert not auth.rsa_verify(_N, _E, signature, signed)
+
+
 # --- настройки ----------------------------------------------------------------
 
 
