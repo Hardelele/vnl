@@ -5,6 +5,12 @@
  * конце, а среда с управляемым временем: схема, её состояние и таймлайн живут
  * вместе, на карточке паттерна и в песочнице.
  *
+ * Экрана входа тоже нет. Библиотека -- витрина: её смотрят и трогают без
+ * учётной записи, поэтому «не вошёл» не состояние приложения, а свойство
+ * отдельных действий. Вход живёт в панели рядом с именем вошедшего, а закрытое
+ * действие уводит ко входу сразу -- не окном поверх экрана и не вторым
+ * нажатием (#518).
+ *
  * Роутера нет: экранов три, адресная строка локального инструмента никому не
  * нужна, а библиотека роутинга привела бы за собой собственное состояние рядом
  * с уже имеющимся.
@@ -16,16 +22,21 @@ import { LibraryScreen } from './components/catalog/LibraryScreen'
 import { PatternScreen } from './components/pattern/PatternScreen'
 import { SandboxScreen } from './components/sandbox/SandboxScreen'
 import { AppBar, type Screen, type Tab } from './components/shell/AppBar'
-import { LoginScreen } from './components/shell/LoginScreen'
 import { PATTERNS, counted } from './lib/plural'
 import { whenUnauthorized } from './model/catalog'
 import { useCatalog } from './state/catalog'
-import { needsLogin, session, useSession } from './state/session'
+import {
+  canChange,
+  goToLogin,
+  logoutAt,
+  needsLogin,
+  session,
+  useSession,
+  whoLabel,
+} from './state/session'
 
-const TABS: Tab[] = [
-  { id: 'library', label: 'Библиотека' },
-  { id: 'sandbox', label: 'Песочница' },
-]
+/** Почему песочница закрыта. Тем же словом, что и панель на самом экране. */
+const SANDBOX_LOCKED = 'Песочница открыта после входа: это чужая работа, а не витрина'
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('library')
@@ -40,21 +51,34 @@ export function App() {
   const total = useCatalog((state) => state.catalog?.total ?? null)
 
   // Про вход спрашиваем один раз при запуске. На своей машине ответ будет
-  // «не требуется», и дальше оболочка ведёт себя как раньше.
+  // «не требуется», и в панели не появится ни кнопки, ни имени.
+  //
+  // Каждый селектор отдаёт величину, а не собранный объект: объект был бы каждый
+  // раз новым, а `useSyncExternalStore` считает новую ссылку изменением
+  // состояния и уходит в бесконечную перерисовку.
   const login = useSession((state) => state.info?.login ?? null)
-  const closed = useSession(needsLogin)
-  const sessionOffline = useSession((state) => state.offline)
-  const who = useSession((state) => {
-    const info = state.info
-    if (!info?.user || !info.logout) return null
-    return {
-      label: info.user.email ?? info.user.name ?? info.user.sub,
-      logout: info.logout,
-    }
-  })
+  const offerLogin = useSession(needsLogin)
+  const allowed = useSession(canChange)
+  const label = useSession(whoLabel)
+  const logout = useSession(logoutAt)
+  const who = useMemo(
+    () => (label && logout ? { label, logout } : null),
+    [label, logout],
+  )
+
+  const tabs = useMemo<Tab[]>(
+    () => [
+      { id: 'library', label: 'Библиотека' },
+      // Вкладка остаётся на виду и нажимаемой: спрятать или погасить её значило
+      // бы скрыть, что песочница есть. Подсказка говорит про вход до щелчка,
+      // а экран под вкладкой объясняет то же подробнее.
+      { id: 'sandbox', label: 'Песочница', locked: allowed ? undefined : SANDBOX_LOCKED },
+    ],
+    [allowed],
+  )
 
   useEffect(() => {
-    whenUnauthorized(() => session.expired())
+    whenUnauthorized((at) => session.expired(at))
     void session.refresh()
     return () => whenUnauthorized(undefined)
   }, [])
@@ -67,20 +91,20 @@ export function App() {
     return { tone: 'idle' as const, text: loading ? 'читаем библиотеку…' : 'библиотека' }
   }, [offline, loading, total])
 
-  // Пока вход не пройден, экранов приложения нет вовсе -- ни одного, даже
-  // пустого. Библиотека всё равно ответила бы 401, а показывать её каркас
-  // значило бы обещать то, чего не дадим.
-  if (closed) {
-    return <LoginScreen login={login ?? '/auth/login'} offline={sessionOffline} />
-  }
-
   return (
     <div className="shell">
       <AppBar
-        tabs={TABS}
+        tabs={tabs}
         current={screen}
         who={who}
+        signIn={offerLogin ? login ?? '/auth/login' : null}
         onPick={(chosen) => {
+          // Закрытый экран -- это переход ко входу, а не окно с вопросом:
+          // ответ на «войти?» тут и так один, и лишний шаг ничего не решает.
+          if (chosen === 'sandbox' && !allowed) {
+            goToLogin()
+            return
+          }
           setPattern(null)
           setScreen(chosen)
         }}

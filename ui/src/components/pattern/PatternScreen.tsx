@@ -9,14 +9,22 @@
  * В первой версии она живёт ровно столько, сколько открыт паттерн: пережить
  * закрытие вкладки ей незачем, а сессия, которую никто не смотрит, только
  * занимала бы память.
+ *
+ * Карточка и её симуляция открыты всем: «потрогать» -- часть просмотра. Отказ
+ * «нужен вход» здесь появиться не должен, но если сервер его всё-таки дал (не
+ * обновлён, закрыт целиком), нажатое ведёт ко входу, а то, что читалось само,
+ * объясняется подписью: уводить с экрана человека, ничего не нажимавшего,
+ * нельзя.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 
 import { LINKS, NEURONS, PORTS, counted } from '../../lib/plural'
-import { loadPattern } from '../../model/catalog'
+import { isDenied, loadPattern } from '../../model/catalog'
 import type { Contact, Neuron, PatternDetail } from '../../model/types'
+import { goToLogin, loginAt, useSession } from '../../state/session'
 import { simController, useSim } from '../../state/sim'
+import { LoginHint } from '../shell/Login'
 import { Inspector } from '../live/Inspector'
 import { LiveScheme, type Threshold } from '../live/LiveScheme'
 import { Timeline } from '../live/Timeline'
@@ -31,6 +39,8 @@ export interface PatternScreenProps {
 export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const [pattern, setPattern] = useState<PatternDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** Отказ был «нужен вход»: он поправим входом, а не повторным открытием. */
+  const [denied, setDenied] = useState(false)
   const [engine, setEngine] = useState<'elk' | 'builtin'>('builtin')
   /** Клетка, открытая в инспекторе. Общая для схемы, таймлайна и списка. */
   const [neuron, setNeuron] = useState<string | null>(null)
@@ -46,12 +56,18 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const traces = useSim((view) => view.traces)
   const dt = useSim((view) => view.dt)
   const simError = useSim((view) => view.error)
+  const simDenied = useSim((view) => view.denied)
+  const login = useSession(loginAt)
 
   useEffect(() => {
     let alive = true
     loadPattern(id)
       .then((loaded) => alive && setPattern(loaded))
-      .catch((reason: Error) => alive && setError(reason.message))
+      .catch((reason: Error) => {
+        if (!alive) return
+        setError(reason.message)
+        setDenied(isDenied(reason))
+      })
     // Симуляция открывается сразу: карточка без неё -- просто картинка.
     void control.open({ pattern: id })
     return () => {
@@ -64,9 +80,13 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
     return (
       <div className="pat">
         <Crumbs onBack={onBack} />
-        <p className="pat-alert" role="alert">
-          {error}
-        </p>
+        {denied ? (
+          <LoginHint login={login}>{error}</LoginHint>
+        ) : (
+          <p className="pat-alert" role="alert">
+            {error}
+          </p>
+        )}
       </div>
     )
   }
@@ -121,14 +141,16 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             time={time}
             duration={duration || (pattern.demo?.run.duration ?? 0)}
             busy={busy}
-            onStart={() => void control.start()}
-            onPause={() => void control.pause()}
-            onReset={() => void control.reset()}
+            onStart={() => void act(() => control.start())}
+            onPause={() => void act(() => control.pause())}
+            onReset={() => void act(() => control.reset())}
           />
         </div>
       </header>
 
-      {simError ? (
+      {simError && simDenied ? (
+        <LoginHint login={login}>{simError}</LoginHint>
+      ) : simError ? (
         <p className="pat-alert" role="alert">
           {simError}
         </p>
@@ -162,7 +184,7 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             inhibitory={Object.fromEntries(
               pattern.body.neurons.map((item) => [item.id, item.inhibitory]),
             )}
-            onSeek={(moment) => void control.seek(moment)}
+            onSeek={(moment) => void act(() => control.seek(moment))}
             selected={neuron}
             onSelect={setNeuron}
           />
@@ -228,6 +250,15 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
       </div>
     </div>
   )
+}
+
+/**
+ * Действие над симуляцией. Отказ по входу уводит ко входу: человек нажал и ждёт
+ * результата, а не приглашения нажать то же самое второй раз.
+ */
+async function act(run: () => Promise<void>): Promise<void> {
+  await run()
+  if (simController.store.getState().denied) goToLogin()
 }
 
 function Crumbs({

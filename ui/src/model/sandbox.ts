@@ -7,7 +7,7 @@
  * значило бы заводить три правды о проекте.
  */
 
-import { ApiError, OfflineError } from './catalog'
+import { request } from './catalog'
 import type { PatternPort, PointModel, RecordedVar, RunSpec, Scheme } from './types'
 
 /** Конец связи: порт блока или точка отдельного нейрона. */
@@ -107,22 +107,9 @@ export interface SandboxRow {
   updatedAt: string
 }
 
-async function ask<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch('/api' + path, init)
-  } catch (reason) {
-    throw new OfflineError(reason)
-  }
-  const text = await response.text()
-  const payload = text ? (JSON.parse(text) as unknown) : {}
-  if (!response.ok) {
-    const message =
-      (payload as { error?: string }).error ??
-      `${response.status} ${response.statusText}`
-    throw new ApiError(message, response.status)
-  }
-  return payload as T
+/** Разбор ответа общий с библиотекой: 401 здесь значит то же -- нужен вход. */
+function ask<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>('/api' + path, init)
 }
 
 function send<T>(path: string, method: string, body?: unknown): Promise<T> {

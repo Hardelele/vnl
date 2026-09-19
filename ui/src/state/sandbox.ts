@@ -14,7 +14,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { OfflineError } from '../model/catalog'
+import { OfflineError, isDenied } from '../model/catalog'
 import {
   addBlock,
   addRecording,
@@ -60,6 +60,8 @@ export interface SandboxView {
   busy: boolean
   error: string | null
   offline: boolean
+  /** Отказ был «нужен вход»: поправимо входом, а не перезапуском сервера. */
+  denied: boolean
 }
 
 const EMPTY: SandboxView = {
@@ -70,6 +72,7 @@ const EMPTY: SandboxView = {
   busy: false,
   error: null,
   offline: false,
+  denied: false,
 }
 
 export interface SandboxPorts {
@@ -121,6 +124,7 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       busy: false,
       error: reason instanceof Error ? reason.message : String(reason),
       offline: reason instanceof OfflineError,
+      denied: isDenied(reason),
     })
   }
 
@@ -134,7 +138,14 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     store.setState({ busy: true })
     try {
       const next = await run(project.id)
-      store.setState({ project: next, busy: false, error: null, offline: false, ...after })
+      store.setState({
+        project: next,
+        busy: false,
+        error: null,
+        offline: false,
+        denied: false,
+        ...after,
+      })
     } catch (reason) {
       fail(reason)
     }
@@ -144,7 +155,7 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     store.setState({ busy: true, selected: null, pending: null })
     try {
       const project = await loader()
-      store.setState({ project, busy: false, error: null, offline: false })
+      store.setState({ project, busy: false, error: null, offline: false, denied: false })
     } catch (reason) {
       fail(reason)
     }
@@ -155,7 +166,7 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     async refreshList(): Promise<void> {
       try {
-        store.setState({ list: await io.list(), error: null, offline: false })
+        store.setState({ list: await io.list(), error: null, offline: false, denied: false })
       } catch (reason) {
         fail(reason)
       }

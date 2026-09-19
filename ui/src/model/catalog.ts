@@ -59,10 +59,18 @@ export function catalogQueryString(query: CatalogQuery): string {
   return rendered ? `?${rendered}` : ''
 }
 
-async function ask<T>(path: string, init?: RequestInit, base = '/api'): Promise<T> {
+/**
+ * Один запрос к серверу: разбор ответа на все группы обращений.
+ *
+ * Общий он затем, что 401 обязан быть услышан одинаково откуда угодно. Своя
+ * копия разбора в песочнице и в симуляции однажды разошлась бы с этой -- и
+ * отказ «нужен вход» в одном месте выглядел бы как поломка, а в другом как
+ * вход.
+ */
+export async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(base + path, init)
+    response = await fetch(url, init)
   } catch (reason) {
     throw new OfflineError(reason)
   }
@@ -70,10 +78,11 @@ async function ask<T>(path: string, init?: RequestInit, base = '/api'): Promise<
   const payload = text ? (JSON.parse(text) as unknown) : {}
   if (!response.ok) {
     if (response.status === 401) {
-      // Сессия кончилась, пока вкладка была открыта. Сообщаем об этом состоянию
-      // входа, а не показываем «нет доступа» рядом со схемой: вернуть сюда может
-      // только вход, и экран должен стать экраном входа.
-      onUnauthorized?.()
+      // Закрытый маршрут без сессии -- и он же ответ «сессия кончилась, пока
+      // вкладка была открыта». Состоянию входа это говорится сразу, чтобы в
+      // панели появился вход; экран при этом не подменяется: библиотека
+      // открыта всем, а объясняет отказ то место, где его получили.
+      onUnauthorized?.((payload as { login?: string }).login)
     }
     const message =
       (payload as { error?: string }).error ??
@@ -83,16 +92,28 @@ async function ask<T>(path: string, init?: RequestInit, base = '/api'): Promise<
   return payload as T
 }
 
+function ask<T>(path: string, init?: RequestInit, base = '/api'): Promise<T> {
+  return request<T>(base + path, init)
+}
+
+/** Отказ закрытого маршрута: нужен вход, а не сервер сломался. */
+export function isDenied(reason: unknown): boolean {
+  return reason instanceof ApiError && reason.status === 401
+}
+
 /**
  * Что делать, когда сервер ответил 401.
  *
  * Обратным вызовом, а не прямым импортом состояния входа: слой запросов не
  * должен знать про сторы интерфейса, иначе его нельзя будет позвать из теста
  * без поднятого React. Подписку ставит оболочка при запуске.
+ *
+ * Адрес входа берётся из тела отказа: сервер кладёт его туда именно затем,
+ * чтобы интерфейсу не приходилось знать чужие маршруты наизусть.
  */
-let onUnauthorized: (() => void) | undefined
+let onUnauthorized: ((login?: string) => void) | undefined
 
-export function whenUnauthorized(notify: (() => void) | undefined): void {
+export function whenUnauthorized(notify: ((login?: string) => void) | undefined): void {
   onUnauthorized = notify
 }
 

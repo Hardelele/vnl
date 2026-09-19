@@ -7,7 +7,7 @@
  * расхождение с той, по которой принимают решения.
  */
 
-import { ApiError, OfflineError } from './catalog'
+import { request } from './catalog'
 
 export type SimState = 'paused' | 'running' | 'finished'
 
@@ -38,22 +38,9 @@ export interface SimUpdate {
   degradation: string[]
 }
 
-async function ask<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch('/api' + path, init)
-  } catch (reason) {
-    throw new OfflineError(reason)
-  }
-  const text = await response.text()
-  const payload = text ? (JSON.parse(text) as unknown) : {}
-  if (!response.ok) {
-    const message =
-      (payload as { error?: string }).error ??
-      `${response.status} ${response.statusText}`
-    throw new ApiError(message, response.status)
-  }
-  return payload as T
+/** Разбор ответа общий с библиотекой: см. `request`. */
+function ask<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>('/api' + path, init)
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {

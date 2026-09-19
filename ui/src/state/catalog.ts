@@ -16,6 +16,7 @@ import {
   OfflineError,
   createDraft,
   deletePattern,
+  isDenied,
   loadCatalog,
   type CatalogQuery,
 } from '../model/catalog'
@@ -36,6 +37,12 @@ export interface CatalogState {
   error: string | null
   /** Сервер не запущен: причина поправимая, и говорить о ней надо иначе. */
   offline: boolean
+  /**
+   * Отказ был «нужен вход», а не поломка. Причина поправима входом, поэтому
+   * рядом с сообщением обязана стоять ссылка на него: каталог открыт всем, и
+   * закрыто только то, что меняет библиотеку.
+   */
+  denied: boolean
 }
 
 export interface CatalogPorts {
@@ -64,6 +71,7 @@ const EMPTY: CatalogState = {
   loading: false,
   error: null,
   offline: false,
+  denied: false,
 }
 
 export interface CatalogController {
@@ -110,12 +118,19 @@ export function createCatalogController(
     try {
       const catalog = await load(query())
       if (mine !== issued) return
-      store.setState({ catalog, error: null, offline: false, loading: false })
+      store.setState({
+        catalog,
+        error: null,
+        offline: false,
+        denied: false,
+        loading: false,
+      })
     } catch (reason) {
       if (mine !== issued) return
       store.setState({
         error: reason instanceof Error ? reason.message : String(reason),
         offline: reason instanceof OfflineError,
+        denied: isDenied(reason),
         loading: false,
       })
     }
@@ -168,6 +183,7 @@ export function createCatalogController(
         store.setState({
           error: reason instanceof Error ? reason.message : String(reason),
           offline: reason instanceof OfflineError,
+          denied: isDenied(reason),
         })
         return null
       }
@@ -180,6 +196,7 @@ export function createCatalogController(
         store.setState({
           error: reason instanceof Error ? reason.message : String(reason),
           offline: reason instanceof OfflineError,
+          denied: isDenied(reason),
         })
       }
       await refresh()

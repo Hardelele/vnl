@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { OfflineError } from '../model/catalog'
+import { ApiError, OfflineError } from '../model/catalog'
 import { createCatalogController, type CatalogPorts } from './catalog'
 import type { Catalog, CatalogLevel, PatternDetail } from '../model/types'
 
@@ -195,6 +195,39 @@ describe('сервер не запущен', () => {
     expect(state.offline).toBe(true)
     expect(state.error).toContain('vnl serve')
     expect(state.loading).toBe(false)
+  })
+})
+
+describe('отказ по входу', () => {
+  it('черновик без входа -- не поломка, а нужен вход', async () => {
+    const control = createCatalogController({
+      load: vi.fn().mockResolvedValue(catalogWith([])),
+      add: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
+      schedule: manualClock().schedule,
+    })
+
+    await control.addDraft('Новый')
+
+    const state = control.store.getState()
+    // Отличать это от поломки обязательно: у одного отказа лечение -- вход, у
+    // другого -- поднять сервер, и экран должен предложить верное.
+    expect(state.denied).toBe(true)
+    expect(state.offline).toBe(false)
+    expect(state.error).toBe('нужен вход')
+  })
+
+  it('удачный запрос снимает отметку', async () => {
+    const control = createCatalogController({
+      load: vi.fn().mockResolvedValue(catalogWith(['ffi'])),
+      add: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
+      schedule: manualClock().schedule,
+    })
+
+    await control.addDraft('Новый')
+    await control.refresh()
+
+    // Человек вошёл в другой вкладке: отметка -- состояние, а не история.
+    expect(control.store.getState().denied).toBe(false)
   })
 })
 

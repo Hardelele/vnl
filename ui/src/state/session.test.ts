@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { SessionInfo } from '../model/session'
 import {
+  canChange,
   createSession,
+  goToLogin,
+  loginAt,
   needsLogin,
+  session as singleton,
+  whenLeaving,
+  whoLabel,
   type SessionPorts,
   type SessionState,
 } from './session'
@@ -35,10 +41,10 @@ function controller(ports: Partial<SessionPorts> = {}) {
 }
 
 describe('состояние входа', () => {
-  it('до ответа сервера экран входа не показывается', () => {
+  it('до ответа сервера вход не предлагается', () => {
     const { store } = controller()
-    // «Ещё не спросили» -- не то же, что «не вошёл»: иначе экран входа мигал бы
-    // на каждой загрузке страницы.
+    // «Ещё не спросили» -- не то же, что «не вошёл»: иначе кнопка входа мигала
+    // бы на каждой загрузке страницы.
     expect(needsLogin(store.getState())).toBe(false)
   })
 
@@ -49,11 +55,11 @@ describe('состояние входа', () => {
     expect(store.getState().info?.user?.email).toBe('user@reckue.com')
   })
 
-  it('не вошедшему показывает экран входа с адресом входа', async () => {
+  it('не вошедшему предлагает вход по адресу от сервера', async () => {
     const { session, store } = controller({ load: async () => closed() })
     await session.refresh()
     expect(needsLogin(store.getState())).toBe(true)
-    expect(store.getState().info?.login).toBe('/auth/login')
+    expect(loginAt(store.getState())).toBe('/auth/login')
   })
 
   it('на своей машине вход не требуется', async () => {
@@ -76,6 +82,13 @@ describe('состояние входа', () => {
     expect(needsLogin(store.getState())).toBe(false)
   })
 
+  it('вошедшего панель называет по почте', async () => {
+    const { session, store } = controller({ load: async () => entered() })
+    await session.refresh()
+    // Почта, а не `sub`: человека зовут так, как он сам себя узнаёт.
+    expect(whoLabel(store.getState())).toBe('user@reckue.com')
+  })
+
   it('401 закрывает стенд, не спрашивая сервер заново', async () => {
     const load = vi.fn(async () => entered())
     const { session, store } = controller({ load })
@@ -95,6 +108,81 @@ describe('состояние входа', () => {
     const { session, store } = controller()
     session.expired()
     expect(needsLogin(store.getState())).toBe(true)
-    expect(store.getState().info?.login).toBe('/auth/login')
+    expect(loginAt(store.getState())).toBe('/auth/login')
+  })
+
+  it('адрес входа из тела отказа сохраняется как есть', () => {
+    const { session, store } = controller()
+    // Маршрут входа называет сервер. Собирать его здесь значило бы знать чужое
+    // устройство наизусть и разойтись с ним при первой правке.
+    session.expired('/auth/login?next=/patterns/ffi')
+    expect(loginAt(store.getState())).toBe('/auth/login?next=/patterns/ffi')
+  })
+})
+
+describe('закрытые действия', () => {
+  it('на своей машине доступны без входа', async () => {
+    const { session, store } = controller({ load: async () => open() })
+    await session.refresh()
+    // Вход не настроен вовсе: запирать песочницу значило бы запереть локальный
+    // запуск, у которого рубеж -- недосягаемость 127.0.0.1.
+    expect(canChange(store.getState())).toBe(true)
+  })
+
+  it('на стенде без входа недоступны', async () => {
+    const { session, store } = controller({ load: async () => closed() })
+    await session.refresh()
+    expect(canChange(store.getState())).toBe(false)
+  })
+
+  it('вошедшему доступны', async () => {
+    const { session, store } = controller({ load: async () => entered() })
+    await session.refresh()
+    expect(canChange(store.getState())).toBe(true)
+  })
+
+  it('до ответа сервера отказ не обещается', () => {
+    const { store } = controller()
+    // Ответ приходит сразу за первым кадром, и запирать на это время песочницу
+    // значило бы мигать «нужен вход» при каждом локальном запуске. Настоящий
+    // отказ придёт от сервера и объяснит себя на месте.
+    expect(canChange(store.getState())).toBe(true)
+  })
+
+  it('истёкшая сессия закрывает их снова', async () => {
+    const { session, store } = controller({ load: async () => entered() })
+    await session.refresh()
+    session.expired()
+    expect(canChange(store.getState())).toBe(false)
+  })
+})
+
+describe('уход на вход', () => {
+  it('ведёт по адресу, который назвал сервер', () => {
+    const went: string[] = []
+    whenLeaving((url) => went.push(url))
+    try {
+      singleton.expired('/auth/login?next=/patterns/ffi')
+      goToLogin()
+      // Переход, а не окно с вопросом: ответ на «войти?» тут и так один, а шаг
+      // перед тем же переходом лишний.
+      expect(went).toEqual(['/auth/login?next=/patterns/ffi'])
+    } finally {
+      whenLeaving()
+    }
+  })
+
+  it('уводит один раз, сколько бы отказов ни пришло', () => {
+    const went: string[] = []
+    whenLeaving((url) => went.push(url))
+    try {
+      // На одно действие сервер успевает отказать не раз: проект, список,
+      // опрос симуляции. Уход при этом один -- второй перебил бы первый.
+      goToLogin()
+      goToLogin()
+      expect(went).toHaveLength(1)
+    } finally {
+      whenLeaving()
+    }
   })
 })

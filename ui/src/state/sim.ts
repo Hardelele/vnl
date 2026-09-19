@@ -19,7 +19,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { OfflineError } from '../model/catalog'
+import { OfflineError, isDenied } from '../model/catalog'
 import {
   closeSim,
   openSim,
@@ -55,6 +55,8 @@ export interface SimView {
   busy: boolean
   error: string | null
   offline: boolean
+  /** Отказ был «нужен вход»: сессия песочницы чужой не бывает. */
+  denied: boolean
 }
 
 const EMPTY: SimView = {
@@ -72,6 +74,7 @@ const EMPTY: SimView = {
   busy: false,
   error: null,
   offline: false,
+  denied: false,
 }
 
 export interface SimPorts {
@@ -140,6 +143,7 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
       degradation: update.degradation,
       error: null,
       offline: false,
+      denied: false,
     })
     if (update.state === 'running') watch()
     else unwatch()
@@ -150,6 +154,7 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
     store.setState({
       error: reason instanceof Error ? reason.message : String(reason),
       offline: reason instanceof OfflineError,
+      denied: isDenied(reason),
       busy: false,
     })
   }
@@ -217,7 +222,7 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
      * история, и висеть на экране оно не должно.
      */
     forget(): void {
-      store.setState({ error: null, offline: false })
+      store.setState({ error: null, offline: false, denied: false })
     },
   }
 }

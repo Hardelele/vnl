@@ -8,6 +8,7 @@ import {
   loadCatalog,
   whenUnauthorized,
 } from './catalog'
+import { openSandbox } from './sandbox'
 
 function reply(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -111,7 +112,7 @@ describe('отказ по входу', () => {
     whenUnauthorized(told)
     try {
       const failure = await loadCatalog().catch((error) => error)
-      // И то и другое обязательно: подписчик меняет экран на вход, а вызвавший
+      // И то и другое обязательно: подписчик ставит в панель вход, а вызвавший
       // запрос код всё равно должен узнать, что данных нет.
       expect(told).toHaveBeenCalledTimes(1)
       expect(failure).toBeInstanceOf(ApiError)
@@ -126,6 +127,43 @@ describe('отказ по входу', () => {
     whenUnauthorized(undefined)
     const failure = await loadCatalog().catch((error) => error)
     expect(failure).toBeInstanceOf(ApiError)
+  })
+
+  it('адрес входа из тела отказа доносится подписчику', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(reply({ error: 'нужен вход', login: '/auth/login' }, 401)),
+    )
+    const told = vi.fn()
+    whenUnauthorized(told)
+    try {
+      await loadCatalog().catch(() => undefined)
+      // Маршрут входа называет сервер, и передать его надо как есть: собирать
+      // такой адрес в интерфейсе значило бы держать вторую копию чужой схемы.
+      expect(told).toHaveBeenCalledWith('/auth/login')
+    } finally {
+      whenUnauthorized(undefined)
+    }
+  })
+
+  it('401 на маршруте песочницы слышен так же, как на библиотеке', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(reply({ error: 'нужен вход', login: '/auth/login' }, 401)),
+    )
+    const told = vi.fn()
+    whenUnauthorized(told)
+    try {
+      const failure = await openSandbox('s1').catch((error) => error)
+      // Разбор ответа один на все обращения. Своя копия в песочнице однажды
+      // разошлась бы с этой, и один и тот же отказ выглядел бы то входом, то
+      // поломкой -- в зависимости от того, какой экран его получил.
+      expect(told).toHaveBeenCalledWith('/auth/login')
+      expect(failure).toBeInstanceOf(ApiError)
+      expect(failure.status).toBe(401)
+    } finally {
+      whenUnauthorized(undefined)
+    }
   })
 
   it('успешный ответ подписчика не трогает', async () => {

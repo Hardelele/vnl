@@ -8,6 +8,11 @@
  * «Добавить» сразу заводит черновик с рабочим именем: пустая форма имени
  * посреди каталога спрашивает то, чего человек ещё не решил, а переименование
  * -- дело карточки паттерна (#478).
+ *
+ * Смотреть каталог можно без входа, менять библиотеку -- нет. Строка под
+ * заголовком говорит об этом до нажатия, а «Добавить» без сессии уводит ко
+ * входу: отказ вместо результата -- худший способ сообщить правило, а окно с
+ * вопросом «войти?» -- лишний шаг перед тем же переходом (#518).
  */
 
 import { useEffect } from 'react'
@@ -15,6 +20,8 @@ import { useEffect } from 'react'
 import { PATTERNS, counted } from '../../lib/plural'
 import type { Catalog, Pattern, PatternStatus } from '../../model/types'
 import { catalogController, useCatalog } from '../../state/catalog'
+import { canChange, goToLogin, loginAt, useSession } from '../../state/session'
+import { LoginHint } from '../shell/Login'
 import { PatternCard } from './PatternCard'
 import './library.css'
 
@@ -33,6 +40,8 @@ export interface LibraryScreenProps {
 export function LibraryScreen({ onOpen }: LibraryScreenProps) {
   const state = useCatalog((current) => current)
   const control = catalogController
+  const allowed = useSession(canChange)
+  const login = useSession(loginAt)
 
   useEffect(() => {
     void control.refresh()
@@ -73,14 +82,32 @@ export function LibraryScreen({ onOpen }: LibraryScreenProps) {
           <button
             type="button"
             className="btn-primary"
-            onClick={() => void control.addDraft(NEW_DRAFT_NAME)}
+            title={allowed ? undefined : 'Черновик заводится после входа'}
+            onClick={() => void add()}
           >
             Добавить
           </button>
         </div>
       </header>
 
-      {state.error ? (
+      {/* Правило видно до того, как в него упрёшься: смотреть -- всем, менять
+          -- вошедшим. Иначе «Добавить» выглядела бы сломанной кнопкой. Когда
+          отказ уже пришёл, правило молчит: два предложения войти подряд
+          объясняют не лучше одного. */}
+      {!allowed && !state.denied ? (
+        <LoginHint login={login}>
+          Библиотеку можно смотреть и запускать без входа. Заводить и удалять
+          паттерны — после входа.
+        </LoginHint>
+      ) : null}
+
+      {/* Отказ закрытого маршрута -- не поломка: он поправим входом. Сюда
+          попадает только отказ, которого никто не просил (каталог читается сам),
+          -- уводить с экрана без нажатия нельзя, поэтому здесь подпись со
+          ссылкой. Отказ на нажатую кнопку уводит ко входу и сюда не доходит. */}
+      {state.error && state.denied ? (
+        <LoginHint login={login}>{state.error}</LoginHint>
+      ) : state.error ? (
         <p className={`lib-alert${state.offline ? ' is-offline' : ''}`} role="alert">
           {state.error}
         </p>
@@ -89,6 +116,15 @@ export function LibraryScreen({ onOpen }: LibraryScreenProps) {
       {catalog ? <Groups catalog={catalog} onOpen={onOpen} /> : null}
     </div>
   )
+
+  /** «Добавить»: без сессии -- сразу ко входу, с сессией -- новый черновик. */
+  async function add(): Promise<void> {
+    if (!allowed) return goToLogin()
+    await control.addDraft(NEW_DRAFT_NAME)
+    // Сессия могла кончиться, пока вкладка была открыта: человек нажал и ждёт
+    // результата, поэтому его ведут ко входу, а не просят нажать ещё раз.
+    if (catalogController.store.getState().denied) goToLogin()
+  }
 }
 
 function summary(catalog: Catalog | null, loading: boolean): string {

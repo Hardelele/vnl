@@ -9,6 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '../model/catalog'
 import type { SandboxState } from '../model/sandbox'
 import { createSandboxController, type SandboxPorts } from './sandbox'
 import type { PointModel } from '../model/types'
@@ -170,5 +171,36 @@ describe('параметры прогона', () => {
     await control.setRun({ duration: 10 })
 
     expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('отказ по входу', () => {
+  it('закрытая песочница -- это нужен вход, а не молчащий сервер', async () => {
+    const control = createSandboxController({
+      open: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
+    })
+
+    await control.open('s1')
+
+    const state = control.store.getState()
+    // Песочница закрыта целиком, включая чтение: проект -- чужая работа. Экран
+    // обязан предложить вход, поэтому отказ отличается от «сервер не запущен».
+    expect(state.denied).toBe(true)
+    expect(state.offline).toBe(false)
+    expect(state.project).toBeNull()
+  })
+
+  it('сессия, кончившаяся посреди работы, не выбрасывает проект с экрана', async () => {
+    const control = await opened({
+      save: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
+    })
+
+    await control.save()
+
+    const state = control.store.getState()
+    // Схема на холсте никуда не делась, и потерять её из-за истёкшей сессии
+    // человек не должен: сказать надо про вход, а не убрать работу.
+    expect(state.denied).toBe(true)
+    expect(state.project?.id).toBe('s1')
   })
 })

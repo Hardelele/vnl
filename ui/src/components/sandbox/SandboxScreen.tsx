@@ -7,6 +7,12 @@
  *
  * Симуляция здесь такая же, как на карточке паттерна: собранная сеть, живое
  * время, пауза и откат. Отдельного «результата» нет и тут.
+ *
+ * Без входа песочницы нет: проект -- чужая работа, а не витрина, и сервер
+ * закрывает даже чтение. Поэтому сюда не заходят без сессии -- щелчок по
+ * вкладке уводит ко входу, -- а если сессия кончилась посреди работы, экран
+ * ведёт туда же: человек нажал и ждёт результата, а не приглашения нажать ещё
+ * раз (#518).
  */
 
 import { useEffect, useState } from 'react'
@@ -14,6 +20,7 @@ import { useEffect, useState } from 'react'
 import type { SandboxBlock } from '../../model/sandbox'
 import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
+import { canChange, goToLogin, useSession } from '../../state/session'
 import { simController, useSim } from '../../state/sim'
 import { Thumbnail } from '../catalog/Thumbnail'
 import { Timeline } from '../live/Timeline'
@@ -34,6 +41,8 @@ export function SandboxScreen() {
   const selected = useSandbox((state) => state.selected)
   const pending = useSandbox((state) => state.pending)
   const error = useSandbox((state) => state.error)
+  const denied = useSandbox((state) => state.denied)
+  const allowed = useSession(canChange)
 
   const catalog = useCatalog((state) => state.catalog)
   const simState = useSim((state) => state.state)
@@ -45,13 +54,27 @@ export function SandboxScreen() {
   const traces = useSim((state) => state.traces)
   const dt = useSim((state) => state.dt)
   const simError = useSim((state) => state.error)
+  const simDenied = useSim((state) => state.denied)
   const simId = useSim((state) => state.id)
   const built = useSim((state) => state.built)
 
   useEffect(() => {
+    // Без входа список песочниц запрашивать нечем: сервер откажет. Сюда так и
+    // так попадают только с сессией, но она могла кончиться по дороге.
+    if (!allowed) {
+      goToLogin()
+      return
+    }
     void control.refreshList()
     void catalogController.refresh()
-  }, [control])
+  }, [control, allowed])
+
+  // Отказ по входу в песочнице всегда ответ на чьё-то действие: сюда не
+  // заходят просто так. Значит ведём ко входу, а не показываем сообщение и
+  // ждём, пока то же самое нажмут второй раз.
+  useEffect(() => {
+    if (denied || simDenied) goToLogin()
+  }, [denied, simDenied])
 
   // Симуляция принадлежит схеме, а не экрану: другой проект -- другая сеть, и
   // прежняя сессия не должна его переживать. Иначе в пустом проекте под холстом
@@ -68,6 +91,17 @@ export function SandboxScreen() {
   useEffect(() => {
     if (project) sim.forget()
   }, [sim, project])
+
+  if (!allowed) {
+    // Браузер уже уходит на вход; строка стоит на время перехода, чтобы экран
+    // не мигнул пустотой.
+    return (
+      <div className="sb-empty">
+        <h1 className="sb-title">Песочница</h1>
+        <p className="sb-hint">Открыта после входа — переходим ко входу…</p>
+      </div>
+    )
+  }
 
   if (!project) {
     return (

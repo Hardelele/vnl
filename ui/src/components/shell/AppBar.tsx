@@ -17,6 +17,14 @@ export interface Tab {
   label: string
   /** Почему кнопка недоступна. Пустая строка -- доступна. */
   pending?: string
+  /**
+   * Экран есть, но до него нужен вход.
+   *
+   * Не `pending`: недоступной кнопкой это делать нельзя. Человек должен видеть,
+   * что песочница существует, и узнать про вход до щелчка, а не вместо
+   * результата. Сам экран объяснит то же подробнее.
+   */
+  locked?: string
 }
 
 export interface AppBarProps {
@@ -26,9 +34,18 @@ export interface AppBarProps {
   status: { tone: 'ok' | 'off' | 'idle'; text: string }
   /** Кто вошёл и куда уводит выход. Без входа (своя машина) -- ничего. */
   who?: { label: string; logout: string } | null
+  /** Куда уводить за входом, пока никто не вошёл. `null` -- вход не настроен. */
+  signIn?: string | null
 }
 
-export function AppBar({ tabs, current, onPick, status, who = null }: AppBarProps) {
+export function AppBar({
+  tabs,
+  current,
+  onPick,
+  status,
+  who = null,
+  signIn = null,
+}: AppBarProps) {
   const theme = useTheme()
 
   return (
@@ -41,10 +58,12 @@ export function AppBar({ tabs, current, onPick, status, who = null }: AppBarProp
           <button
             key={tab.id}
             type="button"
-            className={`bar-tab${current === tab.id ? ' is-on' : ''}`}
+            className={`bar-tab${current === tab.id ? ' is-on' : ''}${
+              tab.locked ? ' is-locked' : ''
+            }`}
             aria-current={current === tab.id ? 'page' : undefined}
             disabled={Boolean(tab.pending)}
-            title={tab.pending}
+            title={tab.pending ?? tab.locked}
             onClick={() => onPick(tab.id)}
           >
             {tab.label}
@@ -66,6 +85,13 @@ export function AppBar({ tabs, current, onPick, status, who = null }: AppBarProp
             Выйти
           </a>
         </>
+      ) : null}
+      {/* Вход стоит здесь же, где потом встанет имя вошедшего: это одно и то же
+          место панели в двух состояниях, а не два разных экрана. */}
+      {signIn ? (
+        <a className="bar-in" href={signIn}>
+          Войти
+        </a>
       ) : null}
       <button
         type="button"
