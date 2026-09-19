@@ -942,12 +942,35 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", _caching(target, root))
         self.end_headers()
         self.wfile.write(body)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         if not self.quiet:
             super().log_message(fmt, *args)
+
+
+def _caching(target: Path, root: Path) -> str:
+    """Что говорить браузеру о сроке годности файла интерфейса.
+
+    Vite складывает в `assets/` файлы, в имени которых стоит хеш содержимого:
+    такое имя означает ровно одно содержимое навсегда, и перепрашивать его
+    незачем. Всё остальное -- `index.html`, иконка, `favicon` -- лежит под
+    постоянными именами и меняется с выкатом, поэтому им `no-cache`: не «не
+    храни», а «спроси, не изменилось ли».
+
+    Без этого браузер оставлял себе старый `index.html` и после выката просил
+    по нему файлы, которых уже нет, а с сервером говорил старым форматом --
+    экран показывал не новую версию, а ошибку.
+    """
+    try:
+        inside = target.relative_to(root)
+    except ValueError:  # пути не под корнем сюда не доходят, но гадать не будем
+        return "no-cache"
+    if inside.parts and inside.parts[0] == "assets":
+        return "public, max-age=31536000, immutable"
+    return "no-cache"
 
 
 def create_server(

@@ -221,6 +221,31 @@ def test_a_built_ui_is_served_with_its_own_routing(tmp_path):
         thread.join(timeout=5)
 
 
+def test_the_page_is_rechecked_and_hashed_files_are_not(tmp_path):
+    """Иначе после выката браузер показывает старый экран, а не новую версию.
+
+    `index.html` меняется с каждой сборкой, а файлы в `assets/` названы по хешу
+    содержимого. Спрашивать заново надо первый, а не вторые.
+    """
+    ui = tmp_path / "dist"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text("<title>VNL</title>", encoding="utf-8")
+    (ui / "assets" / "app-a1b2c3.js").write_text("export const ok = 1", encoding="utf-8")
+    server = create_server(tmp_path / "store", port=0, ui=ui, quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with urllib.request.urlopen(base + "/") as response:
+            assert response.headers["Cache-Control"] == "no-cache"
+        with urllib.request.urlopen(base + "/assets/app-a1b2c3.js") as response:
+            assert "immutable" in response.headers["Cache-Control"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_a_path_cannot_escape_the_ui(tmp_path):
     """`..` в пути не должен вынести за каталог интерфейса."""
     ui = tmp_path / "dist"
