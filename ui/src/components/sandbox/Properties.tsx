@@ -22,7 +22,7 @@ import type {
   SandboxRecording,
   SandboxState,
 } from '../../model/sandbox'
-import type { PointModel, RecordedVar, RunSpec } from '../../model/types'
+import type { PatternPort, PointModel, RecordedVar, RunSpec } from '../../model/types'
 import { sandboxController, type Selection } from '../../state/sandbox'
 
 /** Рецепторы: тот же список, что в `ir.RECEPTORS`. */
@@ -65,6 +65,47 @@ const CELL_FIELDS: Array<{ key: CellField; label: string; step?: number }> = [
  */
 export function where(endpoint: Pick<Endpoint, 'instance' | 'port'>): string {
   return endpoint.port ? `${endpoint.instance}.${endpoint.port}` : endpoint.instance
+}
+
+/**
+ * На какой порт можно подать драйв и какой можно записывать (#533).
+ *
+ * Модуляторный порт попадает в оба списка, и это не послабление: `gate` у
+ * `disinhibition` смотрит на VIP, а `dopamine` -- на VTA, то есть это обычные
+ * клетки, которые точно так же принимают стимул и точно так же спайкают. Ради
+ * них паттерн и вставляют: без драйва на `gate` растормаживания не увидеть, а
+ * без записи с `dopamine` не увидеть, когда пришло подкрепление.
+ *
+ * Разделения «mod -- только вход» или «mod -- только выход» здесь нет
+ * намеренно: модулятор и стимулируют, и смотрят, и любой из двух половин не
+ * хватило бы. Сервер и так не ограничивает ни то, ни другое -- `add_stimulus`
+ * принимает любой конец связи, а `resolve_endpoint` разбирает порт любого
+ * направления, -- так что вторая, более строгая правда о портах жила бы только
+ * в этой панели и расходилась бы с тем, что на самом деле можно.
+ */
+function canDrive(port: PatternPort): boolean {
+  return port.direction === 'in' || port.direction === 'mod'
+}
+
+function canRecord(port: PatternPort): boolean {
+  return port.direction === 'out' || port.direction === 'mod'
+}
+
+/**
+ * Имя порта в кнопке драйва и записи.
+ *
+ * У `disinhibition` четыре входа -- `in`, `tonic`, `gate`, `dopamine`, -- и по
+ * столбцу одинаковых «Драйв на …» не понять, куда бьёшь: два последних порта
+ * модуляторные, и драйв на них делает не то же самое, что драйв на `in`.
+ * Поэтому модуляторный вход назван словом.
+ *
+ * Слово, а не значок или `mod` из ответа сервера: значок пришлось бы
+ * объяснять, а направление подряд машинным именем уже стоит выше в списке
+ * портов -- там оно к месту, потому что рядом видно и точку, на которую порт
+ * смотрит.
+ */
+function portTitle(port: PatternPort): string {
+  return port.direction === 'mod' ? `модулятор ${port.name}` : port.name
 }
 
 export function Properties({
@@ -214,30 +255,26 @@ function BlockProps({
       ))}
 
       <div className="sb-actions">
-        {block.ports
-          .filter((port) => port.direction === 'in')
-          .map((port) => (
-            <button
-              key={port.name}
-              type="button"
-              className="btn-secondary"
-              onClick={() => void control.stimulate(block.id, port.name)}
-            >
-              Драйв на {port.name}
-            </button>
-          ))}
-        {block.ports
-          .filter((port) => port.direction === 'out')
-          .map((port) => (
-            <button
-              key={port.name}
-              type="button"
-              className="btn-secondary"
-              onClick={() => void control.record(block.id, port.name)}
-            >
-              Записывать {port.name}
-            </button>
-          ))}
+        {block.ports.filter(canDrive).map((port) => (
+          <button
+            key={port.name}
+            type="button"
+            className="btn-secondary"
+            onClick={() => void control.stimulate(block.id, port.name)}
+          >
+            Драйв на {portTitle(port)}
+          </button>
+        ))}
+        {block.ports.filter(canRecord).map((port) => (
+          <button
+            key={port.name}
+            type="button"
+            className="btn-secondary"
+            onClick={() => void control.record(block.id, port.name)}
+          >
+            Записывать {portTitle(port)}
+          </button>
+        ))}
         <button
           type="button"
           className="btn-secondary"
