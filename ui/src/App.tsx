@@ -10,14 +10,17 @@
  * с уже имеющимся.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { LibraryScreen } from './components/catalog/LibraryScreen'
 import { PatternScreen } from './components/pattern/PatternScreen'
 import { SandboxScreen } from './components/sandbox/SandboxScreen'
 import { AppBar, type Screen, type Tab } from './components/shell/AppBar'
+import { LoginScreen } from './components/shell/LoginScreen'
 import { PATTERNS, counted } from './lib/plural'
+import { whenUnauthorized } from './model/catalog'
 import { useCatalog } from './state/catalog'
+import { needsLogin, session, useSession } from './state/session'
 
 const TABS: Tab[] = [
   { id: 'library', label: 'Библиотека' },
@@ -36,6 +39,26 @@ export function App() {
   const loading = useCatalog((state) => state.loading)
   const total = useCatalog((state) => state.catalog?.total ?? null)
 
+  // Про вход спрашиваем один раз при запуске. На своей машине ответ будет
+  // «не требуется», и дальше оболочка ведёт себя как раньше.
+  const login = useSession((state) => state.info?.login ?? null)
+  const closed = useSession(needsLogin)
+  const sessionOffline = useSession((state) => state.offline)
+  const who = useSession((state) => {
+    const info = state.info
+    if (!info?.user || !info.logout) return null
+    return {
+      label: info.user.email ?? info.user.name ?? info.user.sub,
+      logout: info.logout,
+    }
+  })
+
+  useEffect(() => {
+    whenUnauthorized(() => session.expired())
+    void session.refresh()
+    return () => whenUnauthorized(undefined)
+  }, [])
+
   const status = useMemo(() => {
     if (offline) return { tone: 'off' as const, text: 'сервер библиотеки не отвечает' }
     if (total !== null) {
@@ -44,11 +67,19 @@ export function App() {
     return { tone: 'idle' as const, text: loading ? 'читаем библиотеку…' : 'библиотека' }
   }, [offline, loading, total])
 
+  // Пока вход не пройден, экранов приложения нет вовсе -- ни одного, даже
+  // пустого. Библиотека всё равно ответила бы 401, а показывать её каркас
+  // значило бы обещать то, чего не дадим.
+  if (closed) {
+    return <LoginScreen login={login ?? '/auth/login'} offline={sessionOffline} />
+  }
+
   return (
     <div className="shell">
       <AppBar
         tabs={TABS}
         current={screen}
+        who={who}
         onPick={(chosen) => {
           setPattern(null)
           setScreen(chosen)

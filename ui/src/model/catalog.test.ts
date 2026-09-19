@@ -6,6 +6,7 @@ import {
   catalogQueryString,
   createDraft,
   loadCatalog,
+  whenUnauthorized,
 } from './catalog'
 
 function reply(body: unknown, status = 200): Response {
@@ -97,5 +98,45 @@ describe('каталог', () => {
     expect(url).toBe('/api/patterns')
     expect(init.method).toBe('POST')
     expect(JSON.parse(String(init.body))).toEqual({ name: 'Проба', level: 'L2' })
+  })
+})
+
+describe('отказ по входу', () => {
+  it('401 доносится подписчику и остаётся ошибкой запроса', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(reply({ error: 'нужен вход через Reckue auth' }, 401)),
+    )
+    const told = vi.fn()
+    whenUnauthorized(told)
+    try {
+      const failure = await loadCatalog().catch((error) => error)
+      // И то и другое обязательно: подписчик меняет экран на вход, а вызвавший
+      // запрос код всё равно должен узнать, что данных нет.
+      expect(told).toHaveBeenCalledTimes(1)
+      expect(failure).toBeInstanceOf(ApiError)
+      expect(failure.status).toBe(401)
+    } finally {
+      whenUnauthorized(undefined)
+    }
+  })
+
+  it('без подписчика 401 ничего не ломает', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ error: 'нужен вход' }, 401)))
+    whenUnauthorized(undefined)
+    const failure = await loadCatalog().catch((error) => error)
+    expect(failure).toBeInstanceOf(ApiError)
+  })
+
+  it('успешный ответ подписчика не трогает', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(empty)))
+    const told = vi.fn()
+    whenUnauthorized(told)
+    try {
+      await loadCatalog()
+      expect(told).not.toHaveBeenCalled()
+    } finally {
+      whenUnauthorized(undefined)
+    }
   })
 })

@@ -69,12 +69,31 @@ async function ask<T>(path: string, init?: RequestInit, base = '/api'): Promise<
   const text = await response.text()
   const payload = text ? (JSON.parse(text) as unknown) : {}
   if (!response.ok) {
+    if (response.status === 401) {
+      // Сессия кончилась, пока вкладка была открыта. Сообщаем об этом состоянию
+      // входа, а не показываем «нет доступа» рядом со схемой: вернуть сюда может
+      // только вход, и экран должен стать экраном входа.
+      onUnauthorized?.()
+    }
     const message =
       (payload as { error?: string }).error ??
       `${response.status} ${response.statusText}`
     throw new ApiError(message, response.status)
   }
   return payload as T
+}
+
+/**
+ * Что делать, когда сервер ответил 401.
+ *
+ * Обратным вызовом, а не прямым импортом состояния входа: слой запросов не
+ * должен знать про сторы интерфейса, иначе его нельзя будет позвать из теста
+ * без поднятого React. Подписку ставит оболочка при запуске.
+ */
+let onUnauthorized: (() => void) | undefined
+
+export function whenUnauthorized(notify: (() => void) | undefined): void {
+  onUnauthorized = notify
 }
 
 function checkSchema(schema: number): void {

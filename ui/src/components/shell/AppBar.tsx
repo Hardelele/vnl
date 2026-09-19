@@ -24,9 +24,11 @@ export interface AppBarProps {
   current: Screen
   onPick: (screen: Screen) => void
   status: { tone: 'ok' | 'off' | 'idle'; text: string }
+  /** Кто вошёл и куда уводит выход. Без входа (своя машина) -- ничего. */
+  who?: { label: string; logout: string } | null
 }
 
-export function AppBar({ tabs, current, onPick, status }: AppBarProps) {
+export function AppBar({ tabs, current, onPick, status, who = null }: AppBarProps) {
   const theme = useTheme()
 
   return (
@@ -53,6 +55,18 @@ export function AppBar({ tabs, current, onPick, status }: AppBarProps) {
         <span className={`bar-led is-${status.tone}`} />
         {status.text}
       </span>
+      {who ? (
+        <>
+          <span className="bar-who" title={who.label}>
+            {who.label}
+          </span>
+          {/* Выход -- ссылка, а не кнопка с fetch: он уводит к провайдеру
+              закрывать сессию, то есть это переход, а не запрос. */}
+          <a className="bar-out" href={who.logout}>
+            Выйти
+          </a>
+        </>
+      ) : null}
       <button
         type="button"
         className="bar-theme"

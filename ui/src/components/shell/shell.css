@@ -112,3 +112,100 @@
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
+
+/* --- вход ------------------------------------------------------------------
+   Экран входа: единственный экран, который видно до входа, поэтому на нём нет
+   ни панели, ни навигации -- только кто мы и куда идти. */
+
+.login {
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--canvas, var(--panel));
+}
+
+.login-card {
+  width: min(28rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6, 32px) var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  text-align: left;
+}
+
+.login-mark {
+  font-size: var(--text-md, 16px);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
+}
+
+.login-title {
+  margin: 0;
+  font-size: var(--text-lg, 20px);
+  font-weight: var(--weight-medium);
+}
+
+.login-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+.login-go {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  padding: 8px var(--space-4);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--panel);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.login-go:hover {
+  opacity: 0.9;
+}
+
+.login-go:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Кто вошёл, в правом углу панели. Почта длинная, поэтому она обрезается, а не
+   растягивает панель и не переносит строку. */
+.bar-who {
+  max-width: 14rem;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-sm, 13px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-out {
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm, 13px);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.bar-out:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+
+.bar-out:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

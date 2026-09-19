@@ -145,6 +145,25 @@ The server is built on `http.server` from the standard library and listens on
 than convenient validation: `pip install -e .` installs the whole tool. The
 server also serves a built interface itself — `vnl serve --ui ui/dist --open`.
 
+On your own machine there is no login and none is needed: nothing can reach a
+port on `127.0.0.1`. A shared stand is different — there the server sits behind
+nginx, which talks to it with `Host: localhost`, so the `Host` check lets
+everyone through. For that case there is a login through Reckue auth (OIDC,
+`vnl/auth.py`): five environment variables switch it on, and without them it is
+not on at all.
+
+```bash
+VNL_OIDC_ISSUER=https://auth.reckue.com
+VNL_OIDC_CLIENT_ID=...          # the client is registered with the provider
+VNL_OIDC_CLIENT_SECRET=...
+VNL_OIDC_REDIRECT_URI=https://vnl.reckue.com/auth/callback
+VNL_SESSION_SECRET=...          # signs the app's own session cookie
+```
+
+There is no half of that set: with an incomplete configuration the server
+refuses to start rather than coming up "partly protected". The `id_token`
+signature check is our own, on `pow` — the core still has zero dependencies.
+
 ![The pattern library](docs/img/library.png)
 
 The catalog is grouped by the scale of the construction: L1 for cells and
@@ -264,7 +283,7 @@ script plus a list of losses», not a model quietly trimmed down.
 - a React interface: library, pattern card and sandbox with controllable time;
 - patterns, sandboxes and the store: a searchable library and a local server
   for the interface;
-- 162 tests for the core and 51 for the interface. The core has no dependencies:
+- 278 tests for the core and 81 for the interface. The core has no dependencies:
   Node and ELK are only for the picture, React only for the interface.
 
 ## What is not there yet

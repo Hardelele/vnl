@@ -7,9 +7,8 @@
 
 Почему на `http.server`, а не на фреймворке. У ядра нет зависимостей, и это
 свойство стоит дороже удобной валидации: `pip install -e .` ставит инструмент
-целиком, без колёс под нужную версию Python. Ни схем, ни авторизации, ни
-асинхронности здесь нет, и это не упрощение, а точное описание задачи: один
-человек, один локальный порт.
+целиком, без колёс под нужную версию Python. Ни схем, ни асинхронности здесь
+нет, и это не упрощение, а точное описание задачи: один человек, один порт.
 
 Операции лежат в `Api` отдельно от HTTP. Тем же способом их позовёт MCP (#482):
 у Claude и у холста должно быть одно состояние, а не две копии правды.
@@ -21,6 +20,14 @@
 `127.0.0.1` -- его собственный loopback, до которого опубликованный порт не
 доходит. Проверка `Host` остаётся при любом адресе.
 
+Вход. На стенде (`vnl.reckue.com`) сервер стоит за nginx, и тот ходит сюда с
+`Host: localhost` -- то есть проверка `Host` там пропускает весь интернет и
+рубежом быть перестаёт. Поэтому есть второй, отдельный: вход через Reckue auth
+(`vnl/auth.py`). Он включается настройками в окружении, и без них сервер ведёт
+себя как прежде -- так запуск на своей машине не требует ни интернета, ни
+учётной записи. Проверка `Host` при этом остаётся: она отвечает на другой
+вопрос («с этой ли машины запрос»), и одна другую не заменяет.
+
 Интерфейс в разработке живёт на Vite (5173) и ходит сюда через его прокси,
 поэтому CORS здесь нет: заголовки, разрешающие чужой источник, для локального
 инструмента не удобство, а лишняя дверь. Собранный `ui/dist` сервер отдаёт сам,
@@ -29,18 +36,23 @@
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass
+from html import escape
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import __version__, api
+from . import __version__, api, auth
 from .catalog import Query
 from .compose import compose
 from .index import Index, IndexUnavailable
@@ -593,6 +605,9 @@ class Handler(BaseHTTPRequestHandler):
     table: list[Route]
     ui: Path | None = None
     quiet: bool = False
+    #: Вход через Reckue auth. `None` -- вход не настроен, и тогда сервер
+    #: работает как раньше: закрыт тем, что слушает только 127.0.0.1.
+    provider: auth.Provider | None = None
 
     def do_GET(self) -> None:
         self._handle("GET")
@@ -614,6 +629,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         split = urlsplit(self.path)
         path = unquote(split.path)
+        params = parse_qs(split.query)
+
+        # Шаги входа доступны без сессии -- иначе войти было бы нельзя.
+        if path.startswith("/auth/"):
+            self._login_step(method, path, params)
+            return
+        # `/api/ready` и `/api/session` отвечают до проверки сессии намеренно:
+        # первый нужен выкату (ansible ждёт 200 на 127.0.0.1, и закрывать его
+        # значило бы завязать проверку здоровья службы на чужой сервис),
+        # второй -- интерфейсу, чтобы он показал экран входа, а не пустоту.
+        # Ни тот, ни другой не отдают ничего из библиотеки.
+        if path == "/api/ready":
+            self._send(200, {"ok": True, "version": __version__})
+            return
+        if path == "/api/session":
+            self._send(200, self._session_payload())
+            return
+        if not self._entered():
+            self._refuse(path)
+            return
+
         if not path.startswith("/api/"):
             self._static(path, method)
             return
@@ -623,7 +659,7 @@ class Handler(BaseHTTPRequestHandler):
             match = route.path.match(path)
             if not match:
                 continue
-            self._call(route, match, parse_qs(split.query))
+            self._call(route, match, params)
             return
         self._send(404, {"error": f"нет маршрута {method} {path}"})
 
@@ -662,6 +698,213 @@ class Handler(BaseHTTPRequestHandler):
     def _host_is_local(self) -> bool:
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         return host in LOCAL_HOSTS or not host
+
+    # --- вход -------------------------------------------------------------
+    #
+    # Проверка `Host` выше и вход здесь закрывают разное. Первая отвечает на
+    # «с этой ли машины пришёл запрос», второй -- на «кто этот человек».
+    # На стенде nginx ходит сюда с `Host: localhost`, то есть для приложения
+    # весь интернет выглядит как своя машина, и без второго рубежа стенд был бы
+    # открыт. Поэтому убрать одно, оставив другое, нельзя.
+
+    def _cookie(self, name: str) -> str | None:
+        raw = self.headers.get("Cookie")
+        if not raw:
+            return None
+        try:
+            jar = SimpleCookie()
+            jar.load(raw)
+        except Exception:  # noqa: BLE001 -- чужой заголовок, разбор не обязан удаться
+            return None
+        found = jar.get(name)
+        return found.value if found else None
+
+    def _session(self) -> auth.Session | None:
+        """Кто вошёл, по подписанной куке. `None` -- никто."""
+        if self.provider is None:
+            return None
+        value = self._cookie(auth.SESSION_COOKIE)
+        if not value:
+            return None
+        payload = auth.unseal(value, self.provider.settings.secret)
+        if not payload or not payload.get("sub"):
+            return None
+        return auth.Session(
+            sub=str(payload["sub"]),
+            email=payload.get("email"),
+            name=payload.get("name"),
+        )
+
+    def _entered(self) -> bool:
+        return self.provider is None or self._session() is not None
+
+    def _session_payload(self) -> dict[str, Any]:
+        """Ответ `/api/session`: кто вошёл и куда идти, если никто.
+
+        `login: null` при ненастроенном входе -- это «кнопка входа не нужна», а
+        не «войти нельзя»: так интерфейс на своей машине не показывает лишнего.
+        """
+        if self.provider is None:
+            return {"user": None, "login": None, "required": False}
+        session = self._session()
+        return {
+            "user": session.as_payload() if session else None,
+            "login": auth.LOGIN_PATH,
+            "logout": auth.LOGOUT_PATH,
+            "required": True,
+        }
+
+    def _refuse(self, path: str) -> None:
+        """Отказ без сессии. Странице -- редирект, вызову API -- код 401.
+
+        Редирект в ответ на запрос интерфейса выглядел бы для него как успешный
+        ответ с HTML вместо JSON, поэтому для `/api/` здесь именно 401: по нему
+        интерфейс показывает экран входа, а не ломается на разборе.
+        """
+        if path.startswith("/api/"):
+            self._send(
+                401,
+                {"error": "нужен вход через Reckue auth", "login": auth.LOGIN_PATH},
+            )
+            return
+        self._redirect(auth.LOGIN_PATH)
+
+    def _login_step(self, method: str, path: str, params: dict[str, list[str]]) -> None:
+        if self.provider is None:
+            self._send(404, {"error": "вход через Reckue auth не настроен"})
+            return
+        if method != "GET":
+            self._send(405, {"error": f"{method} к шагам входа"})
+            return
+        try:
+            if path == auth.LOGIN_PATH:
+                self._login_start()
+            elif path == auth.CALLBACK_PATH:
+                self._login_finish(params)
+            elif path == auth.LOGOUT_PATH:
+                self._logout()
+            else:
+                self._send(404, {"error": f"нет шага входа {path}"})
+        except auth.AuthError as exc:
+            # Провайдер недоступен или ответил отказом -- это не сбой стенда, а
+            # повод показать причину и дать войти заново.
+            self._login_error(str(exc))
+
+    def _login_start(self) -> None:
+        assert self.provider is not None
+        state = auth.new_state()
+        verifier = auth.new_verifier()
+        url = self.provider.authorize_url(state, verifier)
+        flow = auth.seal(
+            {"state": state, "verifier": verifier, "exp": time.time() + auth.FLOW_TTL},
+            self.provider.settings.secret,
+        )
+        self._redirect(
+            url,
+            cookies=[self._cookie_header(auth.FLOW_COOKIE, flow, auth.FLOW_TTL)],
+        )
+
+    def _login_finish(self, params: dict[str, list[str]]) -> None:
+        assert self.provider is not None
+        secret = self.provider.settings.secret
+        given = params.get("error", [None])[0]
+        if given:
+            raise auth.AuthError(f"Reckue auth отказал: {given}")
+        code = params.get("code", [None])[0]
+        state = params.get("state", [None])[0]
+        if not code or not state:
+            raise auth.AuthError("возврат без code или state")
+        raw = self._cookie(auth.FLOW_COOKIE)
+        flow = auth.unseal(raw, secret) if raw else None
+        if not flow:
+            raise auth.AuthError("вход начат слишком давно -- попробуйте снова")
+        # `state` сверяется постоянным по времени сравнением: он же защита от
+        # подсунутого чужого `code` (CSRF на входе).
+        if not hmac.compare_digest(str(flow.get("state", "")), state):
+            raise auth.AuthError("state не совпал -- вход начат не здесь")
+        tokens = self.provider.exchange(code, str(flow["verifier"]))
+        session = auth.Session.of(self.provider.claims(tokens["id_token"]))
+        payload = session.as_payload()
+        payload["exp"] = time.time() + self.provider.settings.session_ttl
+        payload["idt"] = tokens["id_token"]
+        if not self.quiet:
+            print(f"вошёл {session.email or session.sub}", file=sys.stderr)
+        self._redirect(
+            "/",
+            cookies=[
+                self._cookie_header(
+                    auth.SESSION_COOKIE,
+                    auth.seal(payload, secret),
+                    self.provider.settings.session_ttl,
+                ),
+                # Кука незавершённого входа больше не нужна: `code` одноразовый.
+                self._cookie_header(auth.FLOW_COOKIE, "", 0),
+            ],
+        )
+
+    def _logout(self) -> None:
+        assert self.provider is not None
+        hint = None
+        raw = self._cookie(auth.SESSION_COOKIE)
+        payload = auth.unseal(raw, self.provider.settings.secret) if raw else None
+        if payload:
+            hint = payload.get("idt")
+        self._redirect(
+            self.provider.logout_url(hint) or "/",
+            cookies=[self._cookie_header(auth.SESSION_COOKIE, "", 0)],
+        )
+
+    def _cookie_header(self, name: str, value: str, max_age: int) -> str:
+        """Значение `Set-Cookie`.
+
+        `HttpOnly` -- содержимое куки скриптам не нужно, а вынести её в чужой
+        скрипт больше нечем. `SameSite=Lax`, а не `Strict`: возврат с
+        провайдера -- переход с чужого сайта, и при `Strict` куку входа браузер
+        бы не прислал. `Secure` -- по схеме адреса возврата, иначе запуск на
+        `http://127.0.0.1` перестал бы работать.
+        """
+        assert self.provider is not None
+        parts = [
+            f"{name}={value}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Lax",
+            f"Max-Age={max_age}",
+        ]
+        if self.provider.settings.secure_cookies:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _redirect(self, url: str, cookies: list[str] | None = None) -> None:
+        self.send_response(302)
+        self.send_header("Location", url)
+        for cookie in cookies or []:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+    def _login_error(self, reason: str) -> None:
+        """Страница «войти не удалось».
+
+        Единственное место, где сервер сам рисует HTML: сюда попадает человек в
+        браузере, а не интерфейс, и JSON с текстом ошибки он прочитать не
+        сможет. Разметка нарочно в три строки -- это сообщение об отказе, а не
+        экран приложения.
+        """
+        body = (
+            "<!doctype html><html lang=ru><meta charset=utf-8>"
+            "<title>Вход не удался</title>"
+            "<body style='font:16px/1.5 system-ui;margin:4rem auto;max-width:34rem'>"
+            f"<h1 style='font-size:1.25rem'>Вход не удался</h1><p>{escape(reason)}</p>"
+            f"<p><a href='{auth.LOGIN_PATH}'>Попробовать снова</a></p>"
+        ).encode("utf-8")
+        self.send_response(400)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- ответ ------------------------------------------------------------
 
@@ -713,6 +956,7 @@ def create_server(
     ui: str | Path | None = None,
     quiet: bool = False,
     bind: str = "127.0.0.1",
+    provider: auth.Provider | None = None,
 ) -> ThreadingHTTPServer:
     """Сервер поверх хранилища. `port=0` -- свободный порт, удобно в тестах.
 
@@ -721,12 +965,20 @@ def create_server(
     самого контейнера, и опубликованный порт до него не доходит. Там адрес
     расширяют, а «только со своей машины» держат публикацией порта на loopback
     хоста и проверкой `Host` -- она остаётся при любом адресе.
+
+    `provider` -- вход через Reckue auth. По умолчанию берётся из окружения
+    (`VNL_OIDC_*`, `VNL_SESSION_SECRET`), и его отсутствие -- рабочий режим для
+    своей машины. Явным аргументом его подставляют тесты, где провайдер --
+    свой сервер на localhost.
     """
     index = Index.from_env()
     service = Api(Store(root, index=index), index=index)
     ui_path = Path(ui) if ui else None
     if ui_path is not None and not ui_path.exists():
         raise StoreError(f"интерфейса нет по пути {ui_path}")
+    if provider is None:
+        settings = auth.Settings.from_env(dict(os.environ))
+        provider = auth.Provider(settings) if settings else None
 
     handler = type(
         "BoundHandler",
@@ -736,6 +988,7 @@ def create_server(
             "table": routes(service),
             "ui": ui_path,
             "quiet": quiet,
+            "provider": provider,
         },
     )
     return ThreadingHTTPServer((bind, port), handler)
