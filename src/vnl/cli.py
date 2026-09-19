@@ -11,6 +11,8 @@ from . import __version__
 from .backends.dot_export import export as dot_export
 from .backends.netpyne_export import export as netpyne_export
 from .ir import Model, Site
+from dataclasses import replace
+
 from .patterns import Pattern, Port
 from .resolve import Diagnostic, ValidationError, load
 from .sim import simulate
@@ -222,6 +224,24 @@ def _port(spec: str) -> Port:
     )
 
 
+def _notes(specs: list[str] | None) -> dict[str, str]:
+    """`--note in=вход схемы` -- подпись порта для интерфейса.
+
+    Отдельным флагом, а не хвостом к `--port`: в подписи бывают и пробелы, и
+    двоеточия, и разделитель пришлось бы выбирать из того, чего в русском
+    тексте не встречается.
+    """
+    out: dict[str, str] = {}
+    for spec in specs or []:
+        name, _, text = spec.partition("=")
+        if not name or not text:
+            raise ValidationError(
+                [Diagnostic("error", spec, "подпись пишется как имя=текст")]
+            )
+        out[name] = text
+    return out
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     """Положить готовую схему в библиотеку.
 
@@ -236,7 +256,11 @@ def cmd_add(args: argparse.Namespace) -> int:
     _print_diagnostics(diagnostics)
 
     store = Store(args.root)
-    ports = [_port(spec) for spec in (args.port or [])]
+    notes = _notes(args.note)
+    ports = [
+        replace(port, note=notes.get(port.name, ""))
+        for port in (_port(spec) for spec in (args.port or []))
+    ]
     name = args.name or model.name
     taken = [item.id for item in store.patterns()]
     identifier = args.id or Pattern.empty(name, taken=taken).id
@@ -390,6 +414,12 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         metavar="ИМЯ=ТОЧКА",
         help="порт блока, например in=IN.soma или drive:mod=VTA.soma",
+    )
+    add.add_argument(
+        "--note",
+        action="append",
+        metavar="ИМЯ=ТЕКСТ",
+        help="подпись порта, например in=вход схемы",
     )
     add.set_defaults(func=cmd_add)
 

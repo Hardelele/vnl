@@ -6,7 +6,8 @@
 ошибке на экране, а по странному ответу через неделю.
 
 В поиск попадают имя и идентификатор паттерна, имена и подписи портов,
-идентификаторы нейронов и типов клеток внутри. Поэтому «pv» находит и паттерн
+идентификаторы нейронов и типов клеток, рецепторы контактов и нейромодуляторы
+внутри. Поэтому «pv» находит и паттерн
 с таким именем, и микросхему, внутри которой стоит PV-интернейрон: искать блок
 по тому, из чего он собран, -- обычное дело, а другого способа для этого нет.
 
@@ -71,6 +72,13 @@ def haystack(pattern: Pattern) -> str:
     for cell_type in pattern.body.cell_types.values():
         parts.append(cell_type.id)
         parts.extend(cell_type.tags)
+    # Нейромодулятор -- половина смысла тех паттернов, где он есть: без него
+    # «дофамин» не находил бы схему, вся суть которой в дофамине.
+    for modulator in pattern.body.modulators.values():
+        parts.extend((modulator.id, modulator.transmitter))
+    parts.extend(
+        contact.receptor for contact in pattern.body.contacts
+    )
     return " ".join(part for part in parts if part).lower()
 
 

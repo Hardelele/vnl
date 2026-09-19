@@ -96,3 +96,15 @@ def test_query_string_is_trimmed():
     query = Query.from_params({"q": ["  ffi  "], "status": ["draft, ready"]})
     assert query.text == "ffi"
     assert query.statuses == ("draft", "ready")
+
+
+def test_search_reaches_the_neuromodulator():
+    """Паттерн, вся суть которого в дофамине, обязан находиться по слову «дофамин»."""
+    pattern = saved("Растормаживание", "disinhibition", level="L3")
+    assert "dopamine" in haystack(pattern)
+    assert len(search([pattern], Query(text="dopamine"))) == 1
+
+
+def test_search_reaches_the_receptor():
+    pattern = saved("FFI", "ffi")
+    assert len(search([pattern], Query(text="gaba_a"))) == 1

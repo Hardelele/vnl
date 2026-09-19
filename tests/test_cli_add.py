@@ -101,3 +101,27 @@ def test_the_second_pattern_of_the_same_name_gets_its_own_id(tmp_path):
     main(["add", FFI, "--root", str(tmp_path), "--name", "Схема"])
     ids = sorted(item.id for item in Store(tmp_path).patterns())
     assert len(ids) == 2, "одноимённый паттерн не должен затирать прежний"
+
+
+def test_a_port_can_carry_a_label(tmp_path):
+    """Подпись порта -- то, что человек читает в интерфейсе, а не имя."""
+    main(
+        [
+            "add",
+            FFI,
+            "--root",
+            str(tmp_path),
+            "--id",
+            "ffi",
+            "--port",
+            "in=IN.soma",
+            "--note",
+            "in=вход схемы",
+        ]
+    )
+    assert Store(tmp_path).load_pattern("ffi").port("in").note == "вход схемы"
+
+
+def test_a_label_without_text_is_refused(tmp_path, capsys):
+    assert main(["add", FFI, "--root", str(tmp_path), "--note", "in"]) == 1
+    assert "имя=текст" in capsys.readouterr().err
