@@ -174,7 +174,9 @@ export function createCatalogController(
       void refresh()
     },
 
-    async addDraft(name, level = 'L2') {
+    // Ступень по умолчанию -- первая ступень схем: см. `createDraft` и
+    // `patterns.DRAFT_LEVEL`. Черновик не «вычислительный примитив» (`L2`).
+    async addDraft(name, level = 'L0') {
       try {
         const created = await add(name, level)
         await refresh()

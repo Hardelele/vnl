@@ -15,8 +15,8 @@ function catalogWith(ids: string[]): Catalog {
     patterns: ids.map((id) => ({
       id,
       name: id,
-      level: 'L2' as CatalogLevel,
-      levelName: 'Микросхемы',
+      level: 'L1' as CatalogLevel,
+      levelName: 'Взаимодействие сигналов',
       status: 'ready' as const,
       statusName: 'Готов',
       ports: [],
@@ -164,7 +164,7 @@ describe('черновик', () => {
     const created = await control.addDraft('Новый')
 
     expect(created?.id).toBe('новый')
-    expect(add).toHaveBeenCalledWith('Новый', 'L2')
+    expect(add).toHaveBeenCalledWith('Новый', 'L0')
     expect(load).toHaveBeenCalledTimes(1)
   })
 

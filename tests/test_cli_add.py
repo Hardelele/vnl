@@ -5,10 +5,40 @@ from pathlib import Path
 import pytest
 
 from vnl.cli import main
+from vnl.patterns import DRAFT_LEVEL
 from vnl.store import Store
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 FFI = str(EXAMPLES / "ffi.vnl")
+
+
+def test_a_level_outside_the_catalog_is_refused(tmp_path):
+    """Ступени перечисляет каталог, и ступени механизмов среди них нет.
+
+    Свойство одного контакта -- не схема, и класть его в библиотеку незачем:
+    место такому в палитре примитивов. Отсюда и отказ на «M»: если бы ступень
+    приняли молча, механизмы расползлись бы по каталогу как обычные схемы.
+    """
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "add",
+                FFI,
+                "--root",
+                str(tmp_path),
+                "--level",
+                "M",
+                "--port",
+                "in=IN.soma",
+            ]
+        )
+    assert not (tmp_path / "patterns").exists()
+
+
+def test_without_a_level_it_lands_on_the_draft_step(tmp_path):
+    """Умолчание -- первая ступень схем, а не «вычислительный примитив»."""
+    main(["add", FFI, "--root", str(tmp_path), "--id", "x", "--port", "in=IN.soma"])
+    assert Store(tmp_path).load_pattern("x").level == DRAFT_LEVEL
 
 
 def test_a_pattern_with_ports_is_ready(tmp_path):
@@ -56,7 +86,7 @@ def test_a_port_can_carry_its_own_name(tmp_path):
             "--id",
             "dis",
             "--level",
-            "L3",
+            "L1",
             "--port",
             "in=IN.soma",
             "--port",
@@ -64,7 +94,7 @@ def test_a_port_can_carry_its_own_name(tmp_path):
         ]
     )
     pattern = Store(tmp_path).load_pattern("dis")
-    assert pattern.level == "L3"
+    assert pattern.level == "L1"
     modulating = pattern.port("dopamine")
     assert modulating.direction == "mod"
     assert modulating.site.instance == "VTA"

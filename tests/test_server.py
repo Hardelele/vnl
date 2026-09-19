@@ -31,6 +31,7 @@ def ffi_pattern() -> Pattern:
         model,
         id="ffi",
         name="FFI",
+        level="L1",
         status="ready",
         ports=[
             Port("in", "in", ir.Site("IN", "soma", 0.5)),
@@ -89,7 +90,7 @@ def test_catalog_carries_the_pattern_and_its_scheme(base):
     assert payload["total"] == payload["matched"] == 1
     item = payload["patterns"][0]
     assert item["name"] == "FFI"
-    assert item["levelName"] == "Микросхемы"
+    assert item["levelName"] == "Взаимодействие сигналов"
     assert {port["name"] for port in item["ports"]} == {"in", "out"}
     # Миниатюра рисуется из схемы, поэтому граф приходит вместе со списком.
     assert [neuron["id"] for neuron in item["scheme"]["neurons"]] == ["IN", "E", "I"]
@@ -111,13 +112,13 @@ def test_catalog_filters_by_query(base):
     _, missed = ask(base, "GET", "/api/catalog?q=нет+такого")
     assert missed["matched"] == 0
     assert missed["total"] == 1, "счётчики чипов считаются по всей библиотеке"
-    assert [level for level in missed["levels"] if level["count"]][0]["id"] == "L2"
+    assert [level for level in missed["levels"] if level["count"]][0]["id"] == "L1"
 
 
 def test_catalog_filters_by_level_and_status(base):
-    _, wrong_level = ask(base, "GET", "/api/catalog?level=L1")
+    _, wrong_level = ask(base, "GET", "/api/catalog?level=L0")
     assert wrong_level["matched"] == 0
-    _, right = ask(base, "GET", "/api/catalog?level=L1,L2&status=ready")
+    _, right = ask(base, "GET", "/api/catalog?level=L0,L1&status=ready")
     assert right["matched"] == 1
 
 

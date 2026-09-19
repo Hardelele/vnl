@@ -98,7 +98,8 @@ describe('каталог', () => {
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/patterns')
     expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual({ name: 'Проба', level: 'L2' })
+    // Ступень по умолчанию -- первая: черновик ещё не «вычислительный примитив».
+    expect(JSON.parse(String(init.body))).toEqual({ name: 'Проба', level: 'L0' })
   })
 })
 

@@ -144,10 +144,17 @@ export async function loadPattern(id: string, base?: string): Promise<PatternDet
   return ask<PatternDetail>(`/patterns/${encodeURIComponent(id)}`, undefined, base)
 }
 
-/** «Добавить»: пустой черновик, который сразу лежит в библиотеке. */
+/**
+ * «Добавить»: пустой черновик, который сразу лежит в библиотеке.
+ *
+ * Ступень по умолчанию -- первая ступень схем (`L0`), а не та, что выше:
+ * черновик ещё ничего не умеет, и записывать его в «вычислительные примитивы»
+ * (`L2`) значило бы обещать за автора. То же решение и на сервере
+ * (`patterns.DRAFT_LEVEL`).
+ */
 export async function createDraft(
   name: string,
-  level: Catalog['levels'][number]['id'] = 'L2',
+  level: Catalog['levels'][number]['id'] = 'L0',
   base?: string,
 ): Promise<PatternDetail> {
   return ask<PatternDetail>(

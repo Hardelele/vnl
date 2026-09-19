@@ -6,6 +6,7 @@ import pytest
 
 from vnl import ir
 from vnl.patterns import (
+    DRAFT_LEVEL,
     Endpoint,
     Link,
     Pattern,
@@ -144,7 +145,9 @@ def test_extracted_pattern_is_a_draft_and_keeps_inner_names_apart(ffi_pattern):
     pattern, _ = extract_pattern(sandbox, ["ffi", "ffi2"], "Цепочка")
 
     assert pattern.status == "draft"
-    assert pattern.level_name == "Микросхемы"
+    # Ступень выделенного -- ступень черновика: что оно такое, решит автор.
+    assert pattern.level == DRAFT_LEVEL
+    assert pattern.level_name == "Простейшие схемы"
     # Внутренности двух экземпляров разведены по именам, иначе они бы слиплись.
     assert "ffi/E" in pattern.body.instances
     assert "ffi2/E" in pattern.body.instances

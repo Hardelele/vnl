@@ -27,6 +27,7 @@ from . import ir
 from .compose import Composition, compose
 from .patterns import (
     CatalogLevel,
+    DRAFT_LEVEL,
     Endpoint,
     Link,
     Pattern,
@@ -361,7 +362,7 @@ class Project:
         return self.sandbox.fork(self.sandbox.instance(block_id), name)
 
     def extract(
-        self, selection: list[str], name: str, level: CatalogLevel = "L2"
+        self, selection: list[str], name: str, level: CatalogLevel = DRAFT_LEVEL
     ) -> tuple[Pattern, list[str]]:
         """Выделение -> паттерн. Песочница остаётся как была."""
         return extract_pattern(self.sandbox, selection, name, level)

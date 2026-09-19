@@ -21,7 +21,13 @@ from vnl.store import Store
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 
-def saved(name: str, source: str, level: str = "L2", status: str = "ready") -> Pattern:
+def saved(
+    name: str,
+    source: str,
+    level: str = "L1",
+    status: str = "ready",
+    entry: str = "IN",
+) -> Pattern:
     model, _ = load((EXAMPLES / f"{source}.vnl").read_text(encoding="utf-8"))
     return Pattern.from_model(
         model,
@@ -29,7 +35,7 @@ def saved(name: str, source: str, level: str = "L2", status: str = "ready") -> P
         name=name,
         level=level,
         status=status,
-        ports=[Port("in", "in", ir.Site("IN", "soma", 0.5), note="вход схемы")],
+        ports=[Port("in", "in", ir.Site(entry, "soma", 0.5), note="вход схемы")],
     )
 
 
@@ -169,21 +175,31 @@ def test_a_broken_index_does_not_break_saving(tmp_path, ffi, capsys):
 
 
 def test_through_the_index_only_the_chosen_files_are_read(tmp_path, ffi):
-    other = saved("Депрессия", "depression", level="L1")
+    other = saved(
+        "Возбуждение с опережением",
+        "library/feedforward_excitation",
+        level="L0",
+        entry="A",
+    )
     store = Store(tmp_path)
     store.save_pattern(ffi)
     store.save_pattern(other)
     service = Api(store, index=Fake([ffi, other]))
 
-    payload = service.catalog({"level": ["L1"]})
+    payload = service.catalog({"level": ["L0"]})
 
     assert payload["matched"] == 1
-    assert payload["patterns"][0]["id"] == "депрессия"
+    assert payload["patterns"][0]["id"] == "возбуждение с опережением"
     assert payload["total"] == 2, "всего в библиотеке -- из индекса, а не из отбора"
 
 
 def test_the_index_and_the_files_agree(tmp_path, ffi):
-    other = saved("Депрессия", "depression", level="L1")
+    other = saved(
+        "Возбуждение с опережением",
+        "library/feedforward_excitation",
+        level="L0",
+        entry="A",
+    )
     store = Store(tmp_path)
     store.save_pattern(ffi)
     store.save_pattern(other)

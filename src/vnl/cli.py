@@ -13,7 +13,7 @@ from .backends.netpyne_export import export as netpyne_export
 from .ir import Model, Site
 from dataclasses import replace
 
-from .patterns import Pattern, Port
+from .patterns import DRAFT_LEVEL, LEVEL_NAMES, Pattern, Port
 from .resolve import Diagnostic, ValidationError, load
 from .sim import simulate
 from .store import StoreError
@@ -405,9 +405,12 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--id", help="идентификатор (по умолчанию из имени)")
     add.add_argument(
         "--level",
-        choices=("L1", "L2", "L3"),
-        default="L2",
-        help="уровень каталога: масштаб конструкции, а не детализация физики",
+        choices=tuple(LEVEL_NAMES),
+        default=DRAFT_LEVEL,
+        help=(
+            "ступень разбора в каталоге, а не детализация физики: "
+            + ", ".join(f"{key} -- {name}" for key, name in LEVEL_NAMES.items())
+        ),
     )
     add.add_argument(
         "--port",

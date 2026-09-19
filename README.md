@@ -166,9 +166,15 @@ signature check is our own, on `pow` — the core still has zero dependencies.
 
 ![The pattern library](docs/img/library.png)
 
-The catalog is grouped by the scale of the construction: L1 for cells and
-connections, L2 for microcircuits, L3 for networks. A draft looks like a draft
-and says what it is missing instead of hiding until it is finished.
+The catalog is grouped by the step of the walkthrough: L0 for the simplest
+circuits, L1 for signal interaction, L2 for computational primitives, L3 for
+networks, L4 for learning and memory, L5 for reference circuits. This is not
+the scale of the construction but the reading order: what has to be understood
+before the next thing. There is no step for mechanisms — a property of a single
+contact or a single cell is not a circuit, and its place is the primitive
+palette, as already happened to single cells (`vnl/cells.py`). A draft looks
+like a draft and says what it is missing instead of hiding until it is
+finished.
 
 Search and filters are computed in Python (`vnl/catalog.py`), not in React: the
 same operations will reach Claude over MCP, and a second implementation of the
