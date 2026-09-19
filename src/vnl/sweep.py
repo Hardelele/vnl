@@ -41,8 +41,21 @@ CELL_FIELDS = {
     "r_in",
     "adaptation",
     "tau_adaptation",
+    # `adex`: развёртка по `b` -- то, чем показывают, что пачка живёт именно в
+    # токе адаптации, а не в подобранной вокруг клетки схеме.
+    "v_t",
+    "delta_t",
+    "v_peak",
+    "tau_w",
+    "a",
+    "b",
 }
-_CELL_ALIASES = {"threshold": "v_threshold"}
+_CELL_ALIASES = {
+    "threshold": "v_threshold",
+    "v_t": "v_threshold",
+    "a": "w_coupling",
+    "b": "w_increment",
+}
 
 
 class SweepError(ValueError):

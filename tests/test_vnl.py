@@ -381,32 +381,39 @@ def test_dot_export_marks_inhibition_with_a_bar():
 
 
 def test_an_unimplemented_point_model_is_refused():
-    """`point = adex` разбирался, но считался как LIF -- то есть молча не тем.
+    """Вид, которого в движке нет, отвергается, а не считается как соседний.
 
     Отказ здесь лучше расчёта: модель, посчитанная другой физикой, даёт числа,
-    по которым принимают решения, и отличить их не по чему.
+    по которым принимают решения, и отличить их не по чему. Ижикевич взят как
+    ближайший неподдержанный вид: именно его тянет написать тот, кто уже
+    увидел в языке `adex`.
     """
     text = """
 model probe
-cell odd : excitatory, glutamate { point = adex  tau_m = 10ms }
+cell odd : excitatory, glutamate { point = izhikevich  tau_m = 10ms }
 neuron A : odd
 run { dt = 0.1ms  duration = 10ms }
 """
     with pytest.raises(ValidationError) as failure:
         load(text, strict=True)
-    assert "adex" in str(failure.value.diagnostics[0])
-    assert "не реализована" in str(failure.value.diagnostics[0])
+    message = str(failure.value.diagnostics[0])
+    assert "izhikevich" in message
+    assert "не реализована" in message
+    # Сообщение обязано перечислить то, что есть: иначе человеку неоткуда
+    # узнать, чем заменить.
+    assert "lif" in message and "adex" in message
 
 
-def test_the_implemented_point_model_passes():
-    text = """
+@pytest.mark.parametrize("kind", ["lif", "adex"])
+def test_the_implemented_point_models_pass(kind):
+    text = f"""
 model probe
-cell plain : excitatory, glutamate { point = lif  tau_m = 10ms }
+cell plain : excitatory, glutamate {{ point = {kind}  tau_m = 10ms }}
 neuron A : plain
-run { dt = 0.1ms  duration = 10ms }
+run {{ dt = 0.1ms  duration = 10ms }}
 """
     model, diagnostics = load(text, strict=True)
-    assert model.cell_types["plain"].point_model.kind == "lif"
+    assert model.cell_types["plain"].point_model.kind == kind
     assert [d for d in diagnostics if d.severity == "error"] == []
 
 

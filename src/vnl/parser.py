@@ -203,6 +203,15 @@ _POINT_KEYS = {
     "r_in": "r_in",
     "adaptation": "adaptation",
     "tau_adaptation": "tau_adaptation",
+    # `adex`: у него `v_threshold` -- не порог, а точка разгона, и в тексте
+    # схемы её привычнее звать `v_t`. Это тот же псевдоним, что `threshold`,
+    # только для второго вида модели.
+    "v_t": "v_threshold",
+    "delta_t": "delta_t",
+    "v_peak": "v_peak",
+    "tau_w": "tau_w",
+    "a": "w_coupling",
+    "b": "w_increment",
 }
 
 

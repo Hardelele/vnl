@@ -65,9 +65,23 @@ def _cell_params(model: ir.Model) -> tuple[dict, list[str]]:
                 f"клетку с каналами Ходжкина--Хаксли; параметры LIF "
                 f"(tau_m, порог, адаптация) на L2 не переносятся"
             )
-        if cell_type.point_model.adaptation:
+        point = cell_type.point_model
+        if point.kind == "adex":
+            # Контракт файла -- «скрипт плюс список потерь». Развернуть AdEx в
+            # клетку с каналами Ходжкина--Хаксли и промолчать нельзя: разгон у
+            # порога и ток адаптации на L2 задаются совсем другими механизмами,
+            # и подобранные под L1 значения там не значат того же.
             losses.append(
-                f"тип {cell_type.id}: адаптация порога {cell_type.point_model.adaptation} мВ "
+                f"тип {cell_type.id}: адаптивный экспоненциальный LIF на L2 не "
+                f"переносится (delta_t = {point.delta_t:g} мВ, v_peak = "
+                f"{point.v_peak:g} мВ, a = {point.w_coupling:g} нСм, b = "
+                f"{point.w_increment * 1e3:g} пА, tau_w = {point.tau_w:g} мс); "
+                f"своя динамика клетки -- пачки, плато, отдача после торможения "
+                f"-- в этом скрипте отсутствует и требует своего механизма"
+            )
+        if point.adaptation and point.kind != "adex":
+            losses.append(
+                f"тип {cell_type.id}: адаптация порога {point.adaptation} мВ "
                 f"не имеет прямого аналога и требует своего механизма"
             )
     return out, losses

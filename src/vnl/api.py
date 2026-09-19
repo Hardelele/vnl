@@ -70,6 +70,14 @@ POINT_FIELDS: dict[str, str] = {
     "refractory": "refractory",
     "adaptation": "adaptation",
     "tauAdaptation": "tau_adaptation",
+    # Только `kind = adex`. Отдаются всегда: у поля есть значение по умолчанию
+    # и у lif-клетки, а условный состав ответа означал бы, что интерфейс не
+    # знает заранее, какие ключи придут.
+    "deltaT": "delta_t",
+    "vPeak": "v_peak",
+    "tauW": "tau_w",
+    "wCoupling": "w_coupling",
+    "wIncrement": "w_increment",
 }
 
 
