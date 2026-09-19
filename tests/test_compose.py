@@ -178,3 +178,36 @@ def test_empty_sandbox_is_a_problem_not_a_crash():
     built = compose(Sandbox(id="s0", name="Пусто"))
     assert not built.ok
     assert any("нечего считать" in problem for problem in built.problems)
+
+
+def test_sandbox_without_drive_warns_but_still_runs(ffi):
+    """Схеме нечем спайкать -- это предупреждение, а не отказ (#506).
+
+    Разделены намеренно: `problems` -- то, по чему `Project.run` не считает
+    вовсе, а схему без драйва считают законно, пока её собирают. Свести их в
+    один список значило бы запретить запуск того, что запускать можно.
+    """
+    sandbox = chain(ffi)
+    sandbox.stimuli.clear()
+    built = compose(sandbox)
+
+    assert built.ok, built.problems
+    assert not built.problems
+    assert any("нечем спайкать" in note for note in built.warnings), built.warnings
+
+    # И правда молчит: предупреждение говорит о том, что видно на прогоне.
+    assert not any(simulate(built.model).spikes.values())
+
+
+def test_drive_removes_the_warning(ffi):
+    """Появился стимул -- предупреждению больше не о чем говорить."""
+    assert compose(chain(ffi)).warnings == []
+
+
+def test_empty_sandbox_says_it_once(ffi):
+    """Про пустую песочницу сказано в `problems`, и второй раз не надо.
+
+    Иначе на пустом проекте пришлось бы читать две строки об одном: и «нечего
+    считать», и «нечем спайкать».
+    """
+    assert compose(Sandbox(id="s0", name="Пусто")).warnings == []

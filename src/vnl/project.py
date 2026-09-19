@@ -489,6 +489,16 @@ class Project:
         """Что мешает запуску. Пусто -- можно считать."""
         return compose(self.sandbox).problems
 
+    def warnings(self) -> list[str]:
+        """Что запуску не мешает, но сделает прогон пустым (#506).
+
+        Отдельно от `check`, и это не дробление одного списка на два: на
+        `check` стоит отказ -- `run` по нему не считает вовсе. Схема без драйва
+        считается законно, поэтому её предупреждение обязано ехать другим
+        полем, иначе «предупредить» и «запретить» окажутся одним и тем же.
+        """
+        return compose(self.sandbox).warnings
+
     def run(self) -> Run:
         built = compose(self.sandbox)
         if built.problems:

@@ -71,6 +71,7 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
     dirty: false,
     canUndo: false,
     problems: [],
+    warnings: [],
     // Что сервер предложит в форме «Сохранить как паттерн».
     portHints: [
       {

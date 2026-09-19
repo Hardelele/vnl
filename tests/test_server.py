@@ -626,6 +626,39 @@ def test_a_link_into_a_missing_port_is_refused(base):
     assert after["problems"], "несуществующий порт должен мешать запуску"
 
 
+def test_a_sandbox_without_drive_warns_but_is_not_refused(base):
+    """Схеме нечем спайкать: предупреждение есть, запрета нет (#506).
+
+    Проверяется через HTTP целиком, потому что важно именно разделение полей:
+    `problems` остаётся пустым (иначе запуск был бы закрыт), а прогон
+    открывается и доходит до конца -- молчащая сеть тут правильный ответ
+    модели, непонятен он только человеку.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Без драйва"})
+    sandbox = project["id"]
+    _, with_block = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/blocks", {"pattern": "ffi"}
+    )
+
+    assert with_block["problems"] == [], "схема собирается: запрещать нечего"
+    assert any("нечем спайкать" in note for note in with_block["warnings"]), (
+        with_block["warnings"]
+    )
+
+    # Запуск при этом не закрыт: предупреждение -- подпись, а не отказ.
+    status, _ = ask(base, "POST", "/api/sim", {"sandbox": sandbox})
+    assert status == 201
+
+    _, driven = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": with_block["blocks"][0]["id"], "port": "in"}},
+    )
+    assert driven["warnings"] == [], "драйв есть -- предупреждению не о чем говорить"
+    assert driven["problems"] == []
+
+
 def test_a_sandbox_runs_with_the_same_time_control(base):
     sandbox = sandbox_with_two_blocks(base)
     _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
