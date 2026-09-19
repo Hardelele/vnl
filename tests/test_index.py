@@ -196,11 +196,17 @@ def test_the_index_and_the_files_agree(tmp_path, ffi):
 
 
 @pytest.mark.skipif(
-    not os.environ.get("VNL_INDEX_DSN"),
-    reason="живой Postgres: задайте VNL_INDEX_DSN",
+    not os.environ.get("VNL_INDEX_TEST_DSN"),
+    reason="живой Postgres: задайте VNL_INDEX_TEST_DSN",
 )
 def test_a_live_index_round_trip(tmp_path, ffi):
-    index = Index(os.environ["VNL_INDEX_DSN"])
+    """Прогон против настоящей базы.
+
+    Переменная отдельная от рабочей (`VNL_INDEX_DSN`) намеренно: тест
+    пересобирает таблицу с нуля и в конце оставляет её пустой. Направь его на
+    рабочий индекс -- и каталог останется без строк до следующей пересборки.
+    """
+    index = Index(os.environ["VNL_INDEX_TEST_DSN"])
     try:
         index.rebuild([ffi])
         assert index.size() == 1
