@@ -13,6 +13,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Canvas } from './Canvas'
+import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
 
 const POINT = {
@@ -124,6 +125,11 @@ function inner(id: string): SVGGElement {
   return found as SVGGElement
 }
 
+/** Состояние клетки из сессии: доля и пик приходят с сервера, не считаются. */
+function live(charge: number, spiked = false, peak = charge): CellState {
+  return { v: -65 + charge * 15, spiked, charge, peak }
+}
+
 function cell(id: string): SVGGElement {
   const found = [...host.querySelectorAll('.cv-cell')].find((node) =>
     [...node.querySelectorAll('text')].some((text) =>
@@ -170,7 +176,7 @@ describe('клетка на холсте', () => {
   })
 
   it('светится по своему имени, без приставки блока', async () => {
-    await mount({ cells: { E: { v: -40, spiked: true, charge: 1, peak: 1 } } })
+    await mount({ cells: { E: live(1, true) } })
 
     expect(cell('E').getAttribute('class')).toContain('is-spiking')
     expect(cell('I').getAttribute('class')).not.toContain('is-spiking')
@@ -275,7 +281,7 @@ describe('блок на холсте', () => {
     await mount({
       blocks: [FFI],
       opened: ['ffi'],
-      cells: { 'ffi/I': { v: -40, spiked: true, charge: 1, peak: 1 } },
+      cells: { 'ffi/I': live(1, true) },
     })
 
     expect(inner('I').getAttribute('class')).toContain('is-spiking')
@@ -283,5 +289,92 @@ describe('блок на холсте', () => {
     expect(host.querySelector('.cv-block')?.getAttribute('class')).not.toContain(
       'is-spiking',
     )
+  })
+})
+
+describe('заряд клетки на холсте', () => {
+  it('над фигурой стоит доля заряда в процентах', async () => {
+    await mount({ cells: { E: live(0.33), I: live(0.66) } })
+
+    // Вспышка говорит «разрядилась» и молчит о том, почему соседняя не
+    // разрядилась: не хватило десяти процентов или вход до неё не дошёл.
+    expect(cell('E').querySelector('.cv-level')?.textContent).toBe('33%')
+    expect(cell('I').querySelector('.cv-level')?.textContent).toBe('66%')
+  })
+
+  it('надпись стоит над фигурой, а не в ней', async () => {
+    await mount({ cells: { E: live(0.5) } })
+    const level = cell('E').querySelector('.cv-level')
+    const shape = cell('E').querySelector('rect')
+
+    expect(Number(level?.getAttribute('y'))).toBeLessThan(
+      Number(shape?.getAttribute('y')),
+    )
+  })
+
+  it('клетка ниже покоя отмечена, а не показана нулём', async () => {
+    await mount({ cells: { E: live(-0.2), I: live(0.8) } })
+    const below = cell('E').querySelector('.cv-level')
+
+    expect(below?.textContent).toBe('↓20%')
+    expect(below?.classList.contains('is-below')).toBe(true)
+    expect(
+      cell('I').querySelector('.cv-level')?.classList.contains('is-below'),
+    ).toBe(false)
+  })
+
+  it('заливка идёт по доле и обрезана по фигуре', async () => {
+    await mount({ cells: { E: live(0.5), I: live(-0.2) } })
+
+    expect(cell('E').querySelector('.cv-charge')?.getAttribute('opacity')).toBe('0.5')
+    expect(cell('I').querySelector('.cv-charge')?.getAttribute('opacity')).toBe('0')
+  })
+
+  it('в кадре разряда написано сто процентов, а не значение после сброса', async () => {
+    // Между кадрами движок делает полсотни шагов, разряд занимает один.
+    // Правило кадра (`momentOf`) общее с карточкой паттерна: своей ветки для
+    // песочницы нет -- иначе разряд, видимый на карточке, здесь пропал бы.
+    await mount({ cells: { E: live(0, true, 1) } })
+
+    expect(cell('E').querySelector('.cv-level')?.textContent).toBe('100%')
+  })
+
+  it('после перемотки показан настоящий заряд, а не сто процентов', async () => {
+    // Перемотка -- не кадр: сервер начинает накопленное заново от достигнутого
+    // состояния (#534), и давно разрядившаяся клетка приходит с `spiked: false`.
+    await mount({ cells: { E: live(0, false, 0) } })
+
+    expect(cell('E').querySelector('.cv-level')?.textContent).toBe('0%')
+  })
+
+  it('без ответа сессии надпись не выдумывается', async () => {
+    await mount({ cells: {} })
+
+    expect(host.querySelectorAll('.cv-level')).toHaveLength(0)
+  })
+
+  it('в раскрытом блоке заряд стоит над каждым внутренним узлом', async () => {
+    await mount({
+      blocks: [FFI],
+      opened: ['ffi'],
+      cells: { 'ffi/IN': live(0.2), 'ffi/E': live(0.4), 'ffi/I': live(0.6) },
+    })
+
+    expect(inner('IN').querySelector('.cv-in-level')?.textContent).toBe('20%')
+    expect(inner('E').querySelector('.cv-in-level')?.textContent).toBe('40%')
+    expect(inner('I').querySelector('.cv-in-level')?.textContent).toBe('60%')
+  })
+
+  it('свёрнутый блок заряда не показывает: у коробки его нет', async () => {
+    await mount({
+      blocks: [FFI],
+      cells: { 'ffi/IN': live(0.2), 'ffi/E': live(0.4), 'ffi/I': live(0.6) },
+    })
+
+    // Средним по пятерым клеткам с разными порогами ничего не измеришь, а
+    // число у порта прочли бы как заряд блока целиком. Остаётся вспышка, а
+    // числа -- по щелчку на «+».
+    expect(host.querySelectorAll('.cv-level')).toHaveLength(0)
+    expect(host.querySelectorAll('.cv-in-level')).toHaveLength(0)
   })
 })

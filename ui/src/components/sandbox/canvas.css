@@ -77,6 +77,42 @@
   fill: var(--selected);
 }
 
+/* Заливка внутреннего узла по заряду. Прозрачность ставится в разметке; на
+   разряде она принудительно полная -- иначе кадр со ста процентами показал бы
+   пустую фигуру: движок к этому моменту уже сбросил потенциал. */
+.cv-in-cell .cv-in-charge {
+  fill: var(--exc);
+  stroke: none;
+  pointer-events: none;
+}
+
+.cv-in-cell.is-inh .cv-in-charge {
+  fill: var(--inh);
+}
+
+.cv-in-cell.is-spiking .cv-in-charge {
+  opacity: 1 !important;
+}
+
+/* Заряд числом над внутренним узлом. Кегль мельче, чем над отдельной клеткой:
+   узлов внутри блока бывает пятеро, а поле под начинку от этого не растёт. */
+.cv-in-cell .cv-in-level {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+.cv-in-cell .cv-in-level.is-below {
+  fill: var(--inh);
+  font-weight: var(--weight-medium);
+}
+
+.cv-in-cell.is-spiking .cv-in-level {
+  fill: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
 /* Узел, от которого тянется связь: ждёт второго щелчка -- как порт и сома. */
 .cv-in-cell.is-waiting rect {
   stroke: var(--accent);
@@ -158,6 +194,47 @@
 
 .cv-cell.is-spiking rect {
   fill: var(--selected);
+}
+
+/* Заливка клетки по заряду -- та же, что на схеме паттерна: пусто в покое,
+   полная у порога. Ниже покоя и выше номинального порога о себе говорит
+   надпись: прозрачность за эти края не выходит. */
+.cv-cell .cv-charge {
+  fill: var(--exc);
+  stroke: none;
+  pointer-events: none;
+}
+
+.cv-cell.is-inh .cv-charge {
+  fill: var(--inh);
+}
+
+/* В кадре разряда заливка полная независимо от мгновенной доли: движок к
+   этому моменту уже сбросил потенциал, и фигура иначе была бы пустой ровно
+   тогда, когда над ней написано «100%». */
+.cv-cell.is-spiking .cv-charge {
+  opacity: 1 !important;
+}
+
+/* Заряд числом над фигурой. Кегль мельче имени: имя отвечает на «кто это»,
+   число -- на «сколько набралось», и спорить им за внимание незачем. */
+.cv-cell .cv-level {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+/* Ниже покоя: цветом торможения и жирнее -- уход под ноль должен быть виден,
+   а не вычитываться из стрелки. */
+.cv-cell .cv-level.is-below {
+  fill: var(--inh);
+  font-weight: var(--weight-medium);
+}
+
+.cv-cell.is-spiking .cv-level {
+  fill: var(--ink);
+  font-weight: var(--weight-medium);
 }
 
 /* Точка подключения клетки -- её сома. Порта у клетки нет, поэтому и подписи

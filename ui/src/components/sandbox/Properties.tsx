@@ -24,6 +24,7 @@ import type {
 } from '../../model/sandbox'
 import type { PatternPort, PointModel, RecordedVar, RunSpec } from '../../model/types'
 import { sandboxController, type Selection } from '../../state/sandbox'
+import { Vitals } from '../live/Vitals'
 
 /** Рецепторы: тот же список, что в `ir.RECEPTORS`. */
 const RECEPTORS = ['ampa', 'nmda', 'gaba_a', 'gaba_b', 'nicotinic']
@@ -112,10 +113,16 @@ export function Properties({
   selection,
   project,
   cells,
+  spikes,
+  elapsed,
 }: {
   selection: Selection | null
   project: SandboxState
   cells: Record<string, CellState>
+  /** Моменты разрядов по клеткам собранной сети: `ffi/E`, `X`. */
+  spikes: Record<string, number[]>
+  /** Пройденное время симуляции, мс: по нему считается частота. */
+  elapsed: number
 }) {
   if (!selection) {
     return (
@@ -136,7 +143,9 @@ export function Properties({
 
   if (selection.kind === 'neuron') {
     const neuron = project.neurons.find((item) => item.id === selection.id)
-    return neuron ? <NeuronProps neuron={neuron} cells={cells} /> : null
+    return neuron ? (
+      <NeuronProps neuron={neuron} cells={cells} spikes={spikes} elapsed={elapsed} />
+    ) : null
   }
 
   if (selection.kind === 'link') {
@@ -304,9 +313,13 @@ function BlockProps({
 function NeuronProps({
   neuron,
   cells,
+  spikes,
+  elapsed,
 }: {
   neuron: SandboxNeuron
   cells: Record<string, CellState>
+  spikes: Record<string, number[]>
+  elapsed: number
 }) {
   const control = sandboxController
   // Приставки у отдельной клетки нет: в собранной сети она зовётся так же.
@@ -318,9 +331,15 @@ function NeuronProps({
         <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
         <span className="mono row-dim">{neuron.cellType}</span>
         <span className="mono row-dim row-end">
-          {state ? `${state.v.toFixed(1)} мВ` : neuron.inhibitory ? 'тормозная' : 'возбуждающая'}
+          {neuron.inhibitory ? 'тормозная' : 'возбуждающая'}
         </span>
       </div>
+
+      {/* Живые числа -- тем же `Vitals`, что и в инспекторе карточки паттерна:
+          заряд, потенциал и разряды за прогон. Прежде здесь стоял один
+          потенциал в милливольтах, и доли до порога из него не вычислить --
+          порог у клетки свой, адаптация поднимает его выше номинального. */}
+      <Vitals state={state} spikes={spikes[neuron.id] ?? []} elapsed={elapsed} />
 
       {neuron.pointModel ? (
         <>

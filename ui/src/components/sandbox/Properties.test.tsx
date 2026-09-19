@@ -1,10 +1,14 @@
 /**
- * Панель свойств блока: на какие порты вешается драйв и запись (#533).
+ * Панель свойств: порты блока (#533) и живые числа выбранной клетки (#535).
  *
  * Проверяется настоящая разметка, а не «функция вернула true»: кнопки тут и
  * есть весь интерфейс модуляторного входа. Пока их не было, `gate` и
  * `dopamine` у `disinhibition` были мертвы -- подать на них было нечего и
  * посмотреть на них было нечего, хотя сервер оба действия принимает.
+ *
+ * У выбранной клетки проверяется то же: числа должны попасть в разметку, а не
+ * остаться в переменной. Прежде панель показывала один потенциал в
+ * милливольтах, и «далеко ли клетке до разряда» по нему не читалось.
  */
 
 import { act } from 'react'
@@ -12,7 +16,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Properties } from './Properties'
-import type { SandboxBlock, SandboxState } from '../../model/sandbox'
+import type { CellState } from '../../model/sim'
+import type { SandboxBlock, SandboxNeuron, SandboxState } from '../../model/sandbox'
 import type { PatternPort, PointModel } from '../../model/types'
 
 const POINT: PointModel = {
@@ -49,9 +54,18 @@ const BLOCK: SandboxBlock = {
   cells: [{ type: 'pyr', neurons: ['PYR'], inhibitory: false, pointModel: POINT }],
 }
 
+/** Клетка, положенная на холст руками: приставки блока у неё нет. */
+const CELL: SandboxNeuron = {
+  id: 'X',
+  cellType: 'pyr',
+  position: [100, 100],
+  inhibitory: false,
+  pointModel: POINT,
+}
+
 const PROJECT = {
   blocks: [BLOCK],
-  neurons: [],
+  neurons: [CELL],
   links: [],
   stimuli: [],
   recordings: [],
@@ -60,15 +74,37 @@ const PROJECT = {
 let root: Root | null = null
 let host: HTMLElement
 
-async function mount() {
+async function mount(
+  props: Partial<Parameters<typeof Properties>[0]> = {},
+): Promise<void> {
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
   await act(async () => {
     root!.render(
-      <Properties selection={{ kind: 'block', id: 'dis' }} project={PROJECT} cells={{}} />,
+      <Properties
+        selection={{ kind: 'block', id: 'dis' }}
+        project={PROJECT}
+        cells={{}}
+        spikes={{}}
+        elapsed={0}
+        {...props}
+      />,
     )
   })
+}
+
+/** Значение живого числа по его подписи: заряд, потенциал, разряды. */
+function vital(label: string): string | null {
+  const found = [...host.querySelectorAll('.insp-cell')].find(
+    (node) => node.querySelector('.insp-label')?.textContent === label,
+  )
+  return found?.querySelector('.insp-value')?.textContent ?? null
+}
+
+function cellState(charge: number, spiked = false, peak = charge): CellState {
+  // Потенциал и доля приходят из сессии: интерфейс их не пересчитывает.
+  return { v: -65 + charge * 15, spiked, charge, peak }
 }
 
 /** Подписи кнопок действия: драйв, запись и «убрать блок» идут одним списком. */
@@ -122,5 +158,66 @@ describe('порты блока в панели свойств', () => {
     // драйв на `gate` снимает тормоз, драйв на `in` возбуждает.
     expect(actions()).not.toContain('Драйв на gate')
     expect(actions()).not.toContain('Записывать модулятор out')
+  })
+})
+
+describe('выбранная клетка в панели свойств', () => {
+  it('показывает заряд, потенциал и разряды за прогон', async () => {
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      cells: { X: cellState(0.54) },
+      spikes: { X: [10, 30, 70] },
+      elapsed: 100,
+    })
+
+    // Тот же процент, что стоит над клеткой на холсте: одна функция, одно
+    // округление -- иначе фигура и панель разошлись бы в том же кадре.
+    expect(vital('заряд')).toBe('54%')
+    expect(vital('потенциал')).toBe('-56.9 мВ')
+    expect(vital('разряды')).toBe('3 · 30 Гц')
+  })
+
+  it('клетка ниже покоя отмечена, а не показана нулём', async () => {
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      cells: { X: cellState(-0.18) },
+    })
+
+    expect(vital('заряд')).toBe('↓18% · ниже покоя')
+  })
+
+  it('в кадре разряда показан пик, а не сброс', async () => {
+    // Между кадрами движок делает полсотни шагов, разряд занимает один:
+    // правило кадра общее с карточкой паттерна (`momentOf`), своей ветки для
+    // песочницы нет -- иначе разряд здесь пропал бы.
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      cells: { X: cellState(0, true, 1) },
+    })
+
+    expect(vital('заряд')).toBe('100%')
+  })
+
+  it('после перемотки показан настоящий заряд, а не сто процентов', async () => {
+    // Перемотка -- не кадр: сервер начинает накопленное заново от достигнутого
+    // состояния (#534). Клетка, разрядившаяся где-то в перемотанном отрезке,
+    // приходит с `spiked: false`, и показать её надо покоем.
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      cells: { X: cellState(0, false, 0) },
+      spikes: { X: [50.4] },
+      elapsed: 105,
+    })
+
+    expect(vital('заряд')).toBe('0%')
+    expect(vital('разряды')).toBe('1 · 10 Гц')
+  })
+
+  it('без ответа сессии числа не выдумываются', async () => {
+    await mount({ selection: { kind: 'neuron', id: 'X' } })
+
+    expect(vital('заряд')).toBe('—')
+    expect(vital('потенциал')).toBe('—')
+    expect(vital('разряды')).toBe('—')
   })
 })

@@ -31,10 +31,21 @@
  *
  * Подсветка: у свёрнутого блока светится коробка -- внутри кто-то разрядился;
  * у раскрытого светится сам разрядившийся узел, потому что теперь видно кто.
+ *
+ * Заряд клетки стоит числом над фигурой и заливкой внутри неё -- теми же, что
+ * на схеме паттерна (`lib/charge`, `LiveScheme`). Вспышка говорит «разрядилась»
+ * и молчит о том, почему соседняя не разрядилась: не хватило десяти процентов
+ * или вход до неё вовсе не дошёл. Отлаживают схему как раз в песочнице, и
+ * ответ на этот вопрос нужен здесь, а не только на витрине (#535).
+ *
+ * Долю считает сессия (`CellState.charge`): порог, покой и адаптация -- физика,
+ * а у интерфейса под рукой только номинальный порог типа клетки, тогда как у
+ * клетки он свой.
  */
 
 import { useMemo, useState, type PointerEvent } from 'react'
 
+import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { edgePath, miniature, type MiniEdge, type Miniature } from '../../lib/miniature'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
@@ -313,6 +324,18 @@ export function Canvas({
         // видно кто, и подсвечивать вместо него всю рамку значило бы прятать
         // то, ради чего блок и раскрыли.
         const active = !open && spiking(block, cells)
+        // Заряда у свёрнутого блока нет и не будет. Потенциал есть у клетки, а
+        // коробка -- это несколько клеток с разными порогами: среднее по ним
+        // ничего не измеряет, наибольшее превращает блок в вечно заряженный по
+        // самой возбудимой, а порт -- всего лишь ярлык одной внутренней клетки,
+        // и «62%» рядом с `out` прочли бы как заряд блока целиком. Любое из
+        // трёх чисел было бы выдумано здесь, в браузере, -- ровно то, чего в
+        // показе заряда делать нельзя.
+        //
+        // Поэтому у коробки остаётся вспышка («внутри кто-то разрядился»), а
+        // числа появляются по щелчку на «+»: блок считается насквозь, раскрытие
+        // ничего не стоит и не старит прогон, и ответ «кто и насколько» лежит
+        // на один щелчок дальше, а не подменяется правдоподобным средним.
         return (
           <g
             key={block.id}
@@ -381,7 +404,11 @@ export function Canvas({
                 {view.nodes.map((node) => {
                   const flat = `${block.id}/${node.id}`
                   const waiting = pending?.instance === flat && !pending.port
-                  const lit = cells[flat]?.spiked ?? false
+                  // Имя в живой сети у внутреннего узла с приставкой (`ffi/E`):
+                  // ею `compose` разводит два экземпляра одного паттерна.
+                  const state = cells[flat]
+                  const lit = state?.spiked ?? false
+                  const level = chargeLabel(momentOf(state))
                   return (
                     <g
                       key={node.id}
@@ -409,6 +436,18 @@ export function Canvas({
                         // тормозная квадратная, возбуждающая скруглённая.
                         rx={node.inhibitory ? 4 : node.height / 2}
                       />
+                      {/* Заливка -- отдельной фигурой поверх обводки, как на
+                          схеме паттерна: прозрачность меняется каждый кадр, не
+                          трогая ни рамку, ни подпись. */}
+                      <rect
+                        className="cv-in-charge"
+                        x={node.x - node.width / 2}
+                        y={node.y - node.height / 2}
+                        width={node.width}
+                        height={node.height}
+                        rx={node.inhibitory ? 4 : node.height / 2}
+                        opacity={chargeFill(state?.charge)}
+                      />
                       <text
                         x={node.x}
                         y={node.y}
@@ -417,6 +456,19 @@ export function Canvas({
                       >
                         {node.id}
                       </text>
+                      {/* Число то же, что над отдельной клеткой, а кегль
+                          мельче: узлов внутри блока бывает пятеро, и поле под
+                          начинку от этого не растёт. */}
+                      {level ? (
+                        <text
+                          className={`cv-in-level${level.below ? ' is-below' : ''}`}
+                          x={node.x}
+                          y={node.y - node.height / 2 - 2}
+                          textAnchor="middle"
+                        >
+                          {level.text}
+                        </text>
+                      ) : null}
                     </g>
                   )
                 })}
@@ -457,7 +509,9 @@ export function Canvas({
         const [x, y] = positionOf(neuron.id, neuron.position)
         const chosen = selected?.kind === 'neuron' && selected.id === neuron.id
         // Приставки у отдельной клетки нет: в собранной сети она зовётся так же.
-        const active = cells[neuron.id]?.spiked ?? false
+        const state = cells[neuron.id]
+        const active = state?.spiked ?? false
+        const level = chargeLabel(momentOf(state))
         const soma = somaPoint([x, y])
         const waiting = pending?.instance === neuron.id
         return (
@@ -478,12 +532,38 @@ export function Canvas({
               // обозначения, что в миниатюре каталога и на схеме прогона.
               rx={neuron.inhibitory ? 4 : DOT.height / 2}
             />
+            {/* Заливка -- отдельной фигурой поверх обводки, как на схеме
+                паттерна: прозрачность меняется каждый кадр, не трогая ни
+                рамку, ни подпись. */}
+            <rect
+              className="cv-charge"
+              x={x - DOT.width / 2}
+              y={y - DOT.height / 2}
+              width={DOT.width}
+              height={DOT.height}
+              rx={neuron.inhibitory ? 4 : DOT.height / 2}
+              opacity={chargeFill(state?.charge)}
+            />
             <text className="cv-label" x={x} y={y + 4} textAnchor="middle">
               {short(neuron.id, 9)}
               <title>
                 {neuron.id} · {neuron.cellType}
               </title>
             </text>
+            {/* Заряд числом -- над фигурой, там же, где он стоит на схеме
+                паттерна: внутрь не поместить, там имя клетки. Надписи нет,
+                пока сессия не ответила про эту клетку: «0%» в этом месте был
+                бы выдумкой, а не покоем. */}
+            {level ? (
+              <text
+                className={`cv-level${level.below ? ' is-below' : ''}`}
+                x={x}
+                y={y - DOT.height / 2 - 5}
+                textAnchor="middle"
+              >
+                {level.text}
+              </text>
+            ) : null}
             <g
               className={`cv-soma${waiting ? ' is-waiting' : ''}`}
               onPointerDown={(event) => event.stopPropagation()}

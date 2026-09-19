@@ -14,7 +14,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { LiveScheme, fill } from './LiveScheme'
+import { LiveScheme } from './LiveScheme'
 import type { CellState } from '../../model/sim'
 import type { Scheme } from '../../model/types'
 
@@ -102,14 +102,5 @@ describe('LiveScheme', () => {
     const rect = level('E')?.parentElement?.querySelector('rect')
     const top = Number(rect?.getAttribute('y'))
     expect(Number(level('E')?.getAttribute('y'))).toBeLessThan(top)
-  })
-
-  it('заливка обрезана по фигуре, а числу это не мешает', () => {
-    // Прозрачность за края не выходит, поэтому ниже покоя и выше порога о себе
-    // говорит надпись -- заливке такое не выразить.
-    expect(fill(cell(0.5))).toBe(0.5)
-    expect(fill(cell(-0.2))).toBe(0)
-    expect(fill(cell(1.1))).toBe(1)
-    expect(fill(undefined)).toBe(0)
   })
 })

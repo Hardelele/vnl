@@ -9,25 +9,34 @@
   border-top: 1px solid var(--line);
 }
 
+/* Колонки `minmax(0, 1fr)`, а не `1fr`: значение не переносится (`nowrap`), и
+   при обычном `1fr` колонка растянулась бы под него, а сетка вылезла бы за
+   узкую панель -- в песочнице она вдвое уже колонки карточки, и «11 · 69 Гц»
+   обрезалось бы на «Г». */
 .insp-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1px;
   background: var(--line);
   border-bottom: 1px solid var(--line);
 }
 
+/* Подпись и значение переносятся, когда в строку не влезают: в узкой панели
+   значение уходит под подпись целиком. Обрезать его нельзя -- «69 Гц» без
+   единицы читается как другое число. */
 .insp-cell {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: 0 var(--space-2);
   padding: 6px var(--space-4);
   background: var(--panel);
 }
 
 /* Заряд занимает строку целиком: он главная величина этой сетки, и делить с
-   ним строку нечему -- в сетке из семи ячеек иначе осталась бы дырка. */
+   ним строку нечему. Числа в сетке подобраны так, чтобы строки закрывались
+   целиком: пустая ячейка здесь -- не пробел, а полоса цвета разделителя. */
 .insp-cell.is-wide {
   grid-column: 1 / -1;
 }

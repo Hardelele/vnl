@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { chargeLabel } from './charge'
+import { chargeFill, chargeLabel } from './charge'
 
 describe('chargeLabel', () => {
   it('покой -- ноль процентов', () => {
@@ -49,5 +49,24 @@ describe('chargeLabel', () => {
     expect(chargeLabel(undefined)).toBeNull()
     expect(chargeLabel(null)).toBeNull()
     expect(chargeLabel(Number.NaN)).toBeNull()
+  })
+})
+
+describe('chargeFill', () => {
+  it('половина пути к порогу -- половина заливки', () => {
+    expect(chargeFill(0.5)).toBe(0.5)
+  })
+
+  it('обрезана с обоих концов: прозрачность за эти края не выходит', () => {
+    // Ниже покоя и выше номинального порога говорит надпись -- заливке такое
+    // не выразить, и подменять ею число нельзя.
+    expect(chargeFill(-0.2)).toBe(0)
+    expect(chargeFill(1.1)).toBe(1)
+  })
+
+  it('без состояния клетки фигура пустая', () => {
+    expect(chargeFill(undefined)).toBe(0)
+    expect(chargeFill(null)).toBe(0)
+    expect(chargeFill(Number.NaN)).toBe(0)
   })
 })

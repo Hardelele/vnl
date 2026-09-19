@@ -7,19 +7,19 @@
  * здесь то, чего на графике нет: чем клетка возбуждается, с каким весом и
  * задержкой, и какие у неё параметры.
  *
- * Заряд -- доля пути от покоя до порога -- стоит рядом с порогом и покоем, от
- * которых он и считается: это то же число, что над клеткой на схеме, только
- * вместе с тем, что его объясняет. Главное место у него всё-таки на схеме:
- * инспектор открыт для одной клетки, а заряд читают у всех сразу.
+ * Живые числа -- заряд, потенциал и разряды -- рисует общий `Vitals`: те же
+ * три величины показывает панель выбранной клетки в песочнице, и второй
+ * реализации «что показать про клетку» быть не должно. Здесь к ним добавлено
+ * то, от чего доля заряда считается, -- порог и покой, -- и это единственная
+ * причина, по которой параметры мембраны стоят следом.
  *
- * Частота считается по пройденному времени симуляции, а не по длительности
- * прогона: на середине прогона делить на полную длительность значило бы
- * показывать вдвое меньшую частоту и пугать ею зря.
+ * Главное место у заряда всё-таки на схеме: инспектор открыт для одной клетки,
+ * а заряд читают у всех сразу.
  */
 
-import { chargeLabel, momentOf } from '../../lib/charge'
 import type { CellState } from '../../model/sim'
 import type { Model } from '../../model/types'
+import { Field, Vitals } from './Vitals'
 import './inspector.css'
 
 export interface InspectorProps {
@@ -38,10 +38,6 @@ export function Inspector({ neuron, model, cells, spikes, elapsed }: InspectorPr
   const point = type?.pointModel
   const state = cells[neuron]
   const fired = spikes[neuron] ?? []
-  const rate = elapsed > 0 ? (fired.length / elapsed) * 1000 : 0
-  // Тот же процент, что стоит над клеткой на схеме: одна функция, одно
-  // округление -- иначе схема и панель разошлись бы на единицу в том же кадре.
-  const level = chargeLabel(momentOf(state))
 
   const inputs = model.contacts.filter((contact) => contact.post.instance === neuron)
   const outputs = model.contacts.filter((contact) => contact.pre.instance === neuron)
@@ -56,30 +52,25 @@ export function Inspector({ neuron, model, cells, spikes, elapsed }: InspectorPr
       <div className="row">
         <span className={`row-dot${cell?.inhibitory ? ' is-inh' : ''}`} />
         <span className="row-id">{neuron}</span>
-        <span className="mono row-dim row-end">
-          {fired.length} сп. · {rate.toFixed(0)} Гц
-        </span>
+        <span className="mono row-dim row-end">{cell?.inhibitory ? 'тормозная' : 'возбуждающая'}</span>
       </div>
 
+      <Vitals state={state} spikes={fired} elapsed={elapsed} />
+
+      {/* Параметры мембраны -- следом за живыми числами и в той же сетке:
+          порог и покой объясняют, от чего считается доля заряда, а сброс
+          говорит, куда клетка падает после разряда. Без них процент над
+          клеткой -- голое число. */}
       <div className="insp-grid">
-        {/* Заряд первым и во всю ширину: он отвечает на главный вопрос о
-            клетке сейчас -- далеко ли ей до разряда, -- а порог с покоем ниже
-            объясняют, от чего эта доля считается. */}
-        <Cell
-          label="заряд"
-          value={level ? (level.below ? `${level.text} · ниже покоя` : level.text) : '—'}
-          wide
-          below={level?.below}
-        />
-        <Cell label="потенциал" value={state ? `${state.v.toFixed(1)} мВ` : '—'} />
-        <Cell label="порог" value={point ? `${point.vThreshold} мВ` : '—'} />
-        <Cell label="покой" value={point ? `${point.vRest} мВ` : '—'} />
-        <Cell label="τ мембраны" value={point ? `${point.tauM} мс` : '—'} />
-        <Cell
+        <Field label="порог" value={point ? `${point.vThreshold} мВ` : '—'} />
+        <Field label="покой" value={point ? `${point.vRest} мВ` : '—'} />
+        <Field label="сброс" value={point ? `${point.vReset} мВ` : '—'} />
+        <Field label="τ мембраны" value={point ? `${point.tauM} мс` : '—'} />
+        <Field
           label="адаптация"
           value={point?.adaptation ? `${point.adaptation} мВ` : 'нет'}
         />
-        <Cell label="рефрактерность" value={point ? `${point.refractory} мс` : '—'} />
+        <Field label="рефрактерность" value={point ? `${point.refractory} мс` : '—'} />
       </div>
 
       <div className="panel-head insp-sub">
@@ -123,27 +114,6 @@ export function Inspector({ neuron, model, cells, spikes, elapsed }: InspectorPr
           ))}
         </>
       ) : null}
-    </div>
-  )
-}
-
-function Cell({
-  label,
-  value,
-  wide = false,
-  below = false,
-}: {
-  label: string
-  value: string
-  /** Во всю ширину сетки: так стоит заряд, остальное -- половинками. */
-  wide?: boolean
-  /** Клетка ниже покоя: значение красится в цвет торможения, как на схеме. */
-  below?: boolean
-}) {
-  return (
-    <div className={`insp-cell${wide ? ' is-wide' : ''}`}>
-      <span className="insp-label">{label}</span>
-      <span className={`mono insp-value${below ? ' is-below' : ''}`}>{value}</span>
     </div>
   )
 }

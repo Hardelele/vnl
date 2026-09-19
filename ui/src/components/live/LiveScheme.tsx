@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { chargeLabel, momentOf } from '../../lib/charge'
+import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { builtinPlacement, placeScheme, type Placement } from '../../lib/place'
 import type { Scheme } from '../../model/types'
 import type { CellState } from '../../model/sim'
@@ -90,18 +90,6 @@ export function LiveScheme({
   )
 }
 
-/**
- * Заливка фигуры по заряду: 0 -- пусто, 1 -- полная.
- *
- * Обрезана с обоих концов, потому что прозрачность за эти края не выходит.
- * Ниже покоя и выше номинального порога говорит надпись -- заливке такое не
- * выразить, и подменять ею число нельзя.
- */
-export function fill(state: CellState | undefined): number {
-  if (!state) return 0
-  return Math.min(1, Math.max(0, state.charge))
-}
-
 function Cell({
   node,
   state,
@@ -113,7 +101,7 @@ function Cell({
   chosen: boolean
   onPick?: (neuron: string) => void
 }) {
-  const level = fill(state)
+  const level = chargeFill(state?.charge)
   const label = chargeLabel(momentOf(state))
   const radius = node.inhibitory ? 6 : node.height / 2
   const kind = node.inhibitory ? 'is-inh' : 'is-exc'

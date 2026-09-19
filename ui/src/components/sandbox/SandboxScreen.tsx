@@ -500,7 +500,13 @@ export function SandboxScreen() {
         </section>
 
         <aside className="panel sb-right">
-          <Properties selection={selected} project={project} cells={cells} />
+          <Properties
+            selection={selected}
+            project={project}
+            cells={cells}
+            spikes={spikes}
+            elapsed={time}
+          />
           <RunFields run={project.run} />
         </aside>
       </div>
