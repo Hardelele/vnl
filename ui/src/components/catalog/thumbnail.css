@@ -30,17 +30,22 @@
   stroke: var(--inh);
 }
 
-.thumbnail-link line {
+/* Связь -- кривая, поэтому path, а не line: прямая рисуется тем же path с
+   контрольной точкой на самой прямой. */
+.thumbnail-wire {
+  fill: none;
   stroke: var(--line-strong);
   stroke-width: 1.4;
 }
 
+/* Знак у конца связи: острие у возбуждения, плашка у торможения. Стоит только
+   со стороны цели -- по нему и читается, куда связь идёт. */
 .thumbnail-link .thumbnail-cap {
   fill: var(--exc);
   stroke: none;
 }
 
-.thumbnail-link.is-inh line {
+.thumbnail-link.is-inh .thumbnail-wire {
   stroke: var(--inh);
 }
 
@@ -51,7 +56,7 @@
 }
 
 /* Модуляция -- не путь сигнала, поэтому пунктир и другой цвет. */
-.thumbnail-link.is-mod line {
+.thumbnail-link.is-mod .thumbnail-wire {
   stroke: var(--mod);
   stroke-dasharray: 4 3;
 }

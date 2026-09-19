@@ -7,11 +7,17 @@
  * Обозначения те же, что на странице прогона: возбуждающая клетка -- скруглённая,
  * тормозная -- квадратная, торможение приходит плашкой, модуляция -- янтарным
  * пунктиром. Одна и та же фигура не должна значить в двух местах разное.
+ *
+ * Знак стоит только у того конца, куда связь приходит, и по нему читается
+ * направление: возбуждение -- острие, торможение -- плашка. Раньше у
+ * возбуждения на конце была точка: на большой схеме она значит место контакта
+ * на ветви, а здесь ветвей нет, и от точки оставалась одна двусмысленность --
+ * `A→B` и `B→A` выглядели одинаково.
  */
 
 import { useMemo } from 'react'
 
-import { miniature, type MiniEdge, type MiniNode } from '../../lib/miniature'
+import { edgePath, miniature, type MiniEdge, type MiniNode } from '../../lib/miniature'
 import type { Scheme } from '../../model/types'
 import './thumbnail.css'
 
@@ -78,26 +84,38 @@ function Cell({ node }: { node: MiniNode }) {
   )
 }
 
+/** Длина острия и половина плашки: больше -- знак закрывает саму связь. */
+const TIP = 6.5
+const CAP = 4.5
+
 function Edge({ edge }: { edge: MiniEdge }) {
-  const dx = edge.end.x - edge.start.x
-  const dy = edge.end.y - edge.start.y
-  const length = Math.hypot(dx, dy) || 1
-  const ux = dx / length
-  const uy = dy / length
+  // Связь -- квадратичная кривая: у прямой контрольная точка лежит на ней
+  // самой, поэтому ветки на «прямую и дугу» здесь нет. Поворот знака берётся
+  // из касательной в конце, а не из направления «начало -- конец»: у дуги это
+  // разные вещи, и на дуге знак смотрел бы мимо клетки.
+  const ux = edge.tip.x
+  const uy = edge.tip.y
 
   return (
     <g className={`thumbnail-link is-${edge.kind}`}>
-      <line x1={edge.start.x} y1={edge.start.y} x2={edge.end.x} y2={edge.end.y} />
+      <path className="thumbnail-wire" d={edgePath(edge)} />
       {edge.kind === 'inh' ? (
         <line
           className="thumbnail-cap"
-          x1={edge.end.x - uy * 4}
-          y1={edge.end.y + ux * 4}
-          x2={edge.end.x + uy * 4}
-          y2={edge.end.y - ux * 4}
+          x1={edge.end.x - uy * CAP}
+          y1={edge.end.y + ux * CAP}
+          x2={edge.end.x + uy * CAP}
+          y2={edge.end.y - ux * CAP}
         />
       ) : (
-        <circle className="thumbnail-cap" cx={edge.end.x} cy={edge.end.y} r={2.4} />
+        <polygon
+          className="thumbnail-cap"
+          points={[
+            `${edge.end.x},${edge.end.y}`,
+            `${edge.end.x - ux * TIP - uy * 3},${edge.end.y - uy * TIP + ux * 3}`,
+            `${edge.end.x - ux * TIP + uy * 3},${edge.end.y - uy * TIP - ux * 3}`,
+          ].join(' ')}
+        />
       )}
     </g>
   )

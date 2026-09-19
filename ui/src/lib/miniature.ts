@@ -15,9 +15,26 @@
  * Модуляция в глубину не считается. Дофамин из VTA -- не шаг сигнала, а
  * управление контактом; считай его связью, и клетка уезжала бы на слой вправо
  * по причине, которой на схеме нет.
+ *
+ * Связи -- дуги, а не отрезки. Отрезками миниатюра врала: FFI (`IN→E`, `IN→I`,
+ * `I→E`) выглядела цепочкой `IN — I — E`, потому что обходная связь `IN→E` шла
+ * ровно там же, где путь через `I`, а встречная пара `A⊣B`, `B⊣A` давала одну
+ * линию -- вторая ложилась на первую. Поэтому каждой связи здесь выбирается
+ * отклонение (`bow`): 0, если прямая никому не мешает, иначе дуга. Сторону
+ * задаёт перпендикуляр справа по ходу связи -- у встречной пары ход обратный,
+ * и дуги расходятся сами, без сговора между связями и без зависимости от
+ * порядка в списке. Величина берётся из нескольких заготовленных шагов: для
+ * каждого считается штраф (задел за чужую фигуру, выход за поле, лишняя
+ * кривизна), побеждает наименьший. Это десяток проб на связь на одной
+ * арифметике -- дешевле, чем разметка текста рядом, и синхронно.
  */
 
 import type { EdgeKind, Scheme } from '../model/types'
+
+export interface MiniPoint {
+  x: number
+  y: number
+}
 
 export interface MiniNode {
   id: string
@@ -35,8 +52,14 @@ export interface MiniEdge {
   from: MiniNode
   to: MiniNode
   /** Точки на границах фигур: линия не должна перечёркивать подпись. */
-  start: { x: number; y: number }
-  end: { x: number; y: number }
+  start: MiniPoint
+  end: MiniPoint
+  /** Отклонение дуги от прямой; 0 -- связь идёт прямой. */
+  bow: number
+  /** Контрольная точка квадратичной кривой; при `bow` 0 лежит на прямой. */
+  control: MiniPoint
+  /** Единичный вектор входа в цель: по нему повёрнут знак на конце связи. */
+  tip: MiniPoint
 }
 
 export interface Miniature {
@@ -60,6 +83,17 @@ const NODE_MIN_WIDTH = 28
 const NODE_MAX_WIDTH = 72
 /** Ширина знака подписи в 10px Roboto -- с запасом, чтобы имя не вылезало. */
 const CHAR_WIDTH = 5.8
+
+/** Зазор, с которым связь обходит чужую фигуру: меньше -- линия её задевает. */
+const CLEARANCE = 4
+/** Шаг отклонения: при 34 дуга обходит клетку высотой 20 с этим зазором. */
+const BOW_STEP = 34
+/** Если шага не хватило -- дуга круче; больше 2 шагов уже не влезает в поле. */
+const BOW_SCALE = [1, 1.55, 2.1]
+/** Сколько точек кривой проверяется на помехи: хватает, чтобы не проскочить. */
+const SAMPLES = 15
+/** Полоса у края поля, за которую дуге лучше не выходить: там её срежет. */
+const EDGE_INSET = 2
 
 export function nodeWidth(label: string): number {
   const measured = 12 + label.length * CHAR_WIDTH
@@ -117,7 +151,7 @@ export function depths(scheme: Scheme): Map<string, number> {
 }
 
 /** Точка выхода линии на границе фигуры -- прямоугольник режется точно. */
-function boundary(node: MiniNode, dx: number, dy: number): { x: number; y: number } {
+function boundary(node: MiniNode, dx: number, dy: number): MiniPoint {
   const halfWidth = node.width / 2
   const halfHeight = node.height / 2
   const scale = Math.min(
@@ -125,6 +159,103 @@ function boundary(node: MiniNode, dx: number, dy: number): { x: number; y: numbe
     halfHeight / Math.max(Math.abs(dy), 1e-6),
   )
   return { x: node.x + dx * scale, y: node.y + dy * scale }
+}
+
+/**
+ * Контрольная точка квадратичной кривой: середина хода, сдвинутая по
+ * перпендикуляру справа по ходу связи. Наибольшее отклонение кривой от прямой
+ * -- ровно `bow / 2`, на середине.
+ */
+function controlPoint(from: MiniPoint, to: MiniPoint, bow: number): MiniPoint {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const length = Math.hypot(dx, dy) || 1
+  return {
+    x: (from.x + to.x) / 2 - (dy / length) * bow,
+    y: (from.y + to.y) / 2 + (dx / length) * bow,
+  }
+}
+
+function quadPoints(p0: MiniPoint, p1: MiniPoint, p2: MiniPoint, count: number): MiniPoint[] {
+  const points: MiniPoint[] = []
+  for (let i = 0; i < count; i += 1) {
+    const t = count > 1 ? i / (count - 1) : 0.5
+    const k = 1 - t
+    points.push({
+      x: k * k * p0.x + 2 * k * t * p1.x + t * t * p2.x,
+      y: k * k * p0.y + 2 * k * t * p1.y + t * t * p2.y,
+    })
+  }
+  return points
+}
+
+/** Точки вдоль нарисованной связи: по ним видно, где она на самом деле идёт. */
+export function edgePoints(edge: MiniEdge, count = 9): MiniPoint[] {
+  return quadPoints(edge.start, edge.control, edge.end, count)
+}
+
+/** Путь связи для SVG. Прямая -- та же кривая, просто с `bow` 0. */
+export function edgePath(edge: MiniEdge): string {
+  const round = (value: number): number => Math.round(value * 100) / 100
+  return [
+    `M ${round(edge.start.x)} ${round(edge.start.y)}`,
+    `Q ${round(edge.control.x)} ${round(edge.control.y)}`,
+    `${round(edge.end.x)} ${round(edge.end.y)}`,
+  ].join(' ')
+}
+
+/** Насколько точка зашла в фигуру с зазором; 0 -- не зашла. */
+function intrusion(node: MiniNode, point: MiniPoint): number {
+  const overX = node.width / 2 + CLEARANCE - Math.abs(point.x - node.x)
+  const overY = node.height / 2 + CLEARANCE - Math.abs(point.y - node.y)
+  return overX > 0 && overY > 0 ? Math.min(overX, overY) : 0
+}
+
+/** Чем плох такой изгиб: чужие фигуры на пути, выход за поле, лишняя дуга. */
+function penalty(
+  from: MiniNode,
+  to: MiniNode,
+  bow: number,
+  others: MiniNode[],
+  box: MiniatureBox,
+): number {
+  const points = quadPoints(from, controlPoint(from, to, bow), to, SAMPLES)
+  // Пересечь чужую клетку нельзя совсем -- из-за этого FFI и читался цепочкой.
+  let cost = Math.abs(bow) * 0.04
+  for (const node of others) {
+    let deepest = 0
+    for (const point of points) deepest = Math.max(deepest, intrusion(node, point))
+    if (deepest > 0) cost += 100 + deepest
+  }
+  for (const point of points) {
+    const outside = Math.max(
+      0,
+      EDGE_INSET - point.x,
+      point.x - (box.width - EDGE_INSET),
+      EDGE_INSET - point.y,
+      point.y - (box.height - EDGE_INSET),
+    )
+    cost += 8 * outside
+  }
+  return cost
+}
+
+/**
+ * Чем пробовать отклонять связь. Единственная связь пары может идти прямой и
+ * пробует обе стороны; вторая связь пары прямой идти не может -- она легла бы
+ * точно на первую, -- поэтому только дуги и только вправо по ходу: встречная,
+ * идущая обратно, окажется с другой стороны сама.
+ */
+function bowChoices(sameWay: number, alone: boolean): number[] {
+  const base = BOW_STEP * (sameWay + 1)
+  const arcs = BOW_SCALE.map((scale) => base * scale)
+  if (!alone) return arcs
+  return [0, ...arcs.flatMap((value) => [value, -value])]
+}
+
+/** Пара клеток без учёта направления: у встречных связей ключ один. */
+function pairKey(from: string, to: string): string {
+  return from < to ? `${from} ${to}` : `${to} ${from}`
 }
 
 export function miniature(scheme: Scheme, box: MiniatureBox = DEFAULT_BOX): Miniature {
@@ -164,20 +295,56 @@ export function miniature(scheme: Scheme, box: MiniatureBox = DEFAULT_BOX): Mini
     .map((neuron) => placed.get(neuron.id))
     .filter((node): node is MiniNode => node !== undefined)
 
+  const drawn = scheme.edges
+    .map((edge) => ({ edge, from: placed.get(edge.from), to: placed.get(edge.to) }))
+    .filter(
+      (item): item is { edge: Scheme['edges'][number]; from: MiniNode; to: MiniNode } =>
+        item.from !== undefined && item.to !== undefined && item.from !== item.to,
+    )
+
+  const pairSize = new Map<string, number>()
+  for (const { edge } of drawn) {
+    const key = pairKey(edge.from, edge.to)
+    pairSize.set(key, (pairSize.get(key) ?? 0) + 1)
+  }
+
+  const seen = new Map<string, number>()
   const edges: MiniEdge[] = []
-  for (const edge of scheme.edges) {
-    const from = placed.get(edge.from)
-    const to = placed.get(edge.to)
-    if (!from || !to || from === to) continue
-    const dx = to.x - from.x
-    const dy = to.y - from.y
+  for (const { edge, from, to } of drawn) {
+    const wayKey = `${edge.from} ${edge.to}`
+    const sameWay = seen.get(wayKey) ?? 0
+    seen.set(wayKey, sameWay + 1)
+    const alone = (pairSize.get(pairKey(edge.from, edge.to)) ?? 1) <= 1
+    const others = nodes.filter((node) => node !== from && node !== to)
+
+    let bow = 0
+    let best = Number.POSITIVE_INFINITY
+    for (const choice of bowChoices(sameWay, alone)) {
+      const cost = penalty(from, to, choice, others, box)
+      if (cost < best) {
+        best = cost
+        bow = choice
+      }
+    }
+
+    // Связь выходит из фигуры и входит в неё в сторону изгиба, иначе дуга
+    // отрывалась бы от клетки на самом видном месте -- у её края.
+    const control = controlPoint(from, to, bow)
+    const start = boundary(from, control.x - from.x, control.y - from.y)
+    const end = boundary(to, control.x - to.x, control.y - to.y)
+    const tipX = end.x - control.x
+    const tipY = end.y - control.y
+    const tipLength = Math.hypot(tipX, tipY) || 1
     edges.push({
       id: edge.id,
       kind: edge.kind,
       from,
       to,
-      start: boundary(from, dx, dy),
-      end: boundary(to, -dx, -dy),
+      start,
+      end,
+      bow,
+      control,
+      tip: { x: tipX / tipLength, y: tipY / tipLength },
     })
   }
 
