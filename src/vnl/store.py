@@ -26,12 +26,16 @@ from pathlib import Path
 from typing import Any, TypeVar, get_args, get_origin
 
 from . import ir
+from .cells import Cell
 from .patterns import Pattern, Sandbox
 
 T = TypeVar("T")
 
 PATTERNS_DIR = "patterns"
 SANDBOXES_DIR = "sandboxes"
+#: Свои типы клеток. Встроенные живут в коде (`vnl.cells`), сюда кладутся те,
+#: что завёл человек, -- и перекрывают встроенные по идентификатору.
+CELLS_DIR = "cells"
 
 
 class StoreError(RuntimeError):
@@ -151,6 +155,34 @@ class Store:
         self.pattern_path(pattern_id).unlink(missing_ok=True)
         self._tell_index("forget", pattern_id)
 
+    # --- свои типы клеток -------------------------------------------------
+
+    def cell_path(self, cell_id: str) -> Path:
+        return self.root / CELLS_DIR / f"{_safe(cell_id)}.json"
+
+    def save_cell(self, cell: "Cell") -> Path:
+        path = self.cell_path(cell.id)
+        _write(path, to_plain(cell))
+        return path
+
+    def load_cell(self, cell_id: str) -> "Cell":
+        path = self.cell_path(cell_id)
+        if not path.exists():
+            raise StoreError(f"типа клетки {cell_id!r} нет в хранилище")
+        return from_plain(Cell, _read(path))
+
+    def cells(self) -> list["Cell"]:
+        """Свои типы клеток. Пустой каталог -- обычное дело: есть встроенные."""
+        directory = self.root / CELLS_DIR
+        if not directory.exists():
+            return []
+        return [
+            from_plain(Cell, _read(path)) for path in sorted(directory.glob("*.json"))
+        ]
+
+    def delete_cell(self, cell_id: str) -> None:
+        self.cell_path(cell_id).unlink(missing_ok=True)
+
     # --- песочницы --------------------------------------------------------
 
     def sandbox_path(self, sandbox_id: str) -> Path:
@@ -176,6 +208,10 @@ class Store:
 
     def delete_sandbox(self, sandbox_id: str) -> None:
         self.sandbox_path(sandbox_id).unlink(missing_ok=True)
+
+
+def _cells_dir(root: Path) -> Path:
+    return root / CELLS_DIR
 
 
 def _safe(identifier: str) -> str:
