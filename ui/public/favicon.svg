@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="VNL">
+  <!-- Тот же знак, что в шапке приложения: «v» с точкой. Геометрия простая
+       нарочно — на 16 пикселях от буквы остаётся только силуэт, и всё, что
+       сложнее двух штрихов и точки, превращается в пятно. Шрифт не нужен:
+       буква нарисована ломаной, поэтому иконка одинакова везде. -->
+  <rect width="64" height="64" rx="14" fill="#1E7AD1"/>
+  <path d="M17 19 L30 45 L43 19" fill="none" stroke="#FFFFFF" stroke-width="7"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="50.5" cy="44.5" r="4.5" fill="#FFFFFF"/>
+</svg>
