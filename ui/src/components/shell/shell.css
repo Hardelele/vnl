@@ -174,35 +174,98 @@
   outline-offset: 2px;
 }
 
-/* Кто вошёл, в правом углу панели. Почта длинная, поэтому она обрезается, а не
-   растягивает панель и не переносит строку. */
-.bar-who {
-  max-width: 14rem;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-sm, 13px);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Кто вошёл, в правом углу панели: значок, имя и меню действий.
+   Имя длинное (почта), поэтому оно обрезается, а не растягивает панель. */
+.who {
+  position: relative;
 }
 
-.bar-out {
-  padding: 4px var(--space-2);
+.who-face {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 6px 3px 3px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: var(--text-sm, 13px);
-  text-decoration: none;
   cursor: pointer;
 }
 
-.bar-out:hover {
+.who-face:hover {
   background: var(--subtle);
   color: var(--ink);
 }
 
-.bar-out:focus-visible {
+.who-face:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
+
+/* Значок -- буква в круге, а не картинка: аватаров у провайдера может не быть,
+   а место под них всё равно должно держаться одинаковым. */
+.who-badge {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--selected);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  line-height: 1;
+}
+
+.who-name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.who-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  min-width: 12rem;
+  flex-direction: column;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+/* Полное имя в меню: в панели оно обрезано, и где-то оно должно быть целиком. */
+.who-full {
+  overflow: hidden;
+  padding: 2px var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm, 13px);
+  text-overflow: ellipsis;
+}
+
+.who-item {
+  padding: 6px var(--space-2);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: var(--text-sm, 13px);
+  text-decoration: none;
+}
+
+.who-item:hover {
+  background: var(--subtle);
+}
+
+.who-item:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+

@@ -951,7 +951,19 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(str(flow.get("state", "")), state):
             raise auth.AuthError("state не совпал -- вход начат не здесь")
         tokens = self.provider.exchange(code, str(flow["verifier"]))
-        session = auth.Session.of(self.provider.claims(tokens["id_token"]))
+        claims = self.provider.claims(tokens["id_token"])
+        # Имя и почта приходят не в токене, а с `userinfo`: при коде
+        # авторизации провайдер кладёт в `id_token` только `sub`. Спрашиваем
+        # только если в токене их и правда нет -- лишний поход к провайдеру на
+        # каждый вход не нужен.
+        if not claims.get("email") and not claims.get("name"):
+            access = tokens.get("access_token")
+            if access:
+                claims = {
+                    **claims,
+                    **self.provider.userinfo(str(access), str(claims.get("sub"))),
+                }
+        session = auth.Session.of(claims)
         payload = session.as_payload()
         payload["exp"] = time.time() + self.provider.settings.session_ttl
         payload["idt"] = tokens["id_token"]

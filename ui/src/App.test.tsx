@@ -97,6 +97,15 @@ async function click(label: string): Promise<void> {
   })
 }
 
+/** Открыть меню учётной записи: щелчок по значку с именем. */
+async function openUserMenu(): Promise<void> {
+  const face = host.querySelector('.who-face') as HTMLElement | null
+  if (!face) throw new Error('в панели нет кто-вошёл')
+  await act(async () => {
+    face.click()
+  })
+}
+
 function loginLinks(): HTMLAnchorElement[] {
   return [...host.querySelectorAll('a')].filter(
     (link) => link.textContent?.trim().startsWith('Войти'),
@@ -188,7 +197,7 @@ describe('библиотека без входа', () => {
     expect(host.textContent).toContain('Feed-forward inhibition')
   })
 
-  it('вошедшего панель называет по почте и предлагает выйти', async () => {
+  it('вошедшего панель называет по почте, а выход лежит в его меню', async () => {
     serve([
       [
         '/api/session',
@@ -206,7 +215,66 @@ describe('библиотека без входа', () => {
 
     expect(host.textContent).toContain('user@reckue.com')
     expect(loginLinks()).toHaveLength(0)
-    expect(host.querySelector('.bar-out')?.getAttribute('href')).toBe('/auth/logout')
+    // Выход -- действие над учётной записью, а не кнопка панели: их будет
+    // больше одного, и место под них должно существовать заранее.
+    expect(host.querySelector('.who-menu')).toBeNull()
+
+    await openUserMenu()
+
+    expect(host.querySelector('.who-item')?.getAttribute('href')).toBe('/auth/logout')
+  })
+
+  it('меню учётной записи закрывается щелчком мимо', async () => {
+    // Открытое меню, которое не закрыть, -- ловушка на экране, где всё
+    // остальное работает щелчком.
+    serve([
+      [
+        '/api/session',
+        {
+          user: { sub: 'u1', email: 'user@reckue.com', name: null },
+          login: '/auth/login',
+          logout: '/auth/logout',
+          required: true,
+        },
+      ],
+      ['/api/catalog', CATALOG],
+    ])
+
+    await mount()
+    await openUserMenu()
+    expect(host.querySelector('.who-menu')).not.toBeNull()
+
+    await act(async () => {
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+
+    expect(host.querySelector('.who-menu')).toBeNull()
+  })
+
+  it('вместо идентификатора человек видит короткую строку, а не тридцать знаков', async () => {
+    // Провайдер при коде авторизации кладёт в токен только `sub`. Сервер
+    // спрашивает имя отдельно, но если и там пусто -- показывать целиком
+    // `8161ee5a-7705-48c6-bd27-9ab3f2f51e9b` незачем: это полпанели и ноль
+    // смысла. Полное значение остаётся в подсказке и в меню.
+    serve([
+      [
+        '/api/session',
+        {
+          user: { sub: '8161ee5a-7705-48c6-bd27-9ab3f2f51e9b', email: null, name: null },
+          login: '/auth/login',
+          logout: '/auth/logout',
+          required: true,
+        },
+      ],
+      ['/api/catalog', CATALOG],
+    ])
+
+    await mount()
+
+    const face = host.querySelector('.who-face') as HTMLElement
+    expect(face.textContent).toContain('8161ee5a…')
+    expect(face.textContent).not.toContain('9ab3f2f51e9b')
+    expect(face.getAttribute('title')).toBe('8161ee5a-7705-48c6-bd27-9ab3f2f51e9b')
   })
 })
 

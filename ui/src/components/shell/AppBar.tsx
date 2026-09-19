@@ -8,6 +8,7 @@
  */
 
 import { applyTheme, useTheme } from '../../state/theme'
+import { UserMenu } from './UserMenu'
 import './shell.css'
 
 export type Screen = 'library' | 'sandbox'
@@ -74,18 +75,7 @@ export function AppBar({
         <span className={`bar-led is-${status.tone}`} />
         {status.text}
       </span>
-      {who ? (
-        <>
-          <span className="bar-who" title={who.label}>
-            {who.label}
-          </span>
-          {/* Выход -- ссылка, а не кнопка с fetch: он уводит к провайдеру
-              закрывать сессию, то есть это переход, а не запрос. */}
-          <a className="bar-out" href={who.logout}>
-            Выйти
-          </a>
-        </>
-      ) : null}
+      {who ? <UserMenu label={who.label} logout={who.logout} /> : null}
       {/* Вход стоит здесь же, где потом встанет имя вошедшего: это одно и то же
           место панели в двух состояниях, а не два разных экрана. */}
       {signIn ? (

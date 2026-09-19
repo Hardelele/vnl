@@ -156,7 +156,26 @@ class FakeProvider(BaseHTTPRequestHandler):
                     "token_endpoint": f"{issuer}/token",
                     "jwks_uri": f"{issuer}/jwks",
                     "end_session_endpoint": f"{issuer}/session/end",
+                    "userinfo_endpoint": f"{issuer}/userinfo",
                 },
+            )
+            return
+        if self.path == "/userinfo":
+            self.plan["userinfo_auth"] = self.headers.get("Authorization")
+            self.plan["userinfo_hits"] = self.plan.get("userinfo_hits", 0) + 1
+            if self.plan.get("userinfo_error"):
+                self._json(500, {"error": self.plan["userinfo_error"]})
+                return
+            self._json(
+                200,
+                self.plan.get(
+                    "userinfo",
+                    {
+                        "sub": "user-1",
+                        "email": "user@reckue.com",
+                        "name": "Пользователь Reckue",
+                    },
+                ),
             )
             return
         if self.path == "/jwks":
@@ -678,6 +697,58 @@ def test_a_foreign_address_is_not_a_place_to_return_to(stand):
     )
     assert status == 302
     assert headers["Location"] == "/"
+
+
+def test_a_person_is_named_not_numbered(stand, provider_plan):
+    """При коде авторизации провайдер кладёт в токен только `sub`.
+
+    Так устроен и настоящий Reckue auth: `email` и `name` он отдаёт на
+    `userinfo`. Без этого похода панель показывает человеку его идентификатор
+    вида `8161ee5a-7705-48c6-bd27-9ab3f2f51e9b`, то есть не показывает ничего.
+    """
+    provider_plan["claims"] = {"email": None, "name": None}
+
+    session = enter(stand)
+
+    who = json_of(ask(stand, "/api/session", session)[2])["user"]
+    assert who["email"] == "user@reckue.com"
+    assert who["name"] == "Пользователь Reckue"
+    assert provider_plan["userinfo_auth"] == "Bearer at", "токен доступа предъявлен"
+
+
+def test_a_name_in_the_token_saves_a_trip(stand, provider_plan):
+    """Лишний поход к провайдеру на каждый вход -- лишняя причина отказа."""
+    session = enter(stand)
+
+    assert json_of(ask(stand, "/api/session", session)[2])["user"]["email"]
+    assert provider_plan.get("userinfo_hits", 0) == 0
+
+
+def test_userinfo_about_someone_else_is_thrown_away(stand, provider_plan):
+    """Иначе подменённый ответ подписал бы чужое имя нашей сессии.
+
+    Совпадение `sub` требует спецификация, и это здесь единственная проверка,
+    которая что-то значит: право входа доказано подписью токена, а userinfo
+    приходит по обычному Bearer.
+    """
+    provider_plan["claims"] = {"email": None, "name": None}
+    provider_plan["userinfo"] = {"sub": "кто-то-другой", "email": "злой@example"}
+
+    session = enter(stand)
+
+    who = json_of(ask(stand, "/api/session", session)[2])["user"]
+    assert who["sub"] == "user-1"
+    assert who["email"] is None, "чужое имя не взято"
+
+
+def test_a_silent_provider_does_not_block_the_door(stand, provider_plan):
+    """Имя -- украшение. Право входа уже доказано подписью токена."""
+    provider_plan["claims"] = {"email": None, "name": None}
+    provider_plan["userinfo_error"] = "нет"
+
+    session = enter(stand)
+
+    assert json_of(ask(stand, "/api/session", session)[2])["user"]["sub"] == "user-1"
 
 
 def test_exchange_sends_verifier_and_client_secret(stand, provider_plan, settings):

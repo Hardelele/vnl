@@ -44,6 +44,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sys
 import threading
 import time
 import urllib.error
@@ -308,6 +309,8 @@ class Endpoints:
     token: str
     jwks: str
     end_session: str | None
+    #: Где спросить, как зовут вошедшего. Не у всех провайдеров есть.
+    userinfo: str | None = None
 
 
 class Provider:
@@ -364,6 +367,7 @@ class Provider:
                     token=found["token_endpoint"],
                     jwks=found["jwks_uri"],
                     end_session=found.get("end_session_endpoint"),
+                    userinfo=found.get("userinfo_endpoint"),
                 )
             return self._endpoints
 
@@ -444,6 +448,40 @@ class Provider:
                 self.settings.client_id,
                 now,
             )
+
+    def userinfo(self, access_token: str, subject: str) -> dict[str, Any]:
+        """Как зовут вошедшего. Пусто -- значит спросить негде или не сказали.
+
+        Почему это отдельный поход, а не чтение `id_token`: при коде
+        авторизации провайдер кладёт в токен только `sub`, а `email` и `name`
+        отдаёт здесь -- так устроен и наш Reckue auth. Без этого шага панель
+        показывает человеку его идентификатор вида
+        `8161ee5a-7705-48c6-bd27-9ab3f2f51e9b`, то есть не показывает ничего.
+
+        `sub` в ответе обязан совпасть с `sub` токена -- это требование
+        спецификации и единственная здесь проверка, которая что-то значит:
+        иначе подменённый ответ userinfo подписал бы чужое имя нашей сессии.
+
+        Отказ провайдера не валит вход: имя -- украшение, а право входа уже
+        доказано подписью токена.
+        """
+        end = self.endpoints().userinfo
+        if not end:
+            return {}
+        try:
+            found = self._open(end, None, {"Authorization": f"Bearer {access_token}"})
+        except AuthError as exc:
+            print(f"userinfo не ответил: {exc}", file=sys.stderr)
+            return {}
+        if not isinstance(found, dict):
+            return {}
+        if found.get("sub") != subject:
+            print(
+                "userinfo отвечает про другого человека -- ответ отброшен",
+                file=sys.stderr,
+            )
+            return {}
+        return found
 
     def logout_url(self, id_token: str | None) -> str | None:
         """Адрес выхода у провайдера, если он его объявляет.
