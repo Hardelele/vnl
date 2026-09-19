@@ -309,6 +309,14 @@ def cmd_index(args: argparse.Namespace) -> int:
         else:
             files = len(store.patterns())
             state = index.state(files)
+            # Недоступный индекс -- отказ, а не «строк неизвестно». `state()`
+            # глотает причину нарочно: приложению важно продолжить работу,
+            # читая файлы. Диагностической команде -- наоборот: молчаливый ноль
+            # здесь означает, что проверка выката проходит на сломанном
+            # индексе, и мы узнаём о нём из stderr службы или никогда.
+            if not state.get("connected"):
+                print(state.get("reason", "индекс недоступен"), file=sys.stderr)
+                return 1
             print(f"файлов: {files}, в индексе: {state.get('rows', '?')}")
             if state.get("stale"):
                 print("индекс разошёлся с хранилищем: нужен `vnl index rebuild`")

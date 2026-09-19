@@ -165,6 +165,29 @@ def test_a_broken_index_is_not_a_broken_catalog(tmp_path, ffi, capsys):
     assert "файлов" in capsys.readouterr().err, "отказ индекса назван, а не скрыт"
 
 
+def test_the_status_command_refuses_on_an_unreachable_index(tmp_path, ffi, capsys, monkeypatch):
+    """Диагностическая команда обязана отличать «пусто» от «не дозвонился».
+
+    Молчаливый ноль здесь стоил дорого: проверка выката считала индекс живым,
+    приложение тихо читало файлы, и про сломанный индекс можно было узнать
+    только из stderr службы (VNL/522).
+    """
+    from vnl import cli
+    from vnl.index import Index
+
+    store = Store(tmp_path)
+    store.save_pattern(ffi)
+    monkeypatch.setattr(
+        Index, "state", lambda self, files: {"connected": False, "reason": "индекс недоступен: нет связи"}
+    )
+    monkeypatch.setattr(Index, "close", lambda self: None)
+
+    code = cli.main(["index", "status", "--root", str(tmp_path), "--dsn", "postgresql://нет"])
+
+    assert code == 1
+    assert "индекс недоступен" in capsys.readouterr().err
+
+
 def test_a_broken_index_does_not_break_saving(tmp_path, ffi, capsys):
     """Файл -- правда. Индекс не смог записаться -- это не повод терять паттерн."""
     store = Store(tmp_path, index=Broken())
