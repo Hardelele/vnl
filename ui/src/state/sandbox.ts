@@ -79,6 +79,17 @@ export interface SandboxView {
   cells: CellKind[]
   selected: Selection | null
   pending: Pending | null
+  /**
+   * Блоки, раскрытые на холсте: видна начинка, а не коробка.
+   *
+   * Живёт только на экране и на сервер не уходит. Раскрытие -- показ, а не
+   * схема: попади оно в песочницу, щелчок по треугольнику делал бы проект
+   * «не сохранённым» (`dirty` считается сравнением `to_plain`), а прогон
+   * пришлось бы отдельно защищать от устаревания -- `fingerprint` считается по
+   * собранной модели, и раскрытие в неё не входит. Поэтому здесь, рядом с
+   * выделением, которое серверу тоже не нужно.
+   */
+  opened: string[]
   busy: boolean
   error: string | null
   offline: boolean
@@ -101,6 +112,7 @@ const EMPTY: SandboxView = {
   cells: [],
   selected: null,
   pending: null,
+  opened: [],
   busy: false,
   error: null,
   offline: false,
@@ -202,7 +214,9 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
   }
 
   const openProject = async (loader: () => Promise<SandboxState>): Promise<void> => {
-    store.setState({ busy: true, selected: null, pending: null })
+    // Раскрытые блоки забываются вместе с проектом: в другом проекте те же
+    // имена принадлежат другим блокам.
+    store.setState({ busy: true, selected: null, pending: null, opened: [] })
     try {
       const project = await loader()
       store.setState({ project, busy: false, error: null, offline: false, denied: false })
@@ -236,7 +250,13 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     /** Выйти из проекта к списку. Сам проект остаётся на диске. */
     close(): void {
-      store.setState({ project: null, selected: null, pending: null, error: null })
+      store.setState({
+        project: null,
+        selected: null,
+        pending: null,
+        opened: [],
+        error: null,
+      })
     },
 
     /** Палитра клеток. Спрашивается отдельно от библиотеки: это другой каталог. */
@@ -286,6 +306,23 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     cancelPending(): void {
       store.setState({ pending: null })
+    },
+
+    /**
+     * Раскрыть или свернуть блок на холсте.
+     *
+     * Ничего не отправляет и ничего не меняет в схеме: блок и так считается
+     * насквозь -- его нейроны разворачиваются в общую сеть (`compose`). Это
+     * только показ, поэтому ни шага отмены, ни отметки «не сохранено» здесь
+     * быть не должно, а значит и маршрута к серверу.
+     */
+    toggleBlock(block: string): void {
+      const { opened } = store.getState()
+      store.setState({
+        opened: opened.includes(block)
+          ? opened.filter((id) => id !== block)
+          : [...opened, block],
+      })
     },
 
     select(selection: Selection | null): void {

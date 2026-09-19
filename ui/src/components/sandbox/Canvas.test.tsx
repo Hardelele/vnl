@@ -13,7 +13,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Canvas } from './Canvas'
-import type { SandboxLink, SandboxNeuron } from '../../model/sandbox'
+import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
 
 const POINT = {
   kind: 'lif',
@@ -29,6 +29,49 @@ const POINT = {
 
 function neuron(id: string, inhibitory: boolean, x: number): SandboxNeuron {
   return { id, cellType: id, position: [x, 100], inhibitory, pointModel: POINT }
+}
+
+/**
+ * Блок FFI со своей начинкой.
+ *
+ * Схема приходит с сервера (`SandboxBlock.scheme`) вместе с тормозностью
+ * каждой клетки: считать её здесь значило бы завести второе место, где это
+ * слово означает своё.
+ */
+const FFI: SandboxBlock = {
+  id: 'ffi',
+  patternId: 'ffi',
+  label: 'FFI',
+  position: [300, 80],
+  ports: [
+    { name: 'in', direction: 'in', site: { instance: 'IN', section: 'soma', fraction: 0.5 }, note: '' },
+    { name: 'out', direction: 'out', site: { instance: 'E', section: 'soma', fraction: 0.5 }, note: '' },
+  ],
+  counts: { neurons: 3, contacts: 3 },
+  scheme: {
+    neurons: [
+      { id: 'IN', inhibitory: false },
+      { id: 'E', inhibitory: false },
+      { id: 'I', inhibitory: true },
+    ],
+    edges: [
+      { id: 'c1', from: 'IN', to: 'E', kind: 'exc' },
+      { id: 'c2', from: 'IN', to: 'I', kind: 'exc' },
+      { id: 'c3', from: 'I', to: 'E', kind: 'inh' },
+    ],
+  },
+  cells: [],
+}
+
+/** Связь снаружи прямо в тормозный нейрон блока, минуя порт `in`. */
+const INTO_BLOCK: SandboxLink = {
+  id: 'l2',
+  source: { instance: 'E', port: null, section: 'soma', fraction: 0.5 },
+  target: { instance: 'ffi/I', port: null, section: 'soma', fraction: 0.5 },
+  receptor: 'ampa',
+  inhibitory: false,
+  weight: 1,
+  delay: 1,
 }
 
 const LINK: SandboxLink = {
@@ -70,6 +113,15 @@ async function mount(props: Partial<Parameters<typeof Canvas>[0]> = {}) {
     )
   })
   return picked
+}
+
+function inner(id: string): SVGGElement {
+  const found = [...host.querySelectorAll('.cv-in-cell')].find(
+    // Первый узел, а не весь текст: рядом лежит <title> с полным именем.
+    (node) => node.querySelector('text')?.firstChild?.textContent === id,
+  )
+  if (!found) throw new Error(`внутри блока нет узла ${id}`)
+  return found as SVGGElement
 }
 
 function cell(id: string): SVGGElement {
@@ -136,5 +188,100 @@ describe('клетка на холсте', () => {
     await mount({ neurons: [] })
 
     expect(host.querySelector('.cv-empty')?.textContent).toContain('клетку')
+  })
+})
+
+describe('блок на холсте', () => {
+  it('свёрнутый показывает коробку со счётчиками, а не начинку', async () => {
+    await mount({ blocks: [FFI] })
+
+    expect(host.querySelectorAll('.cv-in-cell')).toHaveLength(0)
+    expect(host.querySelector('.cv-sub')?.textContent).toContain('3 кл.')
+  })
+
+  it('раскрытый рисует начинку теми же обозначениями, что миниатюра', async () => {
+    await mount({ blocks: [FFI], opened: ['ffi'] })
+
+    expect(host.querySelectorAll('.cv-in-cell')).toHaveLength(3)
+    // Тормозная квадратная, возбуждающая скруглённая -- разница читается и
+    // там, где цвета нет.
+    expect(inner('I').querySelector('rect')?.getAttribute('rx')).toBe('4')
+    expect(inner('E').querySelector('rect')?.getAttribute('rx')).not.toBe('4')
+    expect(inner('I').getAttribute('class')).toContain('is-inh')
+    // Связи внутри блока рисуются тоже: без них видны точки, но не схема.
+    expect(host.querySelectorAll('.cv-in-link .cv-in-wire')).toHaveLength(3)
+    // Порты никуда не делись: они остаются названной точкой подключения.
+    expect(host.querySelectorAll('.cv-port')).toHaveLength(2)
+  })
+
+  it('щелчок по внутреннему узлу даёт конец связи без порта', async () => {
+    const picked = await mount({ blocks: [FFI], opened: ['ffi'] })
+
+    act(() => {
+      inner('I').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // Имя сетевое: ровно так нейрон блока зовётся в собранной модели, и
+    // придумывать ему второй вид адреса незачем.
+    expect(picked).toEqual([['ffi/I', null]])
+  })
+
+  it('щелчок по внутреннему узлу не выбирает блок вместо узла', async () => {
+    const chosen: string[] = []
+    await mount({
+      blocks: [FFI],
+      opened: ['ffi'],
+      onPickBlock: (id: string) => chosen.push(id),
+    })
+
+    act(() => {
+      inner('E').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(chosen).toEqual([])
+  })
+
+  it('связь внутрь блока рисуется и входит в сам узел', async () => {
+    await mount({ blocks: [FFI], links: [INTO_BLOCK], opened: ['ffi'] })
+    const open = host.querySelector('.cv-link .cv-wire')?.getAttribute('d')
+
+    act(() => root?.unmount())
+    host.remove()
+    await mount({ blocks: [FFI], links: [INTO_BLOCK] })
+    const shut = host.querySelector('.cv-link .cv-wire')?.getAttribute('d')
+
+    // Рисуется в обоих случаях: у свёрнутого блока узла на холсте нет, и связь
+    // приводится к краю коробки -- прятать её нельзя, в схеме она есть.
+    expect(open).toBeTruthy()
+    expect(shut).toBeTruthy()
+    // Но конец у неё разный: раскрытый блок показывает, куда связь вели.
+    expect(open).not.toBe(shut)
+  })
+
+  it('переключатель раскрывает блок, а не меняет схему', async () => {
+    const toggled: string[] = []
+    await mount({ blocks: [FFI], onToggleBlock: (id: string) => toggled.push(id) })
+
+    act(() => {
+      host.querySelector('.cv-open circle')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
+
+    expect(toggled).toEqual(['ffi'])
+  })
+
+  it('у раскрытого блока светится разрядившийся узел, а не вся рамка', async () => {
+    await mount({
+      blocks: [FFI],
+      opened: ['ffi'],
+      cells: { 'ffi/I': { v: -40, spiked: true, charge: 1, peak: 1 } },
+    })
+
+    expect(inner('I').getAttribute('class')).toContain('is-spiking')
+    expect(inner('E').getAttribute('class')).not.toContain('is-spiking')
+    expect(host.querySelector('.cv-block')?.getAttribute('class')).not.toContain(
+      'is-spiking',
+    )
   })
 })

@@ -52,6 +52,7 @@ export function SandboxScreen() {
   const project = useSandbox((state) => state.project)
   const selected = useSandbox((state) => state.selected)
   const pending = useSandbox((state) => state.pending)
+  const opened = useSandbox((state) => state.opened)
   const error = useSandbox((state) => state.error)
   const denied = useSandbox((state) => state.denied)
   const savedId = useSandbox((state) => state.saved?.id ?? null)
@@ -401,11 +402,16 @@ export function SandboxScreen() {
             </div>
           ) : (
             <div className="sb-list">
+              {/* Идентификатор стоит справа, а не в подписи: подпись длинная
+                  и обрезается многоточием, а адрес обрезать нельзя -- им блок
+                  и его нейроны зовутся в связях (`ffi/I`). Подпись и адрес --
+                  разные вещи: подпись правят, адрес нет, за него держатся
+                  связи, стимулы и записи. */}
               {project.blocks.map((block) => (
                 <Row
                   key={block.id}
                   label={block.label}
-                  kind="блок"
+                  kind={`блок ${block.id}`}
                   on={selected?.kind === 'block' && selected.id === block.id}
                   onPick={() => control.select({ kind: 'block', id: block.id })}
                 />
@@ -460,6 +466,7 @@ export function SandboxScreen() {
             cells={cells}
             selected={selected}
             pending={pending}
+            opened={opened}
             onPickBlock={(id) => control.select({ kind: 'block', id })}
             onPickNeuron={(id) => control.select({ kind: 'neuron', id })}
             onPickLink={(id) => control.select({ kind: 'link', id })}
@@ -467,6 +474,7 @@ export function SandboxScreen() {
               void control.touchEndpoint(instance, port)
             }
             onMove={(id, position) => void control.move(id, position)}
+            onToggleBlock={(id) => control.toggleBlock(id)}
             onEmpty={() => control.select(null)}
           />
           <Timeline

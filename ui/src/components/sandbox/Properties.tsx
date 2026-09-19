@@ -150,7 +150,10 @@ function BlockProps({
   const control = sandboxController
   return (
     <>
-      <Head title="Блок" note={block.patternId} />
+      {/* В шапке -- идентификатор экземпляра, а не паттерна: это адрес, им
+          блок и его нейроны зовутся в связях (`ffi`, `ffi/I`). Откуда блок
+          взялся, сказано ниже отдельной строкой. */}
+      <Head title="Блок" note={block.id} />
       {/* Подпись на холсте -- у экземпляра: одного «FFI» из библиотеки на
           схеме бывает три, и различать их надо здесь, а не в библиотеке. */}
       <TextField
@@ -162,6 +165,7 @@ function BlockProps({
         <span className="mono row-dim">
           {block.counts.neurons} кл. · {block.counts.contacts} св.
         </span>
+        <span className="mono row-dim row-end">{block.patternId}</span>
       </div>
 
       <Section title="Порты" />
@@ -175,6 +179,32 @@ function BlockProps({
               {state ? `${state.v.toFixed(1)} мВ` : port.site.instance}
             </span>
           </div>
+        )
+      })}
+
+      <Section title="Внутри" />
+      {/* Начинка блока -- не справка, а точки подключения. Блок считается
+          насквозь (`compose` разворачивает его нейроны в общую сеть), поэтому
+          связь можно вести прямо в узел, минуя порт: порт -- названный автором
+          ярлык частой двери, а не единственная дверь. Щелчок ведёт тот же
+          автомат соединения, что порт на холсте и сома клетки: второго способа
+          начать связь заводить нельзя. */}
+      {block.scheme.neurons.map((neuron) => {
+        const flat = `${block.id}/${neuron.id}`
+        const state = cells[flat]
+        return (
+          <button
+            type="button"
+            className="row sb-pick"
+            key={neuron.id}
+            onClick={() => void control.touchEndpoint(flat, null)}
+          >
+            <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
+            <span className="mono row-id">{flat}</span>
+            <span className="mono row-dim row-end">
+              {state ? `${state.v.toFixed(1)} мВ` : 'соединить'}
+            </span>
+          </button>
         )
       })}
 

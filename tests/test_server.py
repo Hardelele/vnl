@@ -17,6 +17,7 @@ from urllib.parse import quote
 import pytest
 
 from vnl import ir
+from vnl.compose import compose
 from vnl.patterns import Pattern, Port
 from vnl.resolve import load
 from vnl.server import Api, Route, create_server, nobody, routes
@@ -1098,6 +1099,119 @@ def test_two_cells_alone_make_a_working_scheme(base, tmp_path):
     assert {
         neuron.id: neuron.position for neuron in reopened.neurons.values()
     } == {"E": (80.0, 60.0), "I": (320.0, 60.0)}
+
+
+def test_a_link_goes_straight_into_a_neuron_inside_a_block(base, tmp_path):
+    """Приёмка #530: блок -- не чёрный ящик.
+
+    В песочнице стоит FFI и рядом клетка из палитры. Связь ведётся из клетки
+    прямо в тормозный `I` внутри блока, минуя порт `in`: порт -- названный
+    автором ярлык частой точки, а не единственная дверь. Схема считается,
+    спайки видны, в собранной модели есть контакт `X -> ffi/I`, а проект
+    открывается с диска с той же связью.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Не ящик"})
+    sandbox = project["id"]
+
+    _, added = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/blocks",
+        {"pattern": "ffi", "position": [320, 60]},
+    )
+    block = added["blocks"][0]
+    # Идентификатор читается глазами: он от `pattern.id`, а не от имени.
+    assert block["id"] == "ffi"
+    assert {neuron["id"] for neuron in block["scheme"]["neurons"]} == {"IN", "E", "I"}
+    inhibitory = {n["id"]: n["inhibitory"] for n in block["scheme"]["neurons"]}
+    # Тормозность приходит с сервера: от неё зависит фигура на холсте, и вторая
+    # реализация этого слова разошлась бы с первой незаметно.
+    assert inhibitory == {"IN": False, "E": False, "I": True}
+
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/neurons",
+        {"cell": "pyr", "id": "X", "position": [60, 60]},
+    )
+
+    # Конец связи -- внутренний узел: имя из собранной сети и пустой порт.
+    status, linked = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {
+            "source": {"instance": "X"},
+            "target": {"instance": "ffi/I"},
+            "weight": 9.0,
+        },
+    )
+    assert status == 201
+    link = linked["links"][0]
+    assert link["target"] == {
+        "instance": "ffi/I",
+        "port": None,
+        "section": "soma",
+        "fraction": 0.5,
+    }
+
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": "X"}, "kind": "poisson", "rate": 800.0},
+    )
+    _, ready = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/recordings",
+        {"target": {"instance": "ffi/I"}, "var": "v"},
+    )
+    assert ready["problems"] == [], "связь мимо порта не должна мешать сборке"
+
+    status, session = ask(base, "POST", "/api/sim", {"sandbox": sandbox, "pace": 0.0})
+    assert status == 201
+    ask(base, "POST", f"/api/sim/{session['id']}/start")
+    for _ in range(200):
+        _, frame = ask(base, "GET", f"/api/sim/{session['id']}")
+        if frame["spikes"].get("ffi/I"):
+            break
+        time.sleep(0.05)
+    spikes = {name: len(times) for name, times in frame["spikes"].items()}
+    assert spikes.get("X", 0) > 0, f"клетка снаружи молчит: {spikes}"
+    assert spikes.get("ffi/I", 0) > 0, f"торможение внутри блока молчит: {spikes}"
+
+    # Проект сохраняется и открывается заново -- связь смотрит туда же, и в
+    # собранной из файла модели это обычный контакт.
+    _, saved = ask(base, "POST", f"/api/sandboxes/{sandbox}/save")
+    assert saved["dirty"] is False
+    reopened = Store(tmp_path).load_sandbox(sandbox)
+    assert reopened.links[0].target.instance == "ffi/I"
+    assert reopened.links[0].target.port is None
+    built = compose(reopened)
+    assert built.problems == []
+    assert ("X", "ffi/I") in {
+        (contact.pre.instance, contact.post.instance) for contact in built.model.contacts
+    }
+
+
+def test_removing_a_block_takes_the_links_into_its_insides(base):
+    """Убрали блок -- ушла и связь, которую вели в его внутренний узел."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Уборка"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/blocks", {"pattern": "ffi"})
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr", "id": "X"})
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {"source": {"instance": "X"}, "target": {"instance": "ffi/I"}},
+    )
+
+    _, after = ask(base, "DELETE", f"/api/sandboxes/{sandbox}/objects/ffi")
+
+    assert after["blocks"] == []
+    assert after["links"] == [], "связь смотрела внутрь убранного блока"
 
 
 # Сам отказ и то, что открыто анониму на живом стенде, проверяет `test_auth`: там

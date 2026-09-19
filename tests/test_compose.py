@@ -16,6 +16,7 @@ from vnl.patterns import (
     Pattern,
     Port,
     Sandbox,
+    SandboxNeuron,
     SandboxRecording,
     SandboxStimulus,
 )
@@ -178,3 +179,68 @@ def test_empty_sandbox_is_a_problem_not_a_crash():
     built = compose(Sandbox(id="s0", name="Пусто"))
     assert not built.ok
     assert any("нечего считать" in problem for problem in built.problems)
+
+
+def test_a_link_lands_on_a_neuron_inside_a_block(ffi):
+    """Связь ведут прямо во внутренний узел, минуя порт.
+
+    Порт -- названный автором ярлык частой точки, а не единственная дверь: от
+    feed-forward inhibition берут тормозный нейрон, и порта под это автор не
+    объявлял. Для сборки это обычная точка: `ffi/I` -- имя нейрона в собранной
+    сети, и отдельного рода адреса здесь нет.
+    """
+    sandbox = Sandbox(id="s1", name="Мимо порта", run=ir.RunSpec(duration=200.0))
+    sandbox.add_instance(ffi, instance_id="ffi")
+    sandbox.cell_types["relay"] = ir.CellType(
+        id="relay", tags=("excitatory",), transmitter="glutamate"
+    )
+    sandbox.neurons["X"] = SandboxNeuron(id="X", cell_type="relay")
+    sandbox.links.append(
+        Link("l1", Endpoint("X"), Endpoint("ffi/I"), receptor="ampa", weight=6.0)
+    )
+
+    built = compose(sandbox)
+
+    assert built.ok, built.problems
+    contact = next(c for c in built.model.contacts if c.id == "l1")
+    assert (contact.pre.instance, contact.post.instance) == ("X", "ffi/I")
+    # Контакт такой же, как те, что пришли из начинки блока: никакой пометки
+    # «снаружи» у него нет -- иначе внутренность блока стала бы особым родом.
+    assert contact.post.section == "soma"
+    assert "ffi/I" in built.model.instances
+
+
+def test_two_instances_keep_their_insides_apart(ffi):
+    """Приставка разводит внутренние узлы, и адресуются они тоже по ней."""
+    sandbox = Sandbox(id="s1", name="Два блока")
+    sandbox.add_instance(ffi, instance_id="ffi")
+    sandbox.add_instance(ffi, instance_id="ffi2")
+    sandbox.cell_types["relay"] = ir.CellType(
+        id="relay", tags=("excitatory",), transmitter="glutamate"
+    )
+    sandbox.neurons["X"] = SandboxNeuron(id="X", cell_type="relay")
+    sandbox.links.append(Link("l1", Endpoint("X"), Endpoint("ffi2/I")))
+
+    built = compose(sandbox)
+
+    assert built.ok, built.problems
+    contact = next(c for c in built.model.contacts if c.id == "l1")
+    assert contact.post.instance == "ffi2/I"
+    assert built.map.owner["ffi/I"] == "ffi"
+    assert built.map.owner["ffi2/I"] == "ffi2"
+
+
+def test_a_link_into_a_missing_inner_node_is_reported(ffi):
+    """Опечатка в имени узла -- замечание рядом с объектом, а не молчание."""
+    sandbox = Sandbox(id="s1", name="Опечатка")
+    sandbox.add_instance(ffi, instance_id="ffi")
+    sandbox.cell_types["relay"] = ir.CellType(
+        id="relay", tags=("excitatory",), transmitter="glutamate"
+    )
+    sandbox.neurons["X"] = SandboxNeuron(id="X", cell_type="relay")
+    sandbox.links.append(Link("l1", Endpoint("X"), Endpoint("ffi/НЕТ")))
+
+    built = compose(sandbox)
+
+    assert not built.ok
+    assert any("ffi/НЕТ" in problem for problem in built.problems)

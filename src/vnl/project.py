@@ -42,6 +42,7 @@ from .patterns import (
     SandboxStimulus,
     extract_pattern,
     suggest_ports,
+    touches,
 )
 from .sim import SimResult, simulate
 from .store import Store, to_plain
@@ -352,7 +353,15 @@ class Project:
         target.position = position
 
     def remove(self, object_id: str) -> None:
-        """Убрать блок, нейрон или связь вместе со всем, что на них висело."""
+        """Убрать блок, нейрон или связь вместе со всем, что на них висело.
+
+        «На них» -- это и внутренние узлы блока: связь ведут прямо в `ffi/I`, и
+        после удаления `ffi` она указывала бы в никуда. Сравнивать имена
+        напрямую нельзя -- `ffi/I` не равно `ffi`, -- поэтому спрашивается
+        владелец (`patterns.touches`). Иначе удалённый блок оставлял бы за
+        собой висящие связи, а песочница переставала считаться с жалобой
+        «источник в сети отсутствует» на объект, которого уже не видно.
+        """
         self._remember(f"удалён {object_id}")
         sandbox = self.sandbox
         sandbox.instances = [i for i in sandbox.instances if i.id != object_id]
@@ -361,12 +370,14 @@ class Project:
             link
             for link in sandbox.links
             if link.id != object_id
-            and link.source.instance != object_id
-            and link.target.instance != object_id
+            and not touches(link.source, object_id)
+            and not touches(link.target, object_id)
         ]
-        sandbox.stimuli = [s for s in sandbox.stimuli if s.target.instance != object_id]
+        sandbox.stimuli = [
+            s for s in sandbox.stimuli if not touches(s.target, object_id)
+        ]
         sandbox.recordings = [
-            r for r in sandbox.recordings if r.target.instance != object_id
+            r for r in sandbox.recordings if not touches(r.target, object_id)
         ]
 
     def stimulate(self, stimulus: SandboxStimulus) -> SandboxStimulus:

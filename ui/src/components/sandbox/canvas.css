@@ -9,21 +9,118 @@
   touch-action: none;
 }
 
-.cv-block rect {
+/* Рамка блока -- только прямой потомок: внутри раскрытого блока лежат свои
+   фигуры, и общее правило красило бы их коробкой. */
+.cv-block > rect {
   fill: var(--panel);
   stroke: var(--line-strong);
   stroke-width: 1.4;
   cursor: grab;
 }
 
-.cv-block.is-on rect {
+.cv-block.is-on > rect {
   stroke: var(--accent);
   stroke-width: 2;
 }
 
-/* Активность блока: внутри кто-то разрядился прямо сейчас. */
-.cv-block.is-spiking rect {
+/* Активность свёрнутого блока: внутри кто-то разрядился прямо сейчас. У
+   раскрытого светится сам узел -- видно кто. */
+.cv-block.is-spiking > rect {
   fill: var(--selected);
+}
+
+/* Раскрытый блок -- рамка вокруг начинки, а не коробка. Заливки нет: связь,
+   которую ведут во внутренний узел, входит внутрь рамки, и под заливкой её
+   последний отрезок просто пропал бы. Клики рамка при этом ловит --
+   `pointer-events` отвязаны от заливки, -- иначе блок нельзя было бы ни
+   выбрать, ни потащить за пустое место. */
+.cv-block.is-open > rect {
+  fill: none;
+  pointer-events: all;
+  stroke: var(--line);
+}
+
+.cv-block.is-open.is-on > rect {
+  stroke: var(--accent);
+}
+
+/* Переключатель «показать, что внутри». Блок считается насквозь и так, это
+   только показ -- поэтому знак скромный и стоит в углу подписи. */
+.cv-open circle {
+  fill: var(--panel);
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+  cursor: pointer;
+}
+
+.cv-open-sign {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+/* Клетка внутри раскрытого блока. Обозначения те же, что у клетки на холсте и
+   в миниатюре каталога: форму задаёт rx в разметке. */
+.cv-in-cell rect {
+  fill: var(--panel);
+  stroke: var(--exc);
+  stroke-width: 1.4;
+  cursor: crosshair;
+}
+
+.cv-in-cell.is-inh rect {
+  stroke: var(--inh);
+}
+
+.cv-in-cell.is-spiking rect {
+  fill: var(--selected);
+}
+
+/* Узел, от которого тянется связь: ждёт второго щелчка -- как порт и сома. */
+.cv-in-cell.is-waiting rect {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+
+.cv-in-cell text {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--ink);
+  pointer-events: none;
+}
+
+.cv-in-link .cv-in-wire {
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+  pointer-events: none;
+}
+
+.cv-in-link .cv-in-cap {
+  fill: var(--exc);
+  stroke: none;
+  pointer-events: none;
+}
+
+.cv-in-link.is-inh .cv-in-wire {
+  stroke: var(--inh);
+}
+
+.cv-in-link.is-inh .cv-in-cap {
+  fill: none;
+  stroke: var(--inh);
+  stroke-width: 1.8;
+}
+
+/* Модуляция -- янтарный пунктир: тот же знак, что в миниатюре и на большой
+   схеме. Одна и та же линия не должна значить в двух местах разное. */
+.cv-in-link.is-mod .cv-in-wire {
+  stroke: var(--mod);
+  stroke-dasharray: 3 3;
+}
+
+.cv-in-link.is-mod .cv-in-cap {
+  fill: var(--mod);
 }
 
 .cv-label {

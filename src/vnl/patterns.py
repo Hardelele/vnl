@@ -282,7 +282,20 @@ class SandboxNeuron:
 
 @dataclass
 class Endpoint:
-    """Конец связи в песочнице: либо порт блока, либо точка отдельного нейрона."""
+    """Конец связи в песочнице. Три вида адреса, и все три -- один класс.
+
+    - порт блока: ``Endpoint("ffi", "in")`` -- названная точка, объявленная
+      автором паттерна;
+    - отдельная клетка: ``Endpoint("X")`` -- портов у неё нет вовсе;
+    - узел внутри блока: ``Endpoint("ffi/I")`` -- имя из собранной сети.
+
+    Третий вид не новый род адреса, а тот же второй: в собранной сети нейрон
+    блока и зовётся `ffi/I`, и `resolve_endpoint` отдаёт это имя как есть.
+    Порт остаётся удобным ярлыком частой точки, а не единственной дверью:
+    автор паттерна выбирает порты один раз, а схему потом используют
+    по-разному -- от feed-forward inhibition берут тормозный нейрон, а входной
+    релей не нужен вовсе.
+    """
 
     instance: str
     port: str | None = None
@@ -416,8 +429,21 @@ class Sandbox:
         instance_id: str | None = None,
         position: tuple[float, float] = (0.0, 0.0),
     ) -> PatternInstance:
-        """Вставить паттерн. Кладётся снимок, а не ссылка на библиотеку."""
-        chosen = self.free_id(instance_id or _slug(pattern.name))
+        """Вставить паттерн. Кладётся снимок, а не ссылка на библиотеку.
+
+        Идентификатор берётся от `pattern.id`, а не от имени. Имя человеческое
+        и длинное («Торможение с опережением (feedforward inhibition, FFI)»), а
+        из него получался адрес
+        `торможение_с_опережением_feedforward_inhibition_ffi`, которым потом
+        подписаны связи и, с адресацией внутренних узлов, каждый нейрон блока
+        (`..._ffi/I`). Идентификатор паттерна для этого и существует: он
+        короткий и уже уникален в библиотеке, а разводит одноимённые экземпляры
+        `free_id` -- `ffi`, `ffi2`.
+
+        Уже сохранённые песочницы это не трогает: в них id -- адрес, за который
+        держатся связи, стимулы и записи, и переименование сломало бы их молча.
+        """
+        chosen = self.free_id(instance_id or _slug(pattern.id))
 
         item = PatternInstance(
             id=chosen,
@@ -533,8 +559,12 @@ def extract_pattern(
 
     ports: list[Port] = []
     for link in sandbox.links:
-        inside_source = link.source.instance in chosen
-        inside_target = link.target.instance in chosen
+        # Выделяют объекты холста, а конец связи бывает внутренним узлом блока
+        # (`ffi/I`). Спрашиваем про владельца: выделен блок -- выделена и его
+        # начинка, иначе связь внутрь блока стала бы портом в паттерне, где
+        # этот блок уже развёрнут, то есть портом внутрь самого себя.
+        inside_source = owner_of(link.source.instance) in chosen
+        inside_target = owner_of(link.target.instance) in chosen
 
         if inside_source and inside_target:
             body.contacts.append(
@@ -658,11 +688,37 @@ def _port_name(endpoint: Endpoint, direction: str) -> str:
     if endpoint.is_port:
         return f"{endpoint.instance}.{endpoint.port}"
     prefix = "in" if direction == "in" else "out"
-    return f"{prefix}_{endpoint.instance}"
+    # Через `_port_label`, а не строкой: конец связи бывает внутренним узлом
+    # блока (`ffi/I`), а косой черте в имени порта не место -- его пишут руками
+    # и в адресе контакта.
+    return _port_label(prefix, endpoint.instance)
+
+
+def owner_of(instance: str) -> str:
+    """Какой объект холста стоит за именем собранной сети.
+
+    `ffi/I` принадлежит блоку `ffi`, `X` -- сам себе. Нужно везде, где вопрос
+    про холст, а не про сеть: кого убирает «Убрать блок», что попало в
+    выделение. Разбор один на весь проект: два места, считающие приставку
+    по-своему, разошлись бы на первом же блоке с вложенным именем.
+    """
+    return instance.split(NESTED, 1)[0]
+
+
+def touches(endpoint: Endpoint, object_id: str) -> bool:
+    """Висит ли конец связи на этом объекте холста -- снаружи или внутри него."""
+    return owner_of(endpoint.instance) == object_id
 
 
 def resolve_endpoint(sandbox: Sandbox, endpoint: Endpoint) -> ir.Site:
-    """Конец связи -> точка внутри развёрнутой сети."""
+    """Конец связи -> точка внутри развёрнутой сети.
+
+    Порт разворачивается в свою внутреннюю точку с приставкой блока; всё
+    остальное -- имя собранной сети как есть, потому что `ffi/I` и есть имя
+    нейрона в ней. Отдельной ветки для внутреннего узла тут нет намеренно:
+    завести её значило бы объявить внутренность блока особым родом адреса,
+    хотя в модели она ничем не отличается от любой другой клетки.
+    """
     if endpoint.is_port:
         block = sandbox.instance(endpoint.instance)
         inner = block.site_of(endpoint.port or "")

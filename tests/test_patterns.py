@@ -13,7 +13,9 @@ from vnl.patterns import (
     PatternError,
     Port,
     Sandbox,
+    SandboxNeuron,
     extract_pattern,
+    owner_of,
 )
 from vnl.resolve import load
 
@@ -173,3 +175,69 @@ def test_demo_run_is_not_part_of_the_construction(ffi_pattern):
     assert block.snapshot.demo is not None, "витрина карточки сохраняется"
     assert not block.snapshot.body.stimuli, "но в конструкции её нет"
     assert not sandbox.stimuli, "и в песочницу она не переехала"
+
+
+# --- идентификатор блока и адрес внутреннего узла -------------------------
+
+
+def test_block_id_is_short_because_it_is_an_address(ffi_pattern):
+    """Имя блока на холсте человеческое, а идентификатор -- адрес.
+
+    У паттерна из библиотеки имя длинное («Торможение с опережением
+    (feedforward inhibition, FFI)»), и слепленный из него идентификатор
+    подписывал бы каждую связь и каждый внутренний узел. Берётся `pattern.id`:
+    он короткий и уже уникален в библиотеке.
+    """
+    ffi_pattern.name = "Торможение с опережением (feedforward inhibition, FFI)"
+    sandbox = Sandbox(id="s1", name="Песочница")
+
+    first = sandbox.add_instance(ffi_pattern)
+    second = sandbox.add_instance(ffi_pattern)
+
+    assert first.id == "ffi"
+    assert second.id == "ffi2", "приставка -- единственный способ развести копии"
+    # Подпись при этом человеческая: её и читают на холсте.
+    assert first.label == ffi_pattern.name
+
+
+def test_owner_of_tells_which_canvas_object_a_network_name_belongs_to():
+    assert owner_of("ffi/I") == "ffi"
+    assert owner_of("X") == "X"
+
+
+def test_a_link_into_a_block_becomes_a_plain_contact_after_extraction(ffi_pattern):
+    """Связь внутрь блока в собранном паттерне -- обычный контакт.
+
+    Выделяют объекты холста, а конец связи бывает внутренним узлом. Если
+    спрашивать про имя, а не про владельца, `ffi/I` не найдётся в выделении, и
+    связь стала бы портом внутрь уже развёрнутого блока.
+    """
+    sandbox = Sandbox(id="s1", name="Песочница")
+    sandbox.add_instance(ffi_pattern, instance_id="ffi")
+    sandbox.cell_types["relay"] = ir.CellType(
+        id="relay", tags=("excitatory",), transmitter="glutamate"
+    )
+    sandbox.neurons["X"] = SandboxNeuron(id="X", cell_type="relay")
+    sandbox.links.append(Link("l1", Endpoint("X"), Endpoint("ffi/I"), weight=6.0))
+
+    pattern, _ = extract_pattern(sandbox, ["ffi", "X"], "Своя схема")
+
+    contact = next(c for c in pattern.body.contacts if c.id == "l1")
+    assert (contact.pre.instance, contact.post.instance) == ("X", "ffi/I")
+    assert not any("/" in port.name for port in pattern.ports)
+
+
+def test_a_link_into_an_unselected_block_leaves_a_port_with_a_legal_name(ffi_pattern):
+    """Порт пишут руками и в адресе контакта -- косой черте в имени не место."""
+    sandbox = Sandbox(id="s1", name="Песочница")
+    sandbox.add_instance(ffi_pattern, instance_id="ffi")
+    sandbox.cell_types["relay"] = ir.CellType(
+        id="relay", tags=("excitatory",), transmitter="glutamate"
+    )
+    sandbox.neurons["X"] = SandboxNeuron(id="X", cell_type="relay")
+    sandbox.links.append(Link("l1", Endpoint("X"), Endpoint("ffi/I")))
+
+    pattern, notes = extract_pattern(sandbox, ["X"], "Одна клетка")
+
+    assert [port.name for port in pattern.ports] == ["out_X"]
+    assert any("l1" in note for note in notes)

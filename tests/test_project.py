@@ -485,3 +485,51 @@ def test_an_identifier_does_not_overwrite_a_namesake(project, ffi):
     taken = [item.id for item in project.store.patterns()]
     second = project.as_pattern("Схема", project.port_hints(), taken=taken)
     assert second.id != first.id
+
+
+def test_removing_a_block_takes_what_hung_on_its_insides(project, ffi):
+    """Связь ведут в `ffi/I`, а убирают блок `ffi` -- уйти должно и то и другое.
+
+    Сравнение имён напрямую тут не работает: `a/I` не равно `a`, и связь
+    осталась бы висеть, а песочница перестала бы считаться с жалобой на объект,
+    которого уже не видно.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+    project.connect(Endpoint("X"), Endpoint("a/I"), link_id="inside")
+    project.record(SandboxRecording(id="r1", target=Endpoint("a/E")))
+
+    project.remove("a")
+
+    assert project.sandbox.links == [], "связь смотрела внутрь убранного блока"
+    assert project.sandbox.recordings == []
+    assert project.check() == [], "оставшаяся клетка считается"
+
+
+def test_a_link_into_a_block_does_not_touch_the_neighbouring_instance(project, ffi):
+    """Приставка разводит экземпляры и в адресе: `a/I` -- не `b/I`."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.insert_pattern(ffi, instance_id="b")
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+    project.connect(Endpoint("X"), Endpoint("b/I"), link_id="inside")
+
+    project.remove("a")
+
+    assert [link.id for link in project.sandbox.links] == ["inside"]
+
+
+def test_opening_a_block_is_not_a_change_of_physics(project, ffi):
+    """Раскрытие блока отпечаток не меняет -- потому что его здесь и нет.
+
+    Это показ, а не схема: операции «раскрыть» в проекте не существует, блок и
+    так считается насквозь. Отпечаток считается по собранной модели, и
+    единственное, что о блоке в ней есть, -- его развёрнутые нейроны.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+    before = project.fingerprint()
+
+    project.move("a", (120.0, 40.0))
+    project.rename("a", "Вход")
+
+    assert project.fingerprint() == before
+    assert not hasattr(project, "open_block"), "раскрытие -- дело интерфейса"

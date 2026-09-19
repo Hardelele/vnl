@@ -366,3 +366,48 @@ describe('драйв и запись на клетку', () => {
     expect(record).toHaveBeenCalledWith('s1', { instance: 'E', port: null })
   })
 })
+
+describe('раскрытие блока', () => {
+  it('остаётся на экране: ни запроса, ни отметки «не сохранено»', async () => {
+    const control = await opened()
+    const before = control.store.getState().project
+
+    control.toggleBlock('ffi')
+
+    expect(control.store.getState().opened).toEqual(['ffi'])
+    // Блок и так считается насквозь -- `compose` разворачивает его нейроны в
+    // общую сеть. Раскрытие только показывает это, поэтому проект тот же
+    // объект: попади оно в песочницу, щелчок делал бы проект несохранённым, а
+    // отпечаток -- устаревшим.
+    expect(control.store.getState().project).toBe(before)
+    expect(control.store.getState().project?.fingerprint).toBe('abc123')
+
+    control.toggleBlock('ffi')
+    expect(control.store.getState().opened).toEqual([])
+  })
+
+  it('забывается вместе с проектом: в другом те же имена -- другие блоки', async () => {
+    const control = await opened()
+    control.toggleBlock('ffi')
+
+    await control.open('s1')
+
+    expect(control.store.getState().opened).toEqual([])
+  })
+
+  it('внутренний узел соединяется тем же автоматом, что порт и сома', async () => {
+    const connect = vi.fn().mockResolvedValue(project())
+    const control = await opened({ connect })
+
+    await control.touchEndpoint('E', null)
+    await control.touchEndpoint('ffi/I', null)
+
+    // Имя сетевое, порта нет: `ffi/I` -- ровно то, чем нейрон блока зовётся в
+    // собранной модели, и второго вида адреса для него заводить нельзя.
+    expect(connect).toHaveBeenCalledWith(
+      's1',
+      { instance: 'E', port: null },
+      { instance: 'ffi/I', port: null },
+    )
+  })
+})

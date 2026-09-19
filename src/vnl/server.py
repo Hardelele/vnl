@@ -356,10 +356,18 @@ class Api:
 
     @staticmethod
     def _endpoint(data: Any, what: str) -> Endpoint:
+        """Конец связи из тела запроса.
+
+        Порт необязателен, и это не послабление: без него адресуется точка --
+        отдельная клетка (`{"instance": "X"}`) или узел внутри блока
+        (`{"instance": "ffi/I"}`). Имя второго -- то же, каким нейрон зовётся в
+        собранной сети, поэтому разбирать его здесь нечем: он приходит готовым.
+        """
         if not isinstance(data, dict) or not data.get("instance"):
             raise PatternError(
                 f"{what}: нужен конец связи вида "
-                '{"instance": "ffi", "port": "in"}'
+                '{"instance": "ffi", "port": "in"} — или точка без порта: '
+                '{"instance": "ffi/I"}'
             )
         return Endpoint(
             instance=str(data["instance"]),
