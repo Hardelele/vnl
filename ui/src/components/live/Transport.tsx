@@ -18,6 +18,12 @@ export interface TransportProps {
   onStart: () => void
   onPause: () => void
   onReset: () => void
+  /**
+   * Запуск не продолжит эту симуляцию, а соберёт сеть заново: схему правили,
+   * и прежний прогон -- о другой сети. Дошедший до конца прогон тогда запуску
+   * не помеха: продолжать в нём и правда нечего, но считать есть что.
+   */
+  restart?: boolean
 }
 
 const STATE_WORD: Record<SimState, string> = {
@@ -34,9 +40,10 @@ export function Transport({
   onStart,
   onPause,
   onReset,
+  restart = false,
 }: TransportProps) {
   const running = state === 'running'
-  const done = state === 'finished'
+  const done = state === 'finished' && !restart
 
   return (
     <div className="tr">
@@ -44,10 +51,16 @@ export function Transport({
         type="button"
         className="btn-primary"
         disabled={busy || done}
-        title={done ? 'Прогон дошёл до конца — начните сначала «Сбросом»' : undefined}
+        title={
+          done
+            ? 'Прогон дошёл до конца — начните сначала «Сбросом»'
+            : restart
+              ? 'Схема изменилась — сеть соберётся заново'
+              : undefined
+        }
         onClick={running ? onPause : onStart}
       >
-        {running ? 'Пауза' : 'Запустить'}
+        {running ? 'Пауза' : restart ? 'Запустить заново' : 'Запустить'}
       </button>
       <button type="button" className="btn-secondary" disabled={busy} onClick={onReset}>
         Сброс

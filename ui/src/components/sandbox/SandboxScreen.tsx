@@ -11,14 +11,15 @@
 
 import { useEffect, useState } from 'react'
 
-import type { CellState } from '../../model/sim'
-import type { SandboxBlock, SandboxLink } from '../../model/sandbox'
+import type { SandboxBlock } from '../../model/sandbox'
 import { catalogController, useCatalog } from '../../state/catalog'
-import { sandboxController, useSandbox, type Selection } from '../../state/sandbox'
+import { sandboxController, useSandbox } from '../../state/sandbox'
 import { simController, useSim } from '../../state/sim'
+import { Thumbnail } from '../catalog/Thumbnail'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { Canvas } from './Canvas'
+import { Properties, RunFields } from './Properties'
 import './sandbox.css'
 
 type LeftTab = 'library' | 'objects'
@@ -44,14 +45,29 @@ export function SandboxScreen() {
   const traces = useSim((state) => state.traces)
   const dt = useSim((state) => state.dt)
   const simError = useSim((state) => state.error)
+  const simId = useSim((state) => state.id)
+  const built = useSim((state) => state.built)
 
   useEffect(() => {
     void control.refreshList()
     void catalogController.refresh()
+  }, [control])
+
+  // Симуляция принадлежит схеме, а не экрану: другой проект -- другая сеть, и
+  // прежняя сессия не должна его переживать. Иначе в пустом проекте под холстом
+  // стоит полный прогон предыдущего, а «Запустить» продолжает чужую сеть.
+  const openId = project?.id ?? null
+  useEffect(() => {
     return () => {
       void sim.close()
     }
-  }, [control, sim])
+  }, [sim, openId])
+
+  // Правка схемы отменяет прежний отказ: «нечего считать» после вставки блока
+  // -- уже неверное утверждение, а висит оно рядом с исправленной схемой.
+  useEffect(() => {
+    if (project) sim.forget()
+  }, [sim, project])
 
   if (!project) {
     return (
@@ -89,6 +105,8 @@ export function SandboxScreen() {
   }
 
   const inhibitory = neuronKinds(project.blocks)
+  /** Сессия считает не эту схему: её результат уже про другую сеть. */
+  const stale = Boolean(simId && built && built !== project.fingerprint)
 
   return (
     <div className="sb">
@@ -133,7 +151,8 @@ export function SandboxScreen() {
           time={time}
           duration={duration || project.run.duration}
           busy={busy}
-          onStart={() => void start(project.id)}
+          restart={stale}
+          onStart={() => void start()}
           onPause={() => void sim.pause()}
           onReset={() => void sim.reset()}
         />
@@ -167,6 +186,14 @@ export function SandboxScreen() {
       {project.problems.length ? (
         <p className="sb-warn">{project.problems.join(' · ')}</p>
       ) : null}
+      {/* Прежний результат не выбрасывается, но и за результат новой схемы не
+          выдаётся: пока его не пересчитали, он подписан прежней схемой (#481). */}
+      {stale ? (
+        <p className="sb-warn">
+          Схема изменилась — на таймлайне прогон прежней. «Запустить» соберёт
+          сеть заново.
+        </p>
+      ) : null}
       {pending ? (
         <p className="sb-warn">
           Выбран порт {pending.instance}.{pending.port} — щёлкните по второму порту,
@@ -183,7 +210,13 @@ export function SandboxScreen() {
             <button
               type="button"
               className={`lib-tab${tab === 'library' ? ' is-on' : ''}`}
-              onClick={() => setTab('library')}
+              // Библиотеку пополняют и мимо этого экрана -- карточкой паттерна,
+              // Claude через MCP. Перечитываем на возврате во вкладку, иначе
+              // список остаётся таким, каким был при открытии проекта.
+              onClick={() => {
+                setTab('library')
+                void catalogController.refresh()
+              }}
             >
               Библиотека
             </button>
@@ -198,10 +231,23 @@ export function SandboxScreen() {
 
           {tab === 'library' ? (
             <div className="sb-list">
+              {/* Миниатюра та же, что в каталоге, только мельче: по одному
+                  имени блок в списке из сорока не выбрать, а вторая реализация
+                  «как выглядит схема» разошлась бы с первой незаметно. */}
               {(catalog?.patterns ?? []).map((pattern) => (
                 <div className="sb-row" key={pattern.id}>
-                  <span className="mono sb-level">{pattern.level}</span>
-                  <span className="sb-row-name">{pattern.name}</span>
+                  <span className="sb-mini">
+                    <Thumbnail scheme={pattern.scheme} label={pattern.name} />
+                  </span>
+                  <span className="sb-row-text">
+                    {/* Имя обрезается: панель узкая, а имена паттернов длинные. */}
+                    <span className="sb-row-name" title={pattern.name}>
+                      {pattern.name}
+                    </span>
+                    <span className="mono sb-level">
+                      {pattern.level} · {pattern.counts.neurons} кл.
+                    </span>
+                  </span>
                   <button
                     type="button"
                     className="sb-plus"
@@ -286,15 +332,23 @@ export function SandboxScreen() {
 
         <aside className="panel sb-right">
           <Properties selection={selected} project={project} cells={cells} />
+          <RunFields run={project.run} />
         </aside>
       </div>
     </div>
   )
 
-  async function start(id: string): Promise<void> {
+  async function start(): Promise<void> {
     // Симуляция открывается на первом запуске: собирать сеть до того, как её
     // попросили посчитать, незачем -- схема ещё меняется.
-    if (!simController.store.getState().id) await sim.open({ sandbox: id })
+    //
+    // А если схему правили после запуска, сессия считает уже не её: время в ней
+    // идёт по модели, собранной на открытии, и «Сброс» этого не меняет. Поэтому
+    // устаревшая сессия не продолжается, а заменяется новой из текущей схемы.
+    const live = simController.store.getState()
+    if (!live.id || live.built !== project!.fingerprint) {
+      await sim.open({ sandbox: project!.id }, project!.fingerprint)
+    }
     await sim.start()
   }
 }
@@ -331,193 +385,6 @@ function Row({
       <span className="sb-row-name">{label}</span>
       <span className="mono sb-kind">{kind}</span>
     </button>
-  )
-}
-
-function Properties({
-  selection,
-  project,
-  cells,
-}: {
-  selection: Selection | null
-  project: { blocks: SandboxBlock[]; links: SandboxLink[] }
-  cells: Record<string, CellState>
-}) {
-  const control = sandboxController
-
-  if (!selection) {
-    return (
-      <>
-        <div className="panel-head">
-          <span className="panel-title">Свойства</span>
-        </div>
-        <p className="sb-hint">
-          Выберите блок или связь. Соединение — щелчок по порту, потом по второму.
-        </p>
-      </>
-    )
-  }
-
-  if (selection.kind === 'block') {
-    const block = project.blocks.find((item) => item.id === selection.id)
-    if (!block) return null
-    return (
-      <>
-        <div className="panel-head">
-          <span className="panel-title">Блок</span>
-          <span className="mono panel-note">{block.patternId}</span>
-        </div>
-        <div className="row">
-          <span className="row-id">{block.label}</span>
-          <span className="mono row-dim row-end">
-            {block.counts.neurons} кл. · {block.counts.contacts} св.
-          </span>
-        </div>
-        {block.ports.map((port) => {
-          const site = `${block.id}/${port.site.instance}`
-          const state = cells[site]
-          return (
-            <div className="row" key={port.name}>
-              <span className="row-id">{port.name}</span>
-              <span className="mono row-dim">{port.direction}</span>
-              <span className="mono row-dim row-end">
-                {state ? `${state.v.toFixed(1)} мВ` : port.site.instance}
-              </span>
-            </div>
-          )
-        })}
-        <div className="sb-actions">
-          {block.ports
-            .filter((port) => port.direction === 'in')
-            .map((port) => (
-              <button
-                key={port.name}
-                type="button"
-                className="btn-secondary"
-                onClick={() => void control.stimulate(block.id, port.name)}
-              >
-                Драйв на {port.name}
-              </button>
-            ))}
-          {block.ports
-            .filter((port) => port.direction === 'out')
-            .map((port) => (
-              <button
-                key={port.name}
-                type="button"
-                className="btn-secondary"
-                onClick={() => void control.record(block.id, port.name)}
-              >
-                Записывать {port.name}
-              </button>
-            ))}
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => void control.remove(block.id)}
-          >
-            Убрать блок
-          </button>
-        </div>
-      </>
-    )
-  }
-
-  if (selection.kind === 'link') {
-    const link = project.links.find((item) => item.id === selection.id)
-    if (!link) return null
-    return (
-      <>
-        <div className="panel-head">
-          <span className="panel-title">Связь</span>
-          <span className="mono panel-note">{link.id}</span>
-        </div>
-        <div className="row">
-          <span className="mono row-path">
-            {link.source.instance}.{link.source.port} → {link.target.instance}.
-            {link.target.port}
-          </span>
-        </div>
-        <label className="sb-field">
-          <span>Рецептор</span>
-          <select
-            value={link.receptor}
-            onChange={(event) =>
-              void control.setParams(link.id, { receptor: event.target.value })
-            }
-          >
-            <option value="ampa">ampa</option>
-            <option value="nmda">nmda</option>
-            <option value="gaba_a">gaba_a</option>
-            <option value="gaba_b">gaba_b</option>
-          </select>
-        </label>
-        <NumberField
-          label="Вес, нСм"
-          value={link.weight}
-          onChange={(weight) => void control.setParams(link.id, { weight })}
-        />
-        <NumberField
-          label="Задержка, мс"
-          value={link.delay}
-          onChange={(delay) => void control.setParams(link.id, { delay })}
-        />
-        <div className="sb-actions">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => void control.remove(link.id)}
-          >
-            Убрать связь
-          </button>
-        </div>
-      </>
-    )
-  }
-
-  return (
-    <>
-      <div className="panel-head">
-        <span className="panel-title">{selection.kind === 'stimulus' ? 'Стимул' : 'Запись'}</span>
-        <span className="mono panel-note">{selection.id}</span>
-      </div>
-      <div className="sb-actions">
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() => void control.remove(selection.id)}
-        >
-          Убрать
-        </button>
-      </div>
-    </>
-  )
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: number
-  onChange: (value: number) => void
-}) {
-  return (
-    <label className="sb-field">
-      <span>{label}</span>
-      <input
-        type="number"
-        step="0.1"
-        defaultValue={value}
-        // Правка уходит по уходу из поля, а не на каждую цифру: иначе история
-        // отмены наполнится промежуточными «1», «1.», «1.4».
-        onBlur={(event) => {
-          const next = Number.parseFloat(event.target.value)
-          if (Number.isFinite(next) && next !== value) onChange(next)
-        }}
-      />
-    </label>
   )
 }
 

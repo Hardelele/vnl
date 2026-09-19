@@ -140,6 +140,27 @@
   white-space: nowrap;
 }
 
+/* Миниатюра в списке библиотеки. Пропорции те же, что в каталоге (240x120),
+   иначе схема сжималась бы по одной оси; размер такой, чтобы список остался
+   списком, а не галереей карточек. */
+.sb-mini {
+  flex: none;
+  width: 60px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--subtle);
+  overflow: hidden;
+}
+
+.sb-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
 .sb-level,
 .sb-kind {
   font-size: 11px;
@@ -185,6 +206,74 @@
   color: var(--ink);
   font: inherit;
   font-size: var(--text-sm);
+}
+
+/* Имя длиннее числа: поле под него шире, иначе подпись блока не прочитать. */
+.sb-field input[type='text'] {
+  width: 150px;
+}
+
+/* Заголовок раздела свойств -- как в макете: капитель, а не рамка. */
+.sb-section {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Тип клеток: свёрнут, потому что полей у мембраны восемь, а типов в
+   микросхеме бывает три -- развёрнутыми они топят и порты, и вес. */
+.sb-group summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-4);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  list-style: none;
+}
+
+.sb-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.sb-group summary::after {
+  content: '▸';
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.sb-group[open] summary::after {
+  content: '▾';
+}
+
+.sb-group summary:hover {
+  background: var(--subtle);
+}
+
+/* Возбуждающая клетка -- круг, тормозная -- квадрат: те же знаки, что на
+   схеме и на миниатюре. */
+.sb-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--exc);
+}
+
+.sb-dot.is-inh {
+  border-radius: 2px;
+  background: var(--inh);
+}
+
+.sb-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--faint);
+  font-size: var(--text-xs);
 }
 
 .sb-actions {

@@ -198,3 +198,49 @@ describe('закрытие', () => {
     expect(control.store.getState().id).toBeNull()
   })
 })
+
+describe('сессия и схема, из которой она собрана', () => {
+  it('запоминает отпечаток схемы: по нему видно, что результат устарел', async () => {
+    const control = createSimController({ open: vi.fn().mockResolvedValue(update()) })
+
+    await control.open({ sandbox: 's1' }, 'схема-1')
+
+    expect(control.store.getState().built).toBe('схема-1')
+  })
+
+  it('витрина паттерна отпечатка не имеет: править её схему нечем', async () => {
+    const control = createSimController({ open: vi.fn().mockResolvedValue(update()) })
+
+    await control.open({ pattern: 'ffi' })
+
+    expect(control.store.getState().built).toBeNull()
+  })
+
+  it('пересборка отпускает прежнюю сессию, а не бросает её на сервере', async () => {
+    const drop = vi.fn().mockResolvedValue(undefined)
+    const open = vi
+      .fn()
+      .mockResolvedValueOnce(update({ id: 'sim1' }))
+      .mockResolvedValueOnce(update({ id: 'sim2' }))
+    const control = createSimController({ open, drop })
+
+    await control.open({ sandbox: 's1' }, 'схема-1')
+    await control.open({ sandbox: 's1' }, 'схема-2')
+
+    expect(drop).toHaveBeenCalledWith('sim1')
+    expect(control.store.getState().id).toBe('sim2')
+    expect(control.store.getState().built).toBe('схема-2')
+  })
+
+  it('забывает отказ: после правки схемы он уже не про неё', async () => {
+    const control = createSimController({
+      open: vi.fn().mockRejectedValue(new Error('в песочнице нечего считать')),
+    })
+
+    await control.open({ sandbox: 's1' }, 'схема-1')
+    expect(control.store.getState().error).toBe('в песочнице нечего считать')
+
+    control.forget()
+    expect(control.store.getState().error).toBeNull()
+  })
+})

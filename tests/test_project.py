@@ -198,3 +198,143 @@ def test_fork_leaves_the_library_alone(project, ffi):
     assert project.store is not None
     assert project.store.load_pattern("ffi").body.contacts[0].delay != 9.0
     assert len(project.sandbox.instances) == 1, "fork не трогает песочницу"
+
+
+# --- настройки блока, клетки, стимула и прогона ----------------------------
+
+
+def test_renaming_a_block_touches_the_instance_not_the_pattern(project, ffi):
+    """Подпись на холсте -- у экземпляра: одноимённые блоки надо различать."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.insert_pattern(ffi, instance_id="b")
+
+    project.rename("a", "Вход")
+
+    assert project.sandbox.instance("a").label == "Вход"
+    assert project.sandbox.instance("b").label == "FFI", "сосед не переименован"
+    assert project.sandbox.instance("a").snapshot.name == "FFI"
+    assert project.store is not None
+    assert project.store.load_pattern("ffi").name == "FFI"
+
+    with pytest.raises(PatternError, match="пустой"):
+        project.rename("a", "   ")
+
+
+def test_cell_parameters_change_only_inside_this_block(project, ffi):
+    """У каждого блока снимок свой, поэтому порог правится поблочно."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.insert_pattern(ffi, instance_id="b")
+
+    project.set_cell("a", "pyr_l5", v_threshold=-45.0, tau_m=20.0, adaptation=3.0)
+
+    first = project.sandbox.instance("a").snapshot.body.cell_types["pyr_l5"]
+    second = project.sandbox.instance("b").snapshot.body.cell_types["pyr_l5"]
+    assert (first.point_model.v_threshold, first.point_model.tau_m) == (-45.0, 20.0)
+    assert second.point_model.v_threshold == -50.0, "второй блок не задет"
+    assert project.store is not None
+    library = project.store.load_pattern("ffi").body.cell_types["pyr_l5"]
+    assert library.point_model.v_threshold == -50.0, "библиотека тоже не задета"
+
+
+def test_a_changed_cell_makes_the_result_stale(project, ffi):
+    """Порог -- это физика: прежний прогон после правки уже про другую сеть."""
+    running_project(project, ffi).run()
+    assert not project.run_is_stale
+
+    project.set_cell("a", "pyr_l5", v_threshold=-40.0)
+    assert project.run_is_stale
+
+
+def test_a_lower_threshold_gives_more_spikes(project, ffi):
+    """Правка должна доходить до симулятора, а не только до файла."""
+    before = running_project(project, ffi).run().result.spike_count()["a/E"]
+
+    project.set_cell("a", "pyr_l5", v_threshold=-58.0)
+    after = project.run().result.spike_count()["a/E"]
+
+    assert after > before
+
+
+def test_cell_parameters_are_checked_before_they_break_the_run(project, ffi):
+    project.insert_pattern(ffi, instance_id="a")
+
+    with pytest.raises(PatternError, match="нет параметров"):
+        project.set_cell("a", "pyr_l5", colour="red")
+    with pytest.raises(PatternError, match="больше нуля"):
+        project.set_cell("a", "pyr_l5", tau_m=0.0)
+    with pytest.raises(PatternError, match="рефрактерность"):
+        project.set_cell("a", "pyr_l5", refractory=-1.0)
+    with pytest.raises(PatternError, match="несколько типов"):
+        project.set_cell("a")
+    with pytest.raises(PatternError, match="нет типа клетки"):
+        project.set_cell("a", "нет такого")
+
+
+def test_stimulus_parameters_are_editable_after_it_is_created(project, ffi):
+    """Драйв создаётся с числами по умолчанию, а не с высеченными в камне."""
+    running_project(project, ffi)
+    quiet = project.run().result.spike_count()["a/IN"]
+
+    project.set_stimulus("drive", rate=20.0)
+    assert project.sandbox.stimuli[0].rate == 20.0
+    assert project.run().result.spike_count()["a/IN"] < quiet
+
+    with pytest.raises(PatternError, match="род стимула"):
+        project.set_stimulus("drive", kind="барабан")
+    with pytest.raises(PatternError, match="отрицательной"):
+        project.set_stimulus("drive", rate=-1.0)
+    with pytest.raises(PatternError, match="раньше"):
+        project.set_stimulus("drive", start=300.0, stop=100.0)
+    with pytest.raises(PatternError, match="стимула"):
+        project.set_stimulus("нет такого", rate=1.0)
+
+
+def test_recording_changes_what_is_written(project, ffi):
+    running_project(project, ffi)
+    project.set_recording("r1", "g_exc")
+
+    run = project.run()
+    assert "a/E.soma:g_exc" in run.result.traces
+
+    with pytest.raises(PatternError, match="записать"):
+        project.set_recording("r1", "температура")
+
+
+def test_run_parameters_are_editable_and_checked(project, ffi):
+    running_project(project, ffi)
+    project.set_run(duration=100.0, dt=0.2, seed=42)
+
+    run = project.run()
+    assert project.sandbox.run.seed == 42
+    assert len(run.result.times) == 500
+
+    with pytest.raises(PatternError, match="шаг"):
+        project.set_run(dt=0.0)
+    with pytest.raises(PatternError, match="длительность"):
+        project.set_run(duration=-5.0)
+    with pytest.raises(PatternError, match="отсчётов"):
+        project.set_run(duration=1e9, dt=0.01)
+    with pytest.raises(PatternError, match="уровень"):
+        project.set_run(level="L9")
+
+
+def test_a_changed_seed_gives_another_realisation(project, ffi):
+    """Зерно правится не для красоты: другое зерно -- другой шум стимула."""
+    running_project(project, ffi)
+    first = project.run().result.spikes["a/IN"]
+
+    project.set_run(seed=99)
+    assert project.run().result.spikes["a/IN"] != first
+
+
+def test_settings_are_undone_one_step_each(project, ffi):
+    running_project(project, ffi)
+    project.set_run(duration=100.0)
+    project.rename("a", "Вход")
+
+    assert project.undo() == "переименован a"
+    assert project.sandbox.instance("a").label == "FFI"
+    assert project.sandbox.run.duration == 100.0
+
+    assert project.undo() == "параметры прогона"
+    assert project.sandbox.run.duration == 200.0

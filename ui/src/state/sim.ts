@@ -9,6 +9,12 @@
  * что они относятся к тому же прошлому. Пришёл признак отката -- буфер
  * заменяется целиком: дорисовывать новое будущее к старому значило бы
  * показывать график, которого в этой симуляции никогда не было.
+ *
+ * Сессия считает ту модель, из которой её собрали, и правка схемы её не
+ * догоняет. Поэтому здесь хранится `built` -- отпечаток схемы на момент
+ * открытия: по расхождению с текущим видно, что результат уже про другую сеть.
+ * Сам результат при этом не выбрасывается -- он остаётся доступным, но
+ * помечается устаревшим и не выдаётся за результат новой схемы (#481).
  */
 
 import { useSyncExternalStore } from 'react'
@@ -34,6 +40,8 @@ export const POLL_MS = 150
 
 export interface SimView {
   id: string | null
+  /** Отпечаток схемы, из которой собрана сессия; у витрины паттерна пуст. */
+  built: string | null
   state: SimState
   time: number
   duration: number
@@ -51,6 +59,7 @@ export interface SimView {
 
 const EMPTY: SimView = {
   id: null,
+  built: null,
   state: 'paused',
   time: 0,
   duration: 0,
@@ -93,12 +102,13 @@ const DEFAULT_PORTS: SimPorts = {
 
 export interface SimController {
   store: Store<SimView>
-  open: (target: SimTarget) => Promise<void>
+  open: (target: SimTarget, built?: string) => Promise<void>
   start: () => Promise<void>
   pause: () => Promise<void>
   reset: () => Promise<void>
   seek: (time: number) => Promise<void>
   close: () => Promise<void>
+  forget: () => void
 }
 
 export function createSimController(ports: Partial<SimPorts> = {}): SimController {
@@ -174,12 +184,16 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
   return {
     store,
 
-    async open(target) {
+    async open(target, built) {
       unwatch()
+      // Прежняя сессия закрывается, а не забывается: время в ней идёт на
+      // сервере, и брошенная она считала бы схему, которой уже нет.
+      const previous = store.getState().id
       store.setState({ ...EMPTY, busy: true })
+      if (previous) await io.drop(previous).catch(() => undefined)
       try {
         absorb(await io.open(target))
-        store.setState({ busy: false })
+        store.setState({ built: built ?? null, busy: false })
       } catch (reason) {
         fail(reason)
       }
@@ -195,6 +209,15 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
       const { id } = store.getState()
       store.setState({ ...EMPTY })
       if (id) await io.drop(id).catch(() => undefined)
+    },
+
+    /**
+     * Забыть отказ. Нужно там, где отказ перестал быть правдой: «в песочнице
+     * нечего считать» после вставки блока -- неверное утверждение, а не
+     * история, и висеть на экране оно не должно.
+     */
+    forget(): void {
+      store.setState({ error: null, offline: false })
     },
   }
 }

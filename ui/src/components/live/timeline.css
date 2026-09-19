@@ -77,7 +77,10 @@
   background: var(--selected);
 }
 
+/* Имя занимает всю ширину колонки: рядом со счётчиком спайков на него
+   оставалось восемь знаков, а у клеток собранной схемы общая приставка. */
 .tl-title {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -86,6 +89,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tl-cell {
+  flex: none;
+}
+
+/* Приставка блока: она у дорожек общая, поэтому и обрезается она. */
+.tl-owner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--weight-regular);
+  color: var(--faint);
 }
 
 .tl-dot {

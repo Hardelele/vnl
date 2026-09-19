@@ -25,12 +25,19 @@ import {
   moveBlock,
   openSandbox,
   removeObject,
+  renameBlock,
   save,
+  setCellParams,
   setLinkParams,
+  setRecordingVar,
+  setRunParams,
+  setStimulusParams,
   undo,
+  type DriveParams,
   type SandboxRow,
   type SandboxState,
 } from '../model/sandbox'
+import type { PointModel, RecordedVar, RunSpec } from '../model/types'
 import { createStore } from './store'
 
 /** Что выбрано на холсте: блок, связь, стимул или запись. */
@@ -72,9 +79,14 @@ export interface SandboxPorts {
   addBlock: typeof addBlock
   connect: typeof connect
   params: typeof setLinkParams
+  rename: typeof renameBlock
+  cell: typeof setCellParams
   move: typeof moveBlock
   stimulate: typeof addStimulus
+  driveParams: typeof setStimulusParams
   record: typeof addRecording
+  recordVar: typeof setRecordingVar
+  run: typeof setRunParams
   remove: typeof removeObject
   undo: typeof undo
   save: typeof save
@@ -87,9 +99,14 @@ const DEFAULT_PORTS: SandboxPorts = {
   addBlock,
   connect,
   params: setLinkParams,
+  rename: renameBlock,
+  cell: setCellParams,
   move: moveBlock,
   stimulate: addStimulus,
+  driveParams: setStimulusParams,
   record: addRecording,
+  recordVar: setRecordingVar,
+  run: setRunParams,
   remove: removeObject,
   undo,
   save,
@@ -199,11 +216,28 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     setParams: (link: string, params: { weight?: number; delay?: number; receptor?: string }) =>
       act((id) => io.params(id, link, params)),
 
+    /** Подпись блока. Пустую не отправляем: сервер её всё равно не примет. */
+    rename(block: string, label: string): Promise<void> {
+      if (!label.trim()) return Promise.resolve()
+      return act((id) => io.rename(id, block, label))
+    },
+
+    setCell: (block: string, type: string, params: Partial<PointModel>) =>
+      act((id) => io.cell(id, block, type, params)),
+
     stimulate: (instance: string, port: string) =>
       act((id) => io.stimulate(id, { instance, port })),
 
+    setDrive: (stimulus: string, params: DriveParams) =>
+      act((id) => io.driveParams(id, stimulus, params)),
+
     record: (instance: string, port: string) =>
       act((id) => io.record(id, { instance, port })),
+
+    setRecord: (recording: string, variable: RecordedVar) =>
+      act((id) => io.recordVar(id, recording, variable)),
+
+    setRun: (params: Partial<RunSpec>) => act((id) => io.run(id, params)),
 
     remove: (object: string) => act((id) => io.remove(id, object), { selected: null }),
 

@@ -57,24 +57,33 @@ def _morphology(morph) -> dict[str, Any]:
     }
 
 
+# Параметры мембраны: имя в JSON -> поле `ir.PointModel`. Таблица одна на обе
+# стороны -- ею и отдаётся наружу, и разбирается правка, поэтому «порог» не
+# может называться в ответе одним словом, а в запросе другим.
+POINT_FIELDS: dict[str, str] = {
+    "kind": "kind",
+    "vRest": "v_rest",
+    "vReset": "v_reset",
+    "vThreshold": "v_threshold",
+    "tauM": "tau_m",
+    "rIn": "r_in",
+    "refractory": "refractory",
+    "adaptation": "adaptation",
+    "tauAdaptation": "tau_adaptation",
+}
+
+
+def _point_model(point: ir.PointModel) -> dict[str, Any]:
+    return {name: getattr(point, field) for name, field in POINT_FIELDS.items()}
+
+
 def _cell_type(cell_type: ir.CellType) -> dict[str, Any]:
-    point = cell_type.point_model
     return {
         "id": cell_type.id,
         "tags": list(cell_type.tags),
         "transmitter": cell_type.transmitter,
         "inhibitory": ir.is_inhibitory_cell(cell_type),
-        "pointModel": {
-            "kind": point.kind,
-            "vRest": point.v_rest,
-            "vReset": point.v_reset,
-            "vThreshold": point.v_threshold,
-            "tauM": point.tau_m,
-            "rIn": point.r_in,
-            "refractory": point.refractory,
-            "adaptation": point.adaptation,
-            "tauAdaptation": point.tau_adaptation,
-        },
+        "pointModel": _point_model(cell_type.point_model),
         "morphology": _morphology(cell_type.morphology),
     }
 
@@ -425,6 +434,32 @@ def _endpoint(endpoint: Any) -> dict[str, Any]:
     }
 
 
+def _block_cells(block: Any) -> list[dict[str, Any]]:
+    """Клетки блока, сгруппированные по типу.
+
+    Параметры мембраны в IR живут на типе клетки, а не на нейроне, поэтому и
+    в панели свойств правится тип: порог у трёх нейронов одного типа один. У
+    каждого блока снимок свой, так что два экземпляра одного паттерна
+    расходятся свободно -- а вот два нейрона внутри одного блока нет.
+    Перечисляем, кого правка задевает, чтобы это не было сюрпризом.
+    """
+    body = block.snapshot.body
+    users: dict[str, list[str]] = {}
+    for neuron in body.instances.values():
+        users.setdefault(neuron.cell_type, []).append(neuron.id)
+    return [
+        {
+            "type": type_id,
+            "neurons": users[type_id],
+            "inhibitory": ir.is_inhibitory_cell(cell_type),
+            "pointModel": _point_model(cell_type.point_model),
+        }
+        for type_id, cell_type in body.cell_types.items()
+        # Тип без нейронов править незачем: на сеть он не влияет.
+        if type_id in users
+    ]
+
+
 def sandbox_payload(project: Any) -> dict[str, Any]:
     """Всё состояние песочницы одним куском.
 
@@ -458,11 +493,22 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                     "contacts": len(block.snapshot.body.contacts),
                 },
                 "scheme": scheme_payload(block.snapshot.body),
+                "cells": _block_cells(block),
             }
             for block in sandbox.instances
         ],
         "neurons": [
-            {"id": neuron.id, "cellType": neuron.cell_type}
+            {
+                "id": neuron.id,
+                "cellType": neuron.cell_type,
+                # Тип может быть и неизвестным: это чинят, а не скрывают, --
+                # нейрон обязан остаться в дереве объектов.
+                "pointModel": (
+                    _point_model(sandbox.cell_types[neuron.cell_type].point_model)
+                    if neuron.cell_type in sandbox.cell_types
+                    else None
+                ),
+            }
             for neuron in sandbox.neurons.values()
         ],
         "links": [
@@ -482,8 +528,10 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 "id": stim.id,
                 "target": _endpoint(stim.target),
                 "kind": stim.kind,
+                "receptor": stim.receptor,
                 "rate": stim.rate,
                 "amplitude": stim.amplitude,
+                "times": list(stim.times),
                 "start": stim.start,
                 "stop": min(stim.stop, sandbox.run.duration),
             }
@@ -503,6 +551,11 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
         "dirty": project.dirty,
         "canUndo": project.can_undo,
         "problems": project.check(),
+        # Отпечаток собираемой сети. По нему интерфейс узнаёт, что открытая
+        # сессия считает уже не эту схему: сессия привязана к модели на момент
+        # запуска, а правка веса или порога делает её результат результатом
+        # другой сети (#481). Сдвиг блока по холсту отпечаток не меняет.
+        "fingerprint": project.fingerprint(),
         "updatedAt": sandbox.updated_at,
     }
 

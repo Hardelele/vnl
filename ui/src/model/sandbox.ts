@@ -8,7 +8,7 @@
  */
 
 import { ApiError, OfflineError } from './catalog'
-import type { PatternPort, Scheme } from './types'
+import type { PatternPort, PointModel, RecordedVar, RunSpec, Scheme } from './types'
 
 /** Конец связи: порт блока или точка отдельного нейрона. */
 export interface Endpoint {
@@ -16,6 +16,20 @@ export interface Endpoint {
   port: string | null
   section: string
   fraction: number
+}
+
+/**
+ * Клетки блока, сгруппированные по типу.
+ *
+ * Параметры мембраны в IR висят на типе клетки, а не на нейроне, поэтому
+ * правится тип -- и `neurons` говорит, кого правка задевает. Снимок у каждого
+ * блока свой, так что два экземпляра одного паттерна расходятся свободно.
+ */
+export interface SandboxCell {
+  type: string
+  neurons: string[]
+  inhibitory: boolean
+  pointModel: PointModel
 }
 
 export interface SandboxBlock {
@@ -26,6 +40,7 @@ export interface SandboxBlock {
   ports: PatternPort[]
   counts: { neurons: number; contacts: number }
   scheme: Scheme
+  cells: SandboxCell[]
 }
 
 export interface SandboxLink {
@@ -38,12 +53,17 @@ export interface SandboxLink {
   delay: number
 }
 
+export type DriveKind = 'current' | 'poisson' | 'spikes'
+
 export interface SandboxDrive {
   id: string
   target: Endpoint
-  kind: string
+  kind: DriveKind
+  receptor: string
   rate: number
   amplitude: number
+  /** Моменты спайков для `kind: 'spikes'`; у остальных родов пусто. */
+  times: number[]
   start: number
   stop: number
 }
@@ -51,7 +71,7 @@ export interface SandboxDrive {
 export interface SandboxRecording {
   id: string
   target: Endpoint
-  var: string
+  var: RecordedVar
 }
 
 export interface SandboxState {
@@ -59,16 +79,23 @@ export interface SandboxState {
   id: string
   name: string
   blocks: SandboxBlock[]
-  neurons: Array<{ id: string; cellType: string }>
+  /** Отдельный нейрон; `pointModel` пуст, если его тип неизвестен. */
+  neurons: Array<{ id: string; cellType: string; pointModel: PointModel | null }>
   links: SandboxLink[]
   stimuli: SandboxDrive[]
   recordings: SandboxRecording[]
-  run: { dt: number; duration: number; level: string; seed: number }
+  run: RunSpec
   /** Есть ли несохранённые изменения. Факт, а не подпись из макета. */
   dirty: boolean
   canUndo: boolean
   /** Что мешает запуску. Пусто -- можно считать. */
   problems: string[]
+  /**
+   * Отпечаток собираемой сети. Открытая сессия считает модель на момент своего
+   * запуска, поэтому по расхождению отпечатков видно, что её результат -- про
+   * другую схему. Расстановка блоков по холсту отпечаток не меняет.
+   */
+  fingerprint: string
   updatedAt: string
 }
 
@@ -147,6 +174,68 @@ export function setLinkParams(
     'PATCH',
     params,
   )
+}
+
+/** Подпись блока на холсте: это `label` экземпляра, а не имя паттерна. */
+export function renameBlock(
+  id: string,
+  block: string,
+  label: string,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/blocks/${encodeURIComponent(block)}`,
+    'PATCH',
+    { label },
+  )
+}
+
+/** Параметры мембраны. Правится тип клетки внутри блока -- см. `SandboxCell`. */
+export function setCellParams(
+  id: string,
+  block: string,
+  type: string,
+  params: Partial<PointModel>,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/blocks/${encodeURIComponent(block)}/cells/${encodeURIComponent(type)}`,
+    'PATCH',
+    params,
+  )
+}
+
+/** Что у стимула правится: цель менять нельзя -- это уже другой стимул. */
+export type DriveParams = Partial<Omit<SandboxDrive, 'id' | 'target'>>
+
+export function setStimulusParams(
+  id: string,
+  stimulus: string,
+  params: DriveParams,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/stimuli/${encodeURIComponent(stimulus)}`,
+    'PATCH',
+    params,
+  )
+}
+
+export function setRecordingVar(
+  id: string,
+  recording: string,
+  variable: RecordedVar,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/recordings/${encodeURIComponent(recording)}`,
+    'PATCH',
+    { var: variable },
+  )
+}
+
+/** Длительность, шаг, зерно и уровень -- то, что в песочнице меняют первым. */
+export function setRunParams(
+  id: string,
+  params: Partial<RunSpec>,
+): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/run`, 'PATCH', params)
 }
 
 export function moveBlock(

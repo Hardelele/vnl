@@ -42,6 +42,20 @@ from .store import Store, to_plain
 
 HISTORY_LIMIT = 50
 
+#: Сколько отсчётов позволено одному прогону. Ограничение не физическое, а
+#: житейское: `duration/dt` -- это длина каждой трассы, и опечатка в нуле
+#: превращает песочницу в зависший браузер вместо сообщения об ошибке.
+SAMPLE_LIMIT = 1_000_000
+
+#: Род стимула. Список явный: `sim/lif.py` понимает ровно эти три, и опечатка
+#: иначе дала бы молчащий стимул вместо отказа.
+STIMULUS_KINDS = ("current", "poisson", "spikes")
+
+#: Параметры мембраны, у которых ноль или минус не значат ничего: на них
+#: делят. Проверяются здесь, а не в симуляторе, чтобы отказ пришёл в панель
+#: свойств, а не обвалил прогон.
+CELL_POSITIVE = ("tau_m", "tau_adaptation", "r_in")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -191,6 +205,124 @@ class Project:
             setattr(link, key, value)
         return link
 
+    def rename(self, block_id: str, label: str) -> PatternInstance:
+        """Подпись блока на холсте.
+
+        Правится подпись экземпляра, а не имя паттерна: в библиотеке лежит
+        один «FFI», а на холсте таких блоков бывает три, и различать их надо
+        здесь. Имя паттерна трогать нельзя -- за него держится снимок.
+        """
+        chosen = label.strip()
+        if not chosen:
+            raise PatternError("подпись блока не может быть пустой")
+        self.sandbox.instance(block_id)  # проверка до снимка истории
+        self._remember(f"переименован {block_id}")
+        block = self.sandbox.instance(block_id)
+        block.label = chosen
+        return block
+
+    def set_cell(
+        self, target_id: str, type_id: str | None = None, **params: Any
+    ) -> ir.CellType:
+        """Параметры мембраны: порог, покой, постоянная времени, адаптация.
+
+        В IR они живут на типе клетки, а не на нейроне, поэтому правка задевает
+        все нейроны этого типа внутри блока. Расщеплять тип под каждый нейрон
+        здесь нельзя: тогда `Instance` перестал бы описывать нейрон, а два
+        одинаковых блока перестали бы сравниваться в `compose`. Зато снимок у
+        каждого блока свой, и два экземпляра одного паттерна расходятся
+        свободно -- за это и хранится снимок, а не ссылка на библиотеку.
+        """
+        types, chosen = self._cell_types(target_id, type_id)
+        cell_type = types[chosen]
+        unknown = [key for key in params if not hasattr(cell_type.point_model, key)]
+        if unknown:
+            raise PatternError(f"у клетки нет параметров: {', '.join(unknown)}")
+        for key in CELL_POSITIVE:
+            if key in params and float(params[key]) <= 0:
+                raise PatternError(f"{key} должен быть больше нуля")
+        if float(params.get("refractory", 0.0)) < 0:
+            raise PatternError("рефрактерность не бывает отрицательной")
+
+        self._remember(f"клетка {chosen} в {target_id}")
+        types, chosen = self._cell_types(target_id, type_id)
+        point = types[chosen].point_model
+        for key, value in params.items():
+            setattr(point, key, value)
+        return types[chosen]
+
+    def set_stimulus(self, stimulus_id: str, **params: Any) -> SandboxStimulus:
+        """Параметры стимула. Без них драйв остаётся таким, каким его создали."""
+        stimulus = self._stimulus(stimulus_id)
+        unknown = [key for key in params if not hasattr(stimulus, key)]
+        if unknown:
+            raise PatternError(f"у стимула нет параметров: {', '.join(unknown)}")
+        if "kind" in params and params["kind"] not in STIMULUS_KINDS:
+            raise PatternError(
+                f"род стимула {params['kind']!r} неизвестен: "
+                f"{', '.join(STIMULUS_KINDS)}"
+            )
+        if "receptor" in params and params["receptor"] not in ir.RECEPTORS:
+            raise PatternError(
+                f"рецептор {params['receptor']!r} неизвестен: "
+                f"{', '.join(ir.RECEPTORS)}"
+            )
+        if float(params.get("rate", stimulus.rate)) < 0:
+            raise PatternError("частота не бывает отрицательной")
+        start = float(params.get("start", stimulus.start))
+        stop = float(params.get("stop", stimulus.stop))
+        if stop <= start:
+            raise PatternError("стимул кончается раньше, чем начинается")
+
+        self._remember(f"стимул {stimulus_id}")
+        stimulus = self._stimulus(stimulus_id)
+        for key, value in params.items():
+            setattr(stimulus, key, value)
+        return stimulus
+
+    def set_recording(self, recording_id: str, var: str) -> SandboxRecording:
+        """Что писать в этой записи. Реестр величин -- в `ir.RECORDED`."""
+        if var not in ir.RECORDED:
+            raise PatternError(
+                f"записать {var!r} нельзя: {', '.join(ir.RECORDED)}"
+            )
+        self._recording(recording_id)  # проверка до снимка истории
+        self._remember(f"запись {recording_id}")
+        recording = self._recording(recording_id)
+        recording.var = var
+        return recording
+
+    def set_run(self, **params: Any) -> ir.RunSpec:
+        """Длительность, шаг, зерно и уровень детализации.
+
+        Проверки здесь, а не в симуляторе: в песочнице это первое, что меняют,
+        и отказ должен прийти в панель свойств, а не прогоном на десять минут.
+        """
+        run = self.sandbox.run
+        unknown = [key for key in params if not hasattr(run, key)]
+        if unknown:
+            raise PatternError(f"у прогона нет параметров: {', '.join(unknown)}")
+        dt = float(params.get("dt", run.dt))
+        duration = float(params.get("duration", run.duration))
+        if dt <= 0:
+            raise PatternError("шаг должен быть больше нуля")
+        if duration <= 0:
+            raise PatternError("длительность должна быть больше нуля")
+        if duration / dt > SAMPLE_LIMIT:
+            raise PatternError(
+                f"{duration} мс шагом {dt} мс -- это "
+                f"{int(duration / dt)} отсчётов на трассу; предел {SAMPLE_LIMIT}"
+            )
+        if "level" in params and params["level"] not in ("L0", "L1", "L2"):
+            raise PatternError(f"уровень {params['level']!r} не из L0, L1, L2")
+        if "seed" in params:
+            params["seed"] = int(params["seed"])
+
+        self._remember("параметры прогона")
+        for key, value in params.items():
+            setattr(self.sandbox.run, key, value)
+        return self.sandbox.run
+
     def move(self, block_id: str, position: tuple[float, float]) -> None:
         """Сдвиг по холсту. На физику не влияет и прогон не старит."""
         self._remember(f"перемещён {block_id}")
@@ -278,6 +410,51 @@ class Project:
             if link.id == link_id:
                 return link
         raise PatternError(f"связи {link_id!r} нет")
+
+    def _stimulus(self, stimulus_id: str) -> SandboxStimulus:
+        for stimulus in self.sandbox.stimuli:
+            if stimulus.id == stimulus_id:
+                return stimulus
+        raise PatternError(f"стимула {stimulus_id!r} нет")
+
+    def _recording(self, recording_id: str) -> SandboxRecording:
+        for recording in self.sandbox.recordings:
+            if recording.id == recording_id:
+                return recording
+        raise PatternError(f"записи {recording_id!r} нет")
+
+    def _cell_types(
+        self, target_id: str, type_id: str | None
+    ) -> tuple[dict[str, ir.CellType], str]:
+        """Где лежит тип клетки выбранного объекта и как он называется.
+
+        У блока типы свои -- в снимке; у отдельного нейрона общие для
+        песочницы. Возвращается сам словарь, потому что править надо тот
+        объект, который потом посчитает `compose`, а не его копию.
+        """
+        block = next(
+            (item for item in self.sandbox.instances if item.id == target_id), None
+        )
+        if block is not None:
+            types = block.snapshot.body.cell_types
+        elif target_id in self.sandbox.neurons:
+            types = self.sandbox.cell_types
+            type_id = type_id or self.sandbox.neurons[target_id].cell_type
+        else:
+            raise PatternError(f"в песочнице нет объекта {target_id!r}")
+
+        if type_id is None:
+            if len(types) != 1:
+                known = ", ".join(types) or "типов нет"
+                raise PatternError(
+                    f"в {target_id!r} несколько типов клеток, нужно сказать какой "
+                    f"({known})"
+                )
+            type_id = next(iter(types))
+        if type_id not in types:
+            known = ", ".join(types) or "типов нет"
+            raise PatternError(f"в {target_id!r} нет типа клетки {type_id!r} ({known})")
+        return types, type_id
 
     def _free_link_id(self) -> str:
         used = {link.id for link in self.sandbox.links}

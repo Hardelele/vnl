@@ -313,10 +313,55 @@ class Api:
         project.set_parameters(link_id, **params)
         return api.sandbox_payload(project)
 
+    def block_params(
+        self, sandbox_id: str, block_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Подпись блока. На холсте это `label` экземпляра, а не имя паттерна."""
+        if body.get("label") is None:
+            raise PatternError('нечего менять: ожидалось {"label": "Вход"}')
+        project = self._project(sandbox_id)
+        project.rename(block_id, str(body["label"]))
+        return api.sandbox_payload(project)
+
+    def cell_params(
+        self, sandbox_id: str, block_id: str, type_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Параметры мембраны. Имена полей -- из `api.POINT_FIELDS`."""
+        params: dict[str, Any] = {}
+        for name, field in api.POINT_FIELDS.items():
+            if body.get(name) is None:
+                continue
+            params[field] = (
+                str(body[name]) if field == "kind" else float(body[name])
+            )
+        if not params:
+            raise PatternError(
+                "нечего менять: ожидались " + ", ".join(api.POINT_FIELDS)
+            )
+        project = self._project(sandbox_id)
+        project.set_cell(block_id, type_id, **params)
+        return api.sandbox_payload(project)
+
     def move_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
         project = self._project(sandbox_id)
         position = body.get("position") or [0.0, 0.0]
         project.move(str(body.get("id") or ""), (float(position[0]), float(position[1])))
+        return api.sandbox_payload(project)
+
+    def run_params(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Длительность, шаг, зерно и уровень -- то, что меняют первым делом."""
+        params: dict[str, Any] = {}
+        for key in ("dt", "duration"):
+            if body.get(key) is not None:
+                params[key] = float(body[key])
+        if body.get("seed") is not None:
+            params["seed"] = int(body["seed"])
+        if body.get("level"):
+            params["level"] = str(body["level"])
+        if not params:
+            raise PatternError("нечего менять: ожидались dt, duration, seed или level")
+        project = self._project(sandbox_id)
+        project.set_run(**params)
         return api.sandbox_payload(project)
 
     def add_stimulus(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -345,6 +390,37 @@ class Api:
             var=str(body.get("var") or "v"),
         )
         project.record(recording)
+        return api.sandbox_payload(project)
+
+    def stimulus_params(
+        self, sandbox_id: str, stimulus_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Правка драйва: создавался он с числами по умолчанию, а не навсегда."""
+        params: dict[str, Any] = {}
+        for key in ("rate", "amplitude", "start", "stop"):
+            if body.get(key) is not None:
+                params[key] = float(body[key])
+        for key in ("kind", "receptor"):
+            if body.get(key):
+                params[key] = str(body[key])
+        if body.get("times") is not None:
+            params["times"] = tuple(float(time) for time in body["times"])
+        if not params:
+            raise PatternError(
+                "нечего менять: ожидались kind, receptor, rate, amplitude, "
+                "times, start или stop"
+            )
+        project = self._project(sandbox_id)
+        project.set_stimulus(stimulus_id, **params)
+        return api.sandbox_payload(project)
+
+    def recording_params(
+        self, sandbox_id: str, recording_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not body.get("var"):
+            raise PatternError('нечего менять: ожидалось {"var": "v"}')
+        project = self._project(sandbox_id)
+        project.set_recording(recording_id, str(body["var"]))
         return api.sandbox_payload(project)
 
     def remove_object(self, sandbox_id: str, object_id: str) -> dict[str, Any]:
@@ -432,6 +508,18 @@ def routes(service: Api) -> list[Route]:
             ok=201,
         ),
         Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/blocks/([^/]+)$"),
+            service.block_params,
+            wants="body",
+        ),
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/blocks/([^/]+)/cells/([^/]+)$"),
+            service.cell_params,
+            wants="body",
+        ),
+        Route(
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/links$"),
             service.connect,
@@ -458,11 +546,29 @@ def routes(service: Api) -> list[Route]:
             ok=201,
         ),
         Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/stimuli/([^/]+)$"),
+            service.stimulus_params,
+            wants="body",
+        ),
+        Route(
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/recordings$"),
             service.add_recording,
             wants="body",
             ok=201,
+        ),
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/recordings/([^/]+)$"),
+            service.recording_params,
+            wants="body",
+        ),
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/run$"),
+            service.run_params,
+            wants="body",
         ),
         Route(
             "DELETE",

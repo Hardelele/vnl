@@ -112,11 +112,19 @@ export function Timeline({
               type="button"
               className="tl-name"
               onClick={() => onSelect?.(item.name)}
-              title={onSelect ? 'Показать в инспекторе' : undefined}
+              // Имя всё равно обрезается: у клеток собранной схемы общая
+              // приставка блока, и шесть дорожек различаются её хвостом.
+              title={onSelect ? `${item.name} — показать в инспекторе` : item.name}
             >
+              {/* Имя клетки вперёд, блок следом: в собранной схеме приставка
+                  у дорожек общая, и обрезать надо её, а не то, чем они
+                  различаются. Полное имя -- в подсказке. */}
               <span className="tl-title">
                 <span className={`tl-dot${item.inhibitory ? ' is-inh' : ''}`} />
-                {item.name}
+                <span className="tl-cell">{cellOf(item.name)}</span>
+                {ownerOf(item.name) ? (
+                  <span className="tl-owner">{ownerOf(item.name)}</span>
+                ) : null}
               </span>
               <span className="mono tl-stat">
                 {item.spikes.length} сп. · {item.rate.toFixed(0)} Гц
@@ -173,6 +181,16 @@ export function Timeline({
       </div>
     </div>
   )
+}
+
+/** Имя нейрона в собранной сети -- `блок/клетка` (см. `compose.SEPARATOR`). */
+function cellOf(name: string): string {
+  return name.slice(name.lastIndexOf('/') + 1)
+}
+
+function ownerOf(name: string): string {
+  const cut = name.lastIndexOf('/')
+  return cut < 0 ? '' : name.slice(0, cut)
 }
 
 /** Дорожка одной клетки: её спайки, её трасса и шкала под трассу. */

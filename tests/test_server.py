@@ -523,6 +523,183 @@ def test_moving_a_block_is_not_a_change_of_physics(base):
     assert moved["problems"] == moved["problems"]
 
 
+def test_the_payload_carries_the_fingerprint_of_the_built_network(base):
+    """Открытая сессия считает модель на момент запуска.
+
+    Интерфейс узнаёт, что её результат уже про другую сеть, по расхождению
+    отпечатков -- значит отпечаток обязан меняться от физики и не меняться от
+    расстановки блоков по холсту.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    before = project["fingerprint"]
+    assert before
+
+    _, moved = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/move", {"id": first, "position": [40, 90]}
+    )
+    assert moved["fingerprint"] == before, "сдвиг по холсту физику не меняет"
+
+    _, renamed = ask(
+        base, "PATCH", f"/api/sandboxes/{sandbox}/blocks/{first}", {"label": "Вход"}
+    )
+    assert renamed["fingerprint"] == before, "подпись блока -- тоже не физика"
+
+    _, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/blocks/{first}/cells/pyr_l5",
+        {"vThreshold": -44.0},
+    )
+    assert changed["fingerprint"] != before, "порог меняет сеть"
+
+    _, timed = ask(base, "PATCH", f"/api/sandboxes/{sandbox}/run", {"duration": 120})
+    assert timed["fingerprint"] != changed["fingerprint"], "длительность -- часть прогона"
+
+
+def test_a_block_carries_the_cells_its_parameters_live_on(base):
+    """Панель свойств правит тип клетки, поэтому типы блока приходят с ним."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    cells = project["blocks"][0]["cells"]
+
+    assert {cell["type"] for cell in cells} == {"relay", "pyr_l5", "pv"}
+    pyramid = next(cell for cell in cells if cell["type"] == "pyr_l5")
+    assert pyramid["neurons"] == ["E"], "видно, кого задевает правка"
+    assert pyramid["pointModel"]["vThreshold"] == -50.0
+    assert pyramid["pointModel"]["tauM"] == 15.0
+    assert next(cell for cell in cells if cell["type"] == "pv")["inhibitory"] is True
+
+
+def test_a_block_is_renamed_without_touching_the_pattern(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+
+    status, renamed = ask(
+        base, "PATCH", f"/api/sandboxes/{sandbox}/blocks/{first}", {"label": "Вход"}
+    )
+    assert status == 200
+    assert [block["label"] for block in renamed["blocks"]] == ["Вход", "FFI"]
+    assert ask(base, "GET", "/api/patterns/ffi")[1]["name"] == "FFI"
+
+    assert ask(base, "PATCH", f"/api/sandboxes/{sandbox}/blocks/{second}", {})[0] == 400
+    assert ask(base, "PATCH", f"/api/sandboxes/{sandbox}/blocks/нет", {"label": "x"})[0] == 400
+
+
+def test_cell_parameters_change_one_block_at_a_time(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+
+    status, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/blocks/{first}/cells/pyr_l5",
+        {"vThreshold": -44.0, "adaptation": 2.5},
+    )
+    assert status == 200
+    edited, untouched = changed["blocks"]
+    assert threshold(edited, "pyr_l5") == -44.0
+    assert threshold(untouched, "pyr_l5") == -50.0, "второй экземпляр не задет"
+
+    bad = f"/api/sandboxes/{sandbox}/blocks/{second}/cells/pyr_l5"
+    assert ask(base, "PATCH", bad, {"tauM": 0})[0] == 400
+    assert ask(base, "PATCH", bad, {})[0] == 400
+
+
+def threshold(block, type_id: str) -> float:
+    cell = next(item for item in block["cells"] if item["type"] == type_id)
+    return cell["pointModel"]["vThreshold"]
+
+
+def test_a_stimulus_is_editable_after_it_is_created(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    _, driven = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": first, "port": "in"}},
+    )
+    drive = driven["stimuli"][0]["id"]
+
+    status, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/stimuli/{drive}",
+        {"rate": 40, "amplitude": 0.8, "start": 10, "stop": 120, "receptor": "nmda"},
+    )
+    assert status == 200
+    stim = changed["stimuli"][0]
+    assert (stim["rate"], stim["amplitude"]) == (40.0, 0.8)
+    assert (stim["start"], stim["stop"]) == (10.0, 120.0)
+    assert stim["receptor"] == "nmda"
+
+    at = f"/api/sandboxes/{sandbox}/stimuli/{drive}"
+    assert ask(base, "PATCH", at, {"kind": "барабан"})[0] == 400
+    assert ask(base, "PATCH", at, {"start": 200, "stop": 100})[0] == 400
+
+
+def test_a_recording_changes_what_it_writes(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    _, recorded = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/recordings",
+        {"target": {"instance": first, "port": "out"}},
+    )
+    record = recorded["recordings"][0]["id"]
+
+    _, changed = ask(
+        base, "PATCH", f"/api/sandboxes/{sandbox}/recordings/{record}", {"var": "g_inh"}
+    )
+    assert changed["recordings"][0]["var"] == "g_inh"
+    at = f"/api/sandboxes/{sandbox}/recordings/{record}"
+    assert ask(base, "PATCH", at, {"var": "температура"})[0] == 400
+
+
+def test_run_parameters_are_editable_and_reach_the_simulation(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": first, "port": "in"}},
+    )
+
+    status, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/run",
+        {"duration": 120, "dt": 0.25, "seed": 11},
+    )
+    assert status == 200
+    assert changed["run"] == {
+        "dt": 0.25,
+        "duration": 120.0,
+        "level": "L1",
+        "seed": 11,
+    }
+
+    # Прогон обязан считаться по новым числам, а не по прежним.
+    _, sim = ask(base, "POST", "/api/sim", {"sandbox": sandbox})
+    assert sim["duration"] == 120.0
+    assert sim["dt"] == 0.25
+
+    at = f"/api/sandboxes/{sandbox}/run"
+    assert ask(base, "PATCH", at, {"dt": 0})[0] == 400
+    assert ask(base, "PATCH", at, {"duration": 1e9, "dt": 0.01})[0] == 400
+    assert ask(base, "PATCH", at, {"level": "L9"})[0] == 400
+    assert ask(base, "PATCH", at, {})[0] == 400
+
+
 def test_the_server_listens_only_to_this_machine_by_default(tmp_path):
     """Адрес по умолчанию -- loopback: наружу сервер сам не выходит."""
     server = create_server(tmp_path, port=0, quiet=True)
