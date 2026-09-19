@@ -157,6 +157,13 @@ class Session:
             self.simulator.restore(self._mark_before(target).state)
             if target_step > self.simulator.step:
                 self.simulator.advance(target_step - self.simulator.step)
+            # Перемотка -- не кадр. Снимок берётся до нужного момента, остаток
+            # догоняется шагами, и взгляда между ними нет: без этой строчки
+            # первый же кадр после перемотки сообщил бы разряд, случившийся
+            # где-то посреди догоняемого отрезка, как разряд сейчас (#534).
+            # Отрезок при этом тем длиннее, чем больше возили курсором: снимки
+            # после точки отката выбрасываются ниже, а новых здесь не берут.
+            self.simulator.forget_frame()
             # Снимки после точки отката больше ни к чему не относятся.
             self._marks = [item for item in self._marks if item.time <= self.elapsed]
             self.state = "paused"

@@ -274,6 +274,42 @@ def test_a_rewind_forgets_the_peak_of_a_future_that_no_longer_is(session):
     assert cells["E"]["peak"] == cells["E"]["charge"]
 
 
+def test_a_rewind_forwards_does_not_leave_an_old_discharge_glowing():
+    """Перемотка вперёд не превращает давний разряд в сегодняшний (#534).
+
+    Снимок берётся до запрошенного момента, остаток догоняется шагами, и
+    взгляда между ними нет. Без обнуления первый же кадр сообщал бы `fired`
+    про всякую клетку, разрядившуюся где-то внутри догоняемого отрезка, --
+    а человек видел бы на схеме сто процентов у клетки, которая давно стоит
+    на покое и по растру молчит.
+
+    Отрезок тем длиннее, чем больше возили курсором: снимки после точки
+    отката выбрасываются, новых при перемотке не берут. Поэтому в тесте
+    сначала откат к началу, и только потом ход вперёд.
+    """
+    item = Session("s2", model("library/convergent_excitation"), source="сходящееся")
+    try:
+        item.advance_ms(250.0)
+        item.update(since=0)
+        item.seek(10.0)
+        item.seek(105.0)
+
+        payload = item.update(since=0)
+        cells = payload["cells"]
+        # `A` разрядилась на 50.4 мс и с тех пор молчит: к 105 мс она на покое.
+        assert payload["spikes"]["A"] == [50.4]
+        assert cells["A"]["spiked"] is False
+        assert cells["A"]["peak"] == cells["A"]["charge"]
+        assert cells["A"]["charge"] == pytest.approx(0.0, abs=0.01)
+        # `B` разрядилась на 100.4 мс -- тоже до этого момента, а не в нём.
+        assert cells["B"]["spiked"] is False
+        # А `X` за порог так и не вышла: её доля -- настоящая, и её видно.
+        assert cells["X"]["spiked"] is False
+        assert 0.5 < cells["X"]["charge"] < 0.8
+    finally:
+        item.close()
+
+
 def test_inhibition_reads_as_a_charge_below_rest():
     """Клетка ниже покоя -- отрицательная доля, а не ноль.
 
