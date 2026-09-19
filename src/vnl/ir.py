@@ -85,6 +85,12 @@ def is_inhibitory_cell(cell_type: "CellType") -> bool:
     return "inhibitory" in cell_type.tags or cell_type.transmitter == "gaba"
 
 
+#: Виды точечной модели, которые симулятор действительно считает. Список
+#: нужен затем, чтобы объявленный в тексте, но не реализованный вид отвергался
+#: разбором, а не считался молча как что-то другое.
+POINT_MODELS: tuple[str, ...] = ("lif",)
+
+
 @dataclass
 class PointModel:
     """Параметры точечной модели мембраны (LIF с адаптацией)."""

@@ -375,3 +375,66 @@ def test_dot_export_marks_inhibition_with_a_bar():
     dot = dot_export(model)
     assert "arrowhead=tee" in dot and "arrowhead=normal" in dot
     assert dot.count("->") == len(model.contacts)
+
+
+# --- нереализованное не считается молча ------------------------------------
+
+
+def test_an_unimplemented_point_model_is_refused():
+    """`point = adex` разбирался, но считался как LIF -- то есть молча не тем.
+
+    Отказ здесь лучше расчёта: модель, посчитанная другой физикой, даёт числа,
+    по которым принимают решения, и отличить их не по чему.
+    """
+    text = """
+model probe
+cell odd : excitatory, glutamate { point = adex  tau_m = 10ms }
+neuron A : odd
+run { dt = 0.1ms  duration = 10ms }
+"""
+    with pytest.raises(ValidationError) as failure:
+        load(text, strict=True)
+    assert "adex" in str(failure.value.diagnostics[0])
+    assert "не реализована" in str(failure.value.diagnostics[0])
+
+
+def test_the_implemented_point_model_passes():
+    text = """
+model probe
+cell plain : excitatory, glutamate { point = lif  tau_m = 10ms }
+neuron A : plain
+run { dt = 0.1ms  duration = 10ms }
+"""
+    model, diagnostics = load(text, strict=True)
+    assert model.cell_types["plain"].point_model.kind == "lif"
+    assert [d for d in diagnostics if d.severity == "error"] == []
+
+
+def test_a_contact_onto_an_axon_says_what_it_will_actually_do():
+    """Аксо-аксональный контакт в L1 действует на мембрану всей клетки.
+
+    Считать его как обычное сомальное торможение можно, молчать об этом -- нет:
+    написано одно, посчитано другое.
+    """
+    # Отсеки нужны настоящие: у точечной клетки любой адрес схлопывается в сому,
+    # и аксона, на который можно поставить контакт, просто нет.
+    text = """
+model probe
+morphology cell_with_axon {
+    soma len=20um diam=20um
+    axon len=500um diam=1um
+}
+cell exc : excitatory, glutamate { morphology = cell_with_axon  tau_m = 10ms }
+cell inh : inhibitory, gaba      { tau_m = 10ms }
+neuron A : exc
+neuron B : exc
+neuron I : inh
+A.axon -> B.soma { receptor = ampa  weight = 1nS }
+I.soma -> A.axon { receptor = gaba_a  weight = 1nS }
+run { dt = 0.1ms  duration = 10ms }
+"""
+    _, diagnostics = load(text, strict=True)
+    about_axon = [d for d in diagnostics if "на аксоне" in d.message]
+    assert len(about_axon) == 1
+    assert about_axon[0].severity == "warning"
+    assert "мембрану всей клетки" in about_axon[0].message

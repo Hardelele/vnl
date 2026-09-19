@@ -101,6 +101,18 @@ class _Resolver:
             )
             return None
 
+        if self.kind_of(post) == "axon":
+            # Аксо-аксональный контакт в L1 не гасит чужой выброс, а вливает
+            # проводимость в мембрану всей клетки -- то есть работает как
+            # обычное сомальное торможение. Молчать об этом нельзя: модель
+            # посчитается, но ответит не про то, что написано.
+            self.warn(
+                where,
+                f"постсинаптическая сторона на аксоне ({post}); "
+                "пресинаптическое торможение на уровне L1 не считается, "
+                "контакт подействует на мембрану всей клетки",
+            )
+
         pre_kind = self.kind_of(pre)
         if pre_kind == "dend":
             self.warn(
@@ -228,6 +240,16 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
     strict=True поднимает ValidationError, если есть ошибки.
     """
     resolver = _Resolver(parsed)
+
+    for cell_type in parsed.cell_types.values():
+        kind = cell_type.point_model.kind
+        if kind not in ir.POINT_MODELS:
+            known = ", ".join(ir.POINT_MODELS)
+            resolver.error(
+                f"тип клетки {cell_type.id}",
+                f"точечная модель {kind!r} не реализована (есть: {known}); "
+                "считать её как другую значило бы молча подменить физику",
+            )
 
     for instance in parsed.instances.values():
         if instance.cell_type not in parsed.cell_types:
