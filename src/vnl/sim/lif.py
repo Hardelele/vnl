@@ -24,6 +24,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 from .. import ir
 
@@ -68,6 +69,12 @@ class _Cell:
     current: float = 0.0
     spiked: bool = False
     post_trace: float = 0.0
+    #: Самое заряженное состояние с тех пор, как его последний раз забирали, и
+    #: был ли за это время разряд. Смотрящему нужен не последний шаг, а то, что
+    #: произошло: шагов между кадрами полсотни, разряд занимает один, и на
+    #: мгновенном значении он не показывается никогда -- см. `peek`.
+    peak: float = 0.0
+    fired: bool = False
 
     @property
     def charge(self) -> float:
@@ -332,7 +339,13 @@ class Simulator:
                 cell.refractory_left = point.refractory
                 cell.threshold_offset += point.adaptation
                 cell.spiked = True
+                cell.fired = True
                 self.result.spikes[cell.id].append(self.time)
+            # Самое заряженное за промежуток между двумя взглядами. Считается
+            # на каждом шаге, потому что взгляд редкий: иначе разряд, занявший
+            # один шаг из пятидесяти, в кадр не попадёт.
+            if cell.charge > cell.peak:
+                cell.peak = cell.charge
 
     def _propagate(self) -> None:
         for synapse in self.synapses:
@@ -456,6 +469,37 @@ class Simulator:
             done += 1
         return done
 
+    def peek(self) -> dict[str, dict[str, Any]]:
+        """Состояние клеток для смотрящего -- и счётчики обнуляются.
+
+        Мгновенное значение здесь недостаточно, и это не придирка к точности.
+        Между двумя взглядами проходит полсотни шагов (темп 50 мс модели в
+        секунду, `dt` 0.1 мс), а разряд занимает ровно один: у клетки `E` в
+        `ffi` это пять шагов из трёх тысяч. Спрашивая последний шаг, разряд
+        видишь с вероятностью 0.17% -- то есть никогда, и сто процентов
+        заряда, которые в движке есть всегда, на экран не попадают.
+
+        Поэтому отдаётся и то, где клетка сейчас (`charge` -- по ней заливка),
+        и то, до чего она доходила с прошлого взгляда (`peak`), и был ли
+        разряд (`fired`). Провал ниже покоя так ловить не нужно: постоянная
+        мембраны 6-15 мс против 5 мс между взглядами, и торможение никуда за
+        кадр не исчезает.
+
+        Вызов обнуляет накопленное: следующий взгляд -- про следующий отрезок,
+        а не про всё время с начала прогона.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for name, cell in self.cells.items():
+            out[name] = {
+                "v": cell.v,
+                "charge": cell.charge,
+                "peak": max(cell.peak, cell.charge),
+                "fired": cell.fired,
+            }
+            cell.peak = cell.charge
+            cell.fired = False
+        return out
+
     @property
     def finished(self) -> bool:
         return self.step >= self.total_steps
@@ -524,6 +568,11 @@ class Simulator:
                 cell.post_trace,
             ) = values
             cell.conductance = dict(conductance)
+            # Накопленное для показа -- не физика, и в снимке его нет. После
+            # отката оно обязано начаться заново с восстановленного состояния,
+            # иначе первый же кадр покажет пик из будущего, которого больше нет.
+            cell.peak = cell.charge
+            cell.fired = False
         for synapse, values in zip(self.all_synapses, state.synapses):
             (
                 synapse.weight,

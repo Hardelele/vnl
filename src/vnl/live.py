@@ -265,11 +265,15 @@ class Session:
                 # приходить по-разному.
                 "cells": {
                     name: {
-                        "v": round(cell.v, TRACE_DIGITS),
-                        "spiked": cell.spiked,
-                        "charge": round(cell.charge, TRACE_DIGITS),
+                        "v": round(state["v"], TRACE_DIGITS),
+                        # Разряд и пик -- за весь отрезок между кадрами, а не за
+                        # последний шаг. Шагов в отрезке полсотни, разряд длится
+                        # один: спрашивая последний, его не видишь никогда.
+                        "spiked": state["fired"],
+                        "charge": round(state["charge"], TRACE_DIGITS),
+                        "peak": round(state["peak"], TRACE_DIGITS),
                     }
-                    for name, cell in self.simulator.cells.items()
+                    for name, state in self.simulator.peek().items()
                 },
                 "degradation": list(result.degradation),
             }

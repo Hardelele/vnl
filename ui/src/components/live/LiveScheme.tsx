@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { chargeLabel } from '../../lib/charge'
+import { chargeLabel, momentOf } from '../../lib/charge'
 import { builtinPlacement, placeScheme, type Placement } from '../../lib/place'
 import type { Scheme } from '../../model/types'
 import type { CellState } from '../../model/sim'
@@ -114,7 +114,7 @@ function Cell({
   onPick?: (neuron: string) => void
 }) {
   const level = fill(state)
-  const label = chargeLabel(state?.charge)
+  const label = chargeLabel(momentOf(state))
   const radius = node.inhibitory ? 6 : node.height / 2
   const kind = node.inhibitory ? 'is-inh' : 'is-exc'
   const x = node.x - node.width / 2

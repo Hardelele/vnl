@@ -31,9 +31,10 @@ const SCHEME: Scheme = {
   ],
 }
 
-function cell(charge: number, spiked = false): CellState {
+function cell(charge: number, spiked = false, peak = charge): CellState {
   // Потенциал здесь не важен: долю считает сессия, интерфейс её не пересчитывает.
-  return { v: -65 + charge * 15, spiked, charge }
+  // `peak` -- до чего клетка дошла между кадрами; в кадре разряда показывают его.
+  return { v: -65 + charge * 15, spiked, charge, peak }
 }
 
 let root: Root | null = null

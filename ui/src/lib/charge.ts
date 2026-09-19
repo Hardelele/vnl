@@ -39,3 +39,25 @@ export function chargeLabel(charge: number | undefined | null): ChargeLabel | nu
   // не разглядывая. Цвет торможения на ней -- вторым признаком того же.
   return { text: below ? `↓${-percent}%` : `${percent}%`, below }
 }
+
+/**
+ * Что показать про клетку в этом кадре.
+ *
+ * Между двумя кадрами движок делает полсотни шагов, а разряд занимает один:
+ * спрашивая мгновенное значение, разряд видишь с вероятностью доли процента --
+ * то есть никогда, и клетка на схеме никогда не доходит до ста процентов, хотя
+ * в движке доходит каждый раз. Поэтому в кадре, где разряд был, показывается
+ * то, до чего клетка дошла (`peak`), а не то, где она оказалась после сброса.
+ *
+ * Правило живёт здесь, а не в каждом месте показа: схема и инспектор обязаны
+ * говорить об одной клетке одно и то же.
+ */
+export function momentOf(state: {
+  charge: number
+  peak?: number
+  spiked?: boolean
+} | null | undefined): number | null {
+  if (!state) return null
+  if (state.spiked && typeof state.peak === 'number') return Math.max(state.peak, 1)
+  return state.charge
+}

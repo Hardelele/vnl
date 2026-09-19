@@ -17,7 +17,7 @@
  * показывать вдвое меньшую частоту и пугать ею зря.
  */
 
-import { chargeLabel } from '../../lib/charge'
+import { chargeLabel, momentOf } from '../../lib/charge'
 import type { CellState } from '../../model/sim'
 import type { Model } from '../../model/types'
 import './inspector.css'
@@ -41,7 +41,7 @@ export function Inspector({ neuron, model, cells, spikes, elapsed }: InspectorPr
   const rate = elapsed > 0 ? (fired.length / elapsed) * 1000 : 0
   // Тот же процент, что стоит над клеткой на схеме: одна функция, одно
   // округление -- иначе схема и панель разошлись бы на единицу в том же кадре.
-  const level = chargeLabel(state?.charge)
+  const level = chargeLabel(momentOf(state))
 
   const inputs = model.contacts.filter((contact) => contact.post.instance === neuron)
   const outputs = model.contacts.filter((contact) => contact.pre.instance === neuron)

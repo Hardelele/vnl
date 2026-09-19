@@ -226,6 +226,54 @@ def test_a_discharge_reads_as_a_full_charge(session):
         assert cells[name]["v"] == session.simulator.cells[name].model.v_reset
 
 
+def test_a_frame_shows_the_discharge_that_happened_between_frames(session):
+    """Кадр редкий, разряд короткий -- и на мгновенном значении его не видно.
+
+    Между двумя взглядами проходит полсотни шагов (темп 50 мс модели в секунду,
+    `dt` 0.1 мс), а разряд занимает один: у `E` в `ffi` это пять шагов из трёх
+    тысяч. Спрашивая последний шаг, сто процентов не увидишь никогда -- хотя в
+    движке клетка доходит до них при каждом спайке. Поэтому кадр рассказывает
+    про весь отрезок: был ли разряд и до чего клетка дошла.
+    """
+    seen_spike = False
+    peaks: list[float] = []
+    while not session.simulator.finished:
+        # Ровно столько модельного времени, сколько проходит между кадрами.
+        session.advance_ms(50.0 * 0.1)
+        cells = session.update(since=session.simulator.step)["cells"]
+        if cells["E"]["spiked"]:
+            seen_spike = True
+            peaks.append(cells["E"]["peak"])
+
+    assert seen_spike, "разряд `E` не попал ни в один кадр"
+    assert all(peak >= 1.0 for peak in peaks), "кадр с разрядом не дошёл до ста"
+
+
+def test_a_frame_without_a_discharge_does_not_invent_one(session):
+    """Пик не должен тянуться из прошлого: он про этот отрезок, а не про прогон."""
+    session.advance_ms(5.0)
+    session.update(since=session.simulator.step)
+    # Второй взгляд сразу за первым: считать между ними нечего.
+    cells = session.update(since=session.simulator.step)["cells"]
+
+    assert cells["E"]["spiked"] is False
+    assert cells["E"]["peak"] == cells["E"]["charge"]
+
+
+def test_a_rewind_forgets_the_peak_of_a_future_that_no_longer_is(session):
+    """Откат возвращает состояние -- и накопленное для показа тоже.
+
+    Иначе первый кадр после отката показал бы пик из отменённого будущего.
+    """
+    session.advance_ms(100.0)
+    session.update(since=session.simulator.step)
+    session.seek(1.0)
+
+    cells = session.update(since=0)["cells"]
+    assert cells["E"]["spiked"] is False
+    assert cells["E"]["peak"] == cells["E"]["charge"]
+
+
 def test_inhibition_reads_as_a_charge_below_rest():
     """Клетка ниже покоя -- отрицательная доля, а не ноль.
 
