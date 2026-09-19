@@ -66,6 +66,7 @@ from .compose import compose
 from .index import Index, IndexUnavailable
 from .live import Pool, SessionError
 from .patterns import (
+    DRAFT_LEVEL,
     LEVEL_NAMES,
     Endpoint,
     Pattern,
@@ -138,7 +139,10 @@ class Api:
     def create_pattern(self, body: dict[str, Any]) -> dict[str, Any]:
         """«Добавить»: пустой черновик, с которого начинается новая схема."""
         name = str(body.get("name") or "").strip() or "Без имени"
-        level = str(body.get("level") or "L2")
+        # Ступень по умолчанию -- там же, где её знает остальной код: литерал
+        # здесь означал бы вторую истину, и при смене оси каталога черновики
+        # молча поехали бы не на ту ступень.
+        level = str(body.get("level") or DRAFT_LEVEL)
         if level not in LEVEL_NAMES:
             raise PatternError(
                 f"уровень {level!r} не из каталога: {', '.join(LEVEL_NAMES)}"

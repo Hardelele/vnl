@@ -28,14 +28,14 @@ const CATALOG: Catalog = {
   query: { text: '', levels: [], statuses: [] },
   total: 1,
   matched: 1,
-  levels: [{ id: 'L2', name: 'Микросхемы', count: 1 }],
+  levels: [{ id: 'L1', name: 'Взаимодействие сигналов', count: 1 }],
   statuses: [{ id: 'ready', name: 'Готов', count: 1 }],
   patterns: [
     {
       id: 'ffi',
       name: 'Feed-forward inhibition',
-      level: 'L2',
-      levelName: 'Микросхемы',
+      level: 'L1',
+      levelName: 'Взаимодействие сигналов',
       status: 'ready',
       statusName: 'Готов',
       ports: [],
