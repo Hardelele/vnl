@@ -88,3 +88,27 @@
 .bar-led.is-off {
   background: var(--status-danger);
 }
+
+/* Переключатель темы. Тёмная -- выбор, а не догадка по настройке системы:
+   дизайн-система светлая, и тёмная палитра дописана поверх неё. */
+.bar-theme {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bar-theme:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+
+.bar-theme:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

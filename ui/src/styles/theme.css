@@ -11,7 +11,7 @@
 @import '@design/tokens/effects.css';
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   --bg: var(--surface-page);
   --panel: var(--surface-card);
@@ -39,28 +39,6 @@
   /* Фон выбранного элемента. Отдельной переменной, потому что светлый
      sky-50 из палитры на тёмном фоне выжигает текст. */
   --selected: var(--sky-50);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: var(--ink-950);
-    --panel: var(--ink-900);
-    --subtle: var(--ink-800);
-    --ink: var(--ink-50);
-    --muted: var(--ink-300);
-    --faint: var(--ink-400);
-    --line: var(--ink-700);
-    --line-strong: var(--ink-600);
-    --accent: var(--sky-500);
-
-    /* Функциональные цвета Reckue рассчитаны на светлый фон; на ink-950 они
-       проваливаются, поэтому в тёмной теме берутся осветлённые варианты. */
-    --exc: #4fb286;
-    --inh: #e2766d;
-    --mod: #d9a441;
-    --trace: var(--sky-500);
-    --selected: var(--ink-800);
-  }
 }
 
 [data-theme='dark'] {

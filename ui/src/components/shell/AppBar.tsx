@@ -7,6 +7,7 @@
  * библиотеки. Claude займёт это место, когда появится (#483).
  */
 
+import { applyTheme, useTheme } from '../../state/theme'
 import './shell.css'
 
 export type Screen = 'library' | 'sandbox'
@@ -26,6 +27,8 @@ export interface AppBarProps {
 }
 
 export function AppBar({ tabs, current, onPick, status }: AppBarProps) {
+  const theme = useTheme()
+
   return (
     <header className="bar">
       <span className="bar-mark">
@@ -50,6 +53,15 @@ export function AppBar({ tabs, current, onPick, status }: AppBarProps) {
         <span className={`bar-led is-${status.tone}`} />
         {status.text}
       </span>
+      <button
+        type="button"
+        className="bar-theme"
+        title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+        aria-label={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+        onClick={() => applyTheme(theme === 'dark' ? 'light' : 'dark')}
+      >
+        {theme === 'dark' ? '☀' : '☾'}
+      </button>
     </header>
   )
 }
