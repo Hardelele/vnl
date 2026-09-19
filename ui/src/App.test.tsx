@@ -147,6 +147,21 @@ describe('библиотека без входа', () => {
     expect(screen.querySelector('.lib')).not.toBeNull()
   })
 
+  it('не вошедшему не предлагают того, чего он не просил', async () => {
+    serve([
+      ['/api/session', ANONYMOUS],
+      ['/api/catalog', CATALOG],
+    ])
+
+    const screen = await mount()
+
+    // «Добавить» без сессии нажимать некуда, а кнопка, которая вместо своей
+    // работы ведёт на вход, обещает не то, что делает.
+    expect(screen.textContent).not.toContain('Добавить')
+    // И правило вслух не объявляется: вход есть в панели, этого довольно.
+    expect(screen.textContent).not.toContain('после входа')
+  })
+
   it('вход предлагается кнопкой в панели, пока никто не вошёл', async () => {
     serve([
       ['/api/session', ANONYMOUS],
