@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import types
 import typing
@@ -100,10 +101,26 @@ def from_plain(kind: type[T], data: Any) -> T:
 class Store:
     """Каталог с паттернами и песочницами."""
 
-    def __init__(self, root: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        index: Any | None = None,
+    ) -> None:
         self.root = Path(root)
+        # Индекс метаданных, если он есть. Хранилище о нём знает ровно одно:
+        # после записи надо сказать. Правда остаётся в файлах, поэтому отказ
+        # индекса не должен мешать сохранению -- файл уже на диске.
+        self.index = index
         (self.root / PATTERNS_DIR).mkdir(parents=True, exist_ok=True)
         (self.root / SANDBOXES_DIR).mkdir(parents=True, exist_ok=True)
+
+    def _tell_index(self, what: str, *args: Any) -> None:
+        if self.index is None:
+            return
+        try:
+            getattr(self.index, what)(*args)
+        except Exception as exc:  # индекс -- производное, падать из-за него нельзя
+            print(f"индекс не обновлён ({what}): {exc}", file=sys.stderr)
 
     # --- паттерны ---------------------------------------------------------
 
@@ -113,6 +130,7 @@ class Store:
     def save_pattern(self, pattern: Pattern) -> Path:
         path = self.pattern_path(pattern.id)
         _write(path, to_plain(pattern))
+        self._tell_index("upsert", pattern)
         return path
 
     def load_pattern(self, pattern_id: str) -> Pattern:
@@ -131,6 +149,7 @@ class Store:
 
     def delete_pattern(self, pattern_id: str) -> None:
         self.pattern_path(pattern_id).unlink(missing_ok=True)
+        self._tell_index("forget", pattern_id)
 
     # --- песочницы --------------------------------------------------------
 

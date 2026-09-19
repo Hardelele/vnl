@@ -1,4 +1,4 @@
-"""Командная строка: vnl check | run | view | data | export | graph | add | serve."""
+"""Командная строка: vnl check | run | view | data | export | graph | add | index | serve."""
 
 from __future__ import annotations
 
@@ -258,6 +258,44 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    """Индекс метаданных: пересобрать или посмотреть состояние.
+
+    Пересборка -- единственный способ починить расхождение: индекс производен
+    от файлов, и если хранилище правили мимо приложения, правда в файлах.
+    """
+    import os
+
+    from .index import DSN_ENV, Index, IndexUnavailable
+    from .store import Store
+
+    dsn = args.dsn or os.environ.get(DSN_ENV)
+    if not dsn:
+        print(
+            f"нет строки подключения: задайте {DSN_ENV} или --dsn", file=sys.stderr
+        )
+        return 1
+
+    store = Store(args.root)
+    index = Index(dsn)
+    try:
+        if args.action == "rebuild":
+            count = index.rebuild(store.patterns())
+            print(f"индекс пересобран: {count} паттернов")
+        else:
+            files = len(store.patterns())
+            state = index.state(files)
+            print(f"файлов: {files}, в индексе: {state.get('rows', '?')}")
+            if state.get("stale"):
+                print("индекс разошёлся с хранилищем: нужен `vnl index rebuild`")
+    except IndexUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        index.close()
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     # Импорт внутри команды: остальным командам сервер не нужен, а `vnl check`
     # не должен тянуть за собой сокеты.
@@ -354,6 +392,14 @@ def main(argv: list[str] | None = None) -> int:
         help="порт блока, например in=IN.soma или drive:mod=VTA.soma",
     )
     add.set_defaults(func=cmd_add)
+
+    index = sub.add_parser("index", help="индекс метаданных библиотеки в Postgres")
+    index.add_argument("action", choices=("rebuild", "status"))
+    index.add_argument("--root", default=".vnl", help="каталог хранилища")
+    index.add_argument(
+        "--dsn", help="строка подключения; по умолчанию из VNL_INDEX_DSN"
+    )
+    index.set_defaults(func=cmd_index)
 
     serve = sub.add_parser(
         "serve", help="локальный сервер библиотеки паттернов и песочниц"

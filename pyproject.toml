@@ -11,6 +11,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Индекс метаданных в Postgres -- отдельная установка: без него инструмент
+# работает, читая каталог из файлов, и остаётся без зависимостей.
+index = ["psycopg[binary]>=3.1"]
 netpyne = ["netpyne>=1.0"]
 
 [project.scripts]

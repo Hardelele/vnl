@@ -377,8 +377,21 @@ def catalog_payload(library: Sequence[Any], query: Query | None = None) -> dict[
     такого пришлось бы в двух местах сразу.
     """
     query = query or Query()
-    chosen = search(library, query)
-    counts = facets(library)
+    return catalog_payload_of(search(library, query), facets(library), len(library), query)
+
+
+def catalog_payload_of(
+    chosen: Sequence[Any],
+    counts: dict[str, dict[str, int]],
+    total: int,
+    query: Query,
+) -> dict[str, Any]:
+    """То же самое, но отбор и счётчики уже посчитаны -- например индексом.
+
+    Отдельной функцией, потому что источник отбора бывает разный (обход файлов
+    или запрос к базе), а формат ответа обязан быть один: интерфейс не должен
+    догадываться, чем именно ему ответили.
+    """
     return {
         "schema": SCHEMA_VERSION,
         "query": {
@@ -386,7 +399,7 @@ def catalog_payload(library: Sequence[Any], query: Query | None = None) -> dict[
             "levels": list(query.levels),
             "statuses": list(query.statuses),
         },
-        "total": len(library),
+        "total": total,
         "matched": len(chosen),
         "levels": [
             {"id": level, "name": name, "count": counts["level"].get(level, 0)}

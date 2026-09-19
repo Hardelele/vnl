@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +43,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import __version__, api
 from .catalog import Query
 from .compose import compose
+from .index import Index, IndexUnavailable
 from .live import Pool, SessionError
 from .patterns import (
     LEVEL_NAMES,
@@ -61,8 +63,11 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 class Api:
     """Операции над библиотекой. HTTP -- только оболочка вокруг них."""
 
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, index: Index | None = None) -> None:
         self.store = store
+        # Индекс метаданных: ускоряет каталог и отвечает на вопросы поверх
+        # библиотеки. Его отсутствие -- нормальный режим, а не поломка.
+        self.index = index
         # Симуляции живут между запросами: время идёт, даже когда никто не
         # спрашивает. Поэтому сессии держит сервер, а не запрос.
         self.pool = Pool()
@@ -80,10 +85,32 @@ class Api:
             "patterns": len(self.store.patterns()),
             "sandboxes": len(self.store.sandboxes()),
             "simulations": len(self.pool),
+            "index": (
+                self.index.state(len(self.store.patterns()))
+                if self.index
+                else {"connected": False, "reason": "индекс не настроен"}
+            ),
         }
 
     def catalog(self, params: dict[str, list[str]]) -> dict[str, Any]:
-        return api.catalog_payload(self.store.patterns(), Query.from_params(params))
+        """Каталог: отбор через индекс, если он есть, иначе обходом файлов.
+
+        Через индекс разбираются только подошедшие файлы -- в этом вся выгода.
+        Отказ индекса не виден снаружи ничем, кроме скорости: формат ответа и
+        правила отбора одни и те же.
+        """
+        query = Query.from_params(params)
+        if self.index is not None:
+            try:
+                chosen = [
+                    self.store.load_pattern(found) for found in self.index.search(query)
+                ]
+                return api.catalog_payload_of(
+                    chosen, self.index.facets(), self.index.size(), query
+                )
+            except (IndexUnavailable, StoreError) as exc:
+                print(f"каталог читается из файлов: {exc}", file=sys.stderr)
+        return api.catalog_payload(self.store.patterns(), query)
 
     def pattern(self, pattern_id: str) -> dict[str, Any]:
         return api.pattern_payload(self.store.load_pattern(pattern_id), body=True)
@@ -589,7 +616,8 @@ def create_server(
     расширяют, а «только со своей машины» держат публикацией порта на loopback
     хоста и проверкой `Host` -- она остаётся при любом адресе.
     """
-    service = Api(Store(root))
+    index = Index.from_env()
+    service = Api(Store(root, index=index), index=index)
     ui_path = Path(ui) if ui else None
     if ui_path is not None and not ui_path.exists():
         raise StoreError(f"интерфейса нет по пути {ui_path}")
