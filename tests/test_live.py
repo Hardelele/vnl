@@ -128,6 +128,23 @@ def test_the_running_flag_reflects_reality(session):
     assert session.state == "paused"
 
 
+def test_a_session_remembers_what_it_was_opened_from():
+    """Происхождение сессии -- её свойство, а не догадка по идентификатору.
+
+    Одной подписи для интерфейса не хватает: от «паттерн или песочница» зависит,
+    пускать ли к `/api/sim/<id>` без входа, а по пути этого не видно. Сессия без
+    сказанного происхождения считается песочницей -- забытое должно оказаться
+    закрытым, а не открытым.
+    """
+    pool = Pool()
+    shown = pool.open(model(), source="паттерн ffi", origin="pattern")
+    assert pool.origin_of(shown.id) == "pattern"
+    assert pool.origin_of(pool.open(model()).id) == "sandbox"
+    # «Такой нет» -- не ошибка, а такой же ответ «сюда нельзя».
+    assert pool.origin_of("sim404") is None
+    pool.close_all()
+
+
 def test_a_pool_hands_out_and_closes_sessions():
     pool = Pool()
     first = pool.open(model(), source="паттерн ffi")

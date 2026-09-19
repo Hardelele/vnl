@@ -1,4 +1,9 @@
-"""Вход через Reckue auth: отказ без сессии, полный проход и подделки.
+"""Вход через Reckue auth: где он нужен, полный проход и подделки.
+
+Граница здесь -- предмет проверки, а не деталь: библиотеку смотрят и трогают
+без учётной записи, вход нужен на песочницу и на всё, что меняет состояние.
+Поэтому каждый тест ниже называет не «закрыто ли», а что именно закрыто и
+почему.
 
 Провайдер здесь настоящий, только свой: маленький HTTP-сервер на localhost,
 который отдаёт discovery, jwks и токены. Подменять `Provider` вызовом Python
@@ -222,9 +227,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def ask(base: str, path: str, cookies: dict[str, str] | None = None):
+def ask(
+    base: str,
+    path: str,
+    cookies: dict[str, str] | None = None,
+    method: str = "GET",
+    payload=None,
+):
     """Запрос к стенду. Возвращает код, заголовки и тело."""
-    request = urllib.request.Request(base + path)
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        base + urllib.parse.quote(path, safe="/?&=+,%"), data=data, method=method
+    )
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
     if cookies:
         request.add_header(
             "Cookie", "; ".join(f"{k}={v}" for k, v in cookies.items())
@@ -289,10 +305,19 @@ def settings(issuer, provider_plan):
 
 @pytest.fixture
 def stand(tmp_path, settings):
-    """Стенд с включённым входом и одним паттерном в библиотеке."""
+    """Стенд с включённым входом, паттерном в библиотеке и собранным интерфейсом.
+
+    Интерфейс здесь нужен затем, что страница -- тоже часть границы: без него
+    «что отдаётся анониму по `/`» было бы не на чем проверить.
+    """
     Store(tmp_path).save_pattern(ffi_pattern())
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "index.html").write_text(
+        "<!doctype html><title>VNL</title>", encoding="utf-8"
+    )
     server = create_server(
-        tmp_path, port=0, quiet=True, provider=auth.Provider(settings)
+        tmp_path, port=0, quiet=True, ui=ui, provider=auth.Provider(settings)
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -321,32 +346,208 @@ def enter(base: str) -> dict[str, str]:
     return {auth.SESSION_COOKIE: cookies_of(headers)[auth.SESSION_COOKIE]}
 
 
-# --- без входа стенд закрыт ----------------------------------------------------
+def sandbox_ready_to_run(base: str, session: dict[str, str]) -> str:
+    """Собранная песочница: два блока, связь между ними, драйв и запись.
+
+    Меньшего не хватит: неготовую схему сервер запускать откажется, а нам нужна
+    именно живая сессия, открытая из песочницы.
+    """
+    _, _, body = ask(
+        base, "/api/sandboxes", session, method="POST", payload={"name": "Проба"}
+    )
+    sandbox = json_of(body)["id"]
+    for position in ([0, 0], [200, 0]):
+        ask(
+            base,
+            f"/api/sandboxes/{sandbox}/blocks",
+            session,
+            method="POST",
+            payload={"pattern": "ffi", "position": position},
+        )
+    _, _, body = ask(base, f"/api/sandboxes/{sandbox}", session)
+    first, second = (block["id"] for block in json_of(body)["blocks"])
+    ask(
+        base,
+        f"/api/sandboxes/{sandbox}/links",
+        session,
+        method="POST",
+        payload={
+            "source": {"instance": first, "port": "out"},
+            "target": {"instance": second, "port": "in"},
+        },
+    )
+    ask(
+        base,
+        f"/api/sandboxes/{sandbox}/stimuli",
+        session,
+        method="POST",
+        payload={"target": {"instance": first, "port": "in"}},
+    )
+    _, _, body = ask(
+        base,
+        f"/api/sandboxes/{sandbox}/recordings",
+        session,
+        method="POST",
+        payload={"target": {"instance": second, "port": "out"}},
+    )
+    assert json_of(body)["problems"] == [], "схема собрана целиком"
+    return sandbox
 
 
-def test_api_without_session_answers_401_with_login_link(stand):
-    """Интерфейсу нужен код и адрес входа, а не редирект с HTML."""
+# --- без входа библиотеку видно -----------------------------------------------
+
+
+def test_catalog_is_open_without_session(stand):
+    """Библиотека -- витрина: на неё дают ссылку, а не приглашение войти."""
     status, _, body = ask(stand, "/api/catalog")
+    assert status == 200
+    assert json_of(body)["total"] == 1
+
+
+def test_pattern_card_is_open_without_session(stand):
+    """По ссылке приходят за схемой, и она приходит целиком, а не заголовком."""
+    status, _, body = ask(stand, "/api/patterns/ffi")
+    assert status == 200
+    assert json_of(body)["body"]["neurons"][0]["id"] == "IN"
+
+
+def test_page_is_served_without_session(stand):
+    """Интерфейс отдаётся всем: библиотеку и кнопку входа он покажет сам.
+
+    Редирект на вход вместо страницы означал бы, что до открытого ему каталога
+    аноним не доберётся: экран он получает раньше, чем данные.
+    """
+    status, headers, body = ask(stand, "/")
+    assert status == 200
+    assert b"VNL" in body
+    assert "Location" not in headers
+
+
+# --- без входа менять и смотреть чужое нельзя ---------------------------------
+
+
+def test_closed_route_answers_401_with_login_link(stand):
+    """Интерфейсу нужен код и адрес входа, а не редирект с HTML."""
+    status, _, body = ask(stand, "/api/sandboxes")
     assert status == 401
     assert json_of(body)["login"] == auth.LOGIN_PATH
 
 
-def test_page_without_session_goes_to_login(stand):
-    """Человеку в браузере -- редирект на вход."""
-    status, headers, _ = ask(stand, "/")
-    assert status == 302
-    assert headers["Location"] == auth.LOGIN_PATH
+def test_sandboxes_are_closed_even_for_reading(stand):
+    """Песочница -- чужая работа в процессе, а не витрина.
+
+    Поэтому исключений нет и для чтения: список песочниц рассказывает, кто что
+    сейчас собирает, а это не то, чем делятся по ссылке.
+    """
+    assert ask(stand, "/api/sandboxes")[0] == 401
+    assert ask(stand, "/api/sandboxes/проба")[0] == 401
+    assert (
+        ask(stand, "/api/sandboxes", method="POST", payload={"name": "Проба"})[0] == 401
+    )
+
+
+def test_health_stays_behind_login(stand):
+    """`/api/health` перечисляет состав хранилища -- это не витрина."""
+    assert ask(stand, "/api/health")[0] == 401
 
 
 def test_pattern_cannot_be_deleted_without_session(stand):
-    """Запись закрыта тем же рубежом, что и чтение."""
-    request = urllib.request.Request(stand + "/api/patterns/ffi", method="DELETE")
-    opener = urllib.request.build_opener(_NoRedirect)
-    try:
-        with opener.open(request) as response:
-            assert False, f"удалило без входа: {response.status}"
-    except urllib.error.HTTPError as error:
-        assert error.code == 401
+    """Смотреть библиотеку можно всем, менять -- нет.
+
+    Чтение и запись по одному пути расходятся: `GET` открыт, `DELETE` закрыт.
+    Проверяем заодно, что паттерн остался -- отказ случился до работы, а не
+    после неё.
+    """
+    assert ask(stand, "/api/patterns/ffi", method="DELETE")[0] == 401
+    assert ask(stand, "/api/patterns/ffi")[0] == 200
+
+
+def test_draft_cannot_be_created_without_session(stand):
+    """Черновик в общей библиотеке появляется от чьего-то имени, а не сам."""
+    status, _, _ = ask(
+        stand, "/api/patterns", method="POST", payload={"name": "Черновик"}
+    )
+    assert status == 401
+
+
+# --- симуляция: паттерн трогают, песочницу нет --------------------------------
+
+
+def test_anonymous_runs_and_rewinds_a_pattern_simulation(stand):
+    """«Потрогать» -- часть просмотра, а не отдельное право.
+
+    Человек должен уметь пустить время в карточке, поставить на паузу и
+    отмотать, не входя: схема, которую нельзя запустить, объясняет вдвое
+    меньше. Все эти действия идут над одной его же сессией, и вход посреди них
+    выглядел бы как поломка, а не как правило.
+    """
+    status, _, body = ask(
+        stand,
+        "/api/sim",
+        method="POST",
+        payload={"pattern": "ffi", "pace": 2000},
+    )
+    assert status == 201
+    sim = json_of(body)["id"]
+    assert ask(stand, f"/api/sim/{sim}/start", method="POST")[0] == 200
+    assert ask(stand, f"/api/sim/{sim}/pause", method="POST")[0] == 200
+    assert ask(stand, f"/api/sim/{sim}/seek", method="POST", payload={"time": 20.0})[0] == 200
+    assert ask(stand, f"/api/sim/{sim}/reset", method="POST")[0] == 200
+    assert ask(stand, f"/api/sim/{sim}")[0] == 200
+    assert ask(stand, f"/api/sim/{sim}", method="DELETE")[0] == 200
+
+
+def test_anonymous_cannot_open_a_sandbox_simulation(stand):
+    """Один путь, два смысла: `POST /api/sim` решается по телу, а не по адресу.
+
+    С `pattern` он открыт, с `sandbox` -- закрыт, и отказ приходит раньше, чем
+    сервер полезет искать такую песочницу.
+    """
+    status, _, body = ask(
+        stand, "/api/sim", method="POST", payload={"sandbox": "чужая"}
+    )
+    assert status == 401
+    assert json_of(body)["login"] == auth.LOGIN_PATH
+
+
+def test_anonymous_cannot_touch_a_simulation_opened_from_a_sandbox(stand):
+    """Право на `/api/sim/<id>` решает происхождение сессии, а не вид пути.
+
+    По самому пути не видно, что за сессией стоит, а идентификатор короткий
+    (`sim1`) и угадывается с первого раза -- значит «не знает адреса» защитой не
+    является. Помнить, из чего сессия открыта, обязан пул, и без входа к
+    симуляции песочницы не пускают ни одно из действий.
+    """
+    session = enter(stand)
+    sandbox = sandbox_ready_to_run(stand, session)
+    status, _, body = ask(
+        stand, "/api/sim", session, method="POST", payload={"sandbox": sandbox}
+    )
+    assert status == 201
+    sim = json_of(body)["id"]
+    # Тому, кто её открыл, она доступна -- закрыто именно чужое, а не всё.
+    assert ask(stand, f"/api/sim/{sim}", session)[0] == 200
+
+    assert ask(stand, f"/api/sim/{sim}")[0] == 401
+    assert ask(stand, f"/api/sim/{sim}/start", method="POST")[0] == 401
+    assert ask(stand, f"/api/sim/{sim}/pause", method="POST")[0] == 401
+    assert ask(stand, f"/api/sim/{sim}/reset", method="POST")[0] == 401
+    assert (
+        ask(stand, f"/api/sim/{sim}/seek", method="POST", payload={"time": 20.0})[0]
+        == 401
+    )
+    assert ask(stand, f"/api/sim/{sim}", method="DELETE")[0] == 401
+    # Сессия цела: отказ произошёл до всякой работы над ней.
+    assert json_of(ask(stand, f"/api/sim/{sim}", session)[2])["state"] == "paused"
+
+
+def test_a_simulation_that_does_not_exist_is_refused_the_same_way(stand):
+    """Незнакомая сессия -- тоже «нельзя», а не «нет такой».
+
+    Иначе 404 против 401 рассказывал бы анониму, какие симуляции сейчас открыты
+    у других.
+    """
+    assert ask(stand, "/api/sim/sim42")[0] == 401
 
 
 def test_ready_answers_without_login(stand):
@@ -400,13 +601,18 @@ def test_login_cookie_is_httponly_and_lax(stand):
     assert "Secure" not in raw
 
 
-def test_full_login_opens_the_stand(stand, provider_plan):
-    """Полный проход: вход, возврат, и библиотека отвечает."""
+def test_full_login_opens_what_was_closed(stand, provider_plan):
+    """Полный проход: вход, возврат, и закрытое до входа начинает отвечать.
+
+    Проба идёт по песочницам, а не по каталогу: каталог отвечает и анониму, и
+    доказать им ничего нельзя.
+    """
+    assert ask(stand, "/api/sandboxes")[0] == 401
     session = enter(stand)
 
-    status, _, body = ask(stand, "/api/catalog", session)
+    status, _, body = ask(stand, "/api/sandboxes", session)
     assert status == 200
-    assert json_of(body)["total"] == 1
+    assert json_of(body)["sandboxes"] == []
 
     status, _, body = ask(stand, "/api/session", session)
     assert json_of(body)["user"] == {
@@ -438,8 +644,8 @@ def test_logout_forgets_session_and_goes_to_provider(stand, issuer):
     assert headers["Location"].startswith(f"{issuer}/session/end")
     assert cookies_of(headers)[auth.SESSION_COOKIE] == ""
 
-    # Кука, которую вернул выход, больше не пускает.
-    status, _, _ = ask(stand, "/api/catalog", {auth.SESSION_COOKIE: ""})
+    # Кука, которую вернул выход, больше не пускает в закрытое.
+    status, _, _ = ask(stand, "/api/sandboxes", {auth.SESSION_COOKIE: ""})
     assert status == 401
 
 
@@ -473,17 +679,21 @@ def test_provider_error_is_shown_not_swallowed(stand):
 
 
 def test_session_cookie_cannot_be_forged(stand):
-    """Подпись куки -- единственное, что делает её сессией."""
+    """Подпись куки -- единственное, что делает её сессией.
+
+    Спрашиваем закрытый маршрут: на открытом подделка и настоящая сессия дают
+    один ответ, и проверять было бы нечего.
+    """
     payload = {"sub": "самозванец", "exp": time.time() + 3600}
     forged = auth.seal(payload, b"y" * 32)  # не тот секрет
-    status, _, _ = ask(stand, "/api/catalog", {auth.SESSION_COOKIE: forged})
+    status, _, _ = ask(stand, "/api/sandboxes", {auth.SESSION_COOKIE: forged})
     assert status == 401
 
 
 def test_expired_session_cookie_refused(stand, settings):
     payload = {"sub": "user-1", "exp": time.time() - 1}
     stale = auth.seal(payload, settings.secret)
-    status, _, _ = ask(stand, "/api/catalog", {auth.SESSION_COOKIE: stale})
+    status, _, _ = ask(stand, "/api/sandboxes", {auth.SESSION_COOKIE: stale})
     assert status == 401
 
 
@@ -663,7 +873,12 @@ def test_https_redirect_uri_turns_on_secure_cookies():
 
 
 def test_without_provider_stand_answers_as_before(tmp_path):
-    """Ненастроенный вход не должен закрывать запуск на своей машине."""
+    """Ненастроенный вход не должен закрывать запуск на своей машине.
+
+    Граница маршрутов на неё не распространяется: без провайдера войти некуда,
+    и «закрыто до входа» означало бы «закрыто навсегда». Поэтому открыто и то,
+    что на стенде за входом, -- песочницы в том числе.
+    """
     Store(tmp_path).save_pattern(ffi_pattern())
     server = create_server(tmp_path, port=0, quiet=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -673,6 +888,8 @@ def test_without_provider_stand_answers_as_before(tmp_path):
         status, _, body = ask(base, "/api/catalog")
         assert status == 200
         assert json_of(body)["total"] == 1
+        assert ask(base, "/api/sandboxes")[0] == 200
+        assert ask(base, "/api/health")[0] == 200
         # Интерфейс по этому ответу понимает, что кнопка входа не нужна.
         status, _, body = ask(base, "/api/session")
         assert json_of(body) == {"user": None, "login": None, "required": False}

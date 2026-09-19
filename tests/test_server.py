@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -18,7 +19,7 @@ import pytest
 from vnl import ir
 from vnl.patterns import Pattern, Port
 from vnl.resolve import load
-from vnl.server import create_server
+from vnl.server import Api, Route, create_server, nobody, routes
 from vnl.store import Store
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -741,3 +742,47 @@ def test_the_address_can_be_widened_for_a_container(tmp_path):
         assert server.server_address[0] == "0.0.0.0"
     finally:
         server.server_close()
+
+
+# --- таблица маршрутов: кто отвечает без входа ---------------------------------
+#
+# Сам отказ и то, что открыто анониму на живом стенде, проверяет `test_auth`: там
+# есть вход, который можно пройти. Здесь -- таблица: свойство маршрута и полный
+# список открытого на одном экране.
+
+
+def test_a_route_is_closed_until_it_says_otherwise():
+    """Забытый маршрут обязан оказаться закрытым, а не открытым.
+
+    Умолчание -- единственное, что защищает от следующего маршрута, добавленного
+    без мысли о входе. Поэтому «нужен вход» здесь не пишут, а «открыт всем» --
+    пишут.
+    """
+    route = Route("GET", re.compile(r"^/api/что-нибудь$"), lambda: None)
+    assert route.anonymous is nobody
+    assert route.anonymous() is False
+
+
+def test_the_whole_list_of_what_answers_without_login_fits_on_one_screen(tmp_path):
+    """Открытое перечислено целиком, чтобы новое не затесалось молча.
+
+    Это витрина библиотеки и живая симуляция паттерна -- то, за чем приходят по
+    ссылке. Ни песочниц, ни записи, ни `/api/health` тут быть не должно, и если
+    список разойдётся с этим списком, узнать об этом надо здесь, а не на стенде.
+    """
+    open_to_anyone = {
+        (route.method, route.path.pattern)
+        for route in routes(Api(Store(tmp_path)))
+        if route.anonymous is not nobody
+    }
+    assert open_to_anyone == {
+        ("GET", r"^/api/catalog$"),
+        ("GET", r"^/api/patterns/([^/]+)$"),
+        ("POST", r"^/api/sim$"),
+        ("GET", r"^/api/sim/([^/]+)$"),
+        ("POST", r"^/api/sim/([^/]+)/start$"),
+        ("POST", r"^/api/sim/([^/]+)/pause$"),
+        ("POST", r"^/api/sim/([^/]+)/reset$"),
+        ("POST", r"^/api/sim/([^/]+)/seek$"),
+        ("DELETE", r"^/api/sim/([^/]+)$"),
+    }

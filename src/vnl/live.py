@@ -40,6 +40,11 @@ from .sim.lif import Simulator, Snapshot
 
 State = Literal["paused", "running", "finished"]
 
+#: Из чего открыта сессия. Разница не в подписи, а в праве доступа: симуляцию
+#: паттерна смотрят без входа, симуляцию песочницы -- нет, а по `/api/sim/<id>`
+#: этого уже не видно. Значит помнить происхождение должна сама сессия.
+Origin = Literal["pattern", "sandbox"]
+
 #: Модельных миллисекунд за секунду реального времени.
 DEFAULT_PACE = 50.0
 #: Шаг между снимками состояния, мс модельного времени.
@@ -66,6 +71,7 @@ class Session:
         id: str,
         model: ir.Model,
         source: str = "",
+        origin: Origin = "sandbox",
         pace: float = DEFAULT_PACE,
         snapshot_every: float = SNAPSHOT_EVERY,
     ) -> None:
@@ -73,6 +79,10 @@ class Session:
         self.model = model
         #: Откуда она взялась -- паттерн или песочница. Для подписи в интерфейсе.
         self.source = source
+        #: То же самое, но для проверки прав: паттерн или песочница. По умолчанию
+        #: песочница -- сессия неизвестного происхождения обязана оказаться
+        #: закрытой, а не открытой.
+        self.origin: Origin = origin
         self.pace = pace
         self.snapshot_every = snapshot_every
 
@@ -265,13 +275,30 @@ class Pool:
         self._sessions: dict[str, Session] = {}
         self._counter = 0
 
-    def open(self, model: ir.Model, source: str = "", **options: Any) -> Session:
+    def open(
+        self,
+        model: ir.Model,
+        source: str = "",
+        origin: Origin = "sandbox",
+        **options: Any,
+    ) -> Session:
         with self._lock:
             self._counter += 1
             id = f"sim{self._counter}"
-            session = Session(id, model, source=source, **options)
+            session = Session(id, model, source=source, origin=origin, **options)
             self._sessions[id] = session
             return session
+
+    def origin_of(self, id: str) -> Origin | None:
+        """Из чего открыта сессия. `None` -- такой сессии нет.
+
+        Отдельно от `get`, потому что спрашивают об этом до всякой работы с
+        сессией и на другой вопрос: можно ли пускать сюда без входа. «Нет
+        такой» здесь -- не ошибка, а такой же ответ «нельзя».
+        """
+        with self._lock:
+            session = self._sessions.get(id)
+        return session.origin if session else None
 
     def get(self, id: str) -> Session:
         with self._lock:

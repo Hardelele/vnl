@@ -28,6 +28,14 @@
 учётной записи. Проверка `Host` при этом остаётся: она отвечает на другой
 вопрос («с этой ли машины запрос»), и одна другую не заменяет.
 
+Что вход закрывает, а что нет. Библиотека -- витрина: каталог, карточку и живую
+симуляцию паттерна смотрят и трогают без учётной записи, иначе на схему нельзя
+дать ссылку. Вход нужен там, где запрос меняет состояние библиотеки, заходит в
+песочницу (чужая работа в процессе, а не витрина) или рассказывает о самом
+хранилище. Требование входа записано у маршрута рядом с методом и путём
+(`Route.anonymous`), а не условием в обработчике, и по умолчанию маршрут
+закрыт: забытый должен оказаться закрытым, а не открытым.
+
 Интерфейс в разработке живёт на Vite (5173) и ходит сюда через его прокси,
 поэтому CORS здесь нет: заголовки, разрешающие чужой источник, для локального
 инструмента не удобство, а лишняя дверь. Собранный `ui/dist` сервер отдаёт сам,
@@ -161,7 +169,10 @@ class Api:
                 f"в паттерне «{pattern.name}» нет ни одного нейрона: запускать нечего"
             )
         session = self.pool.open(
-            model, source=f"паттерн «{pattern.name}»", **self._pace(body)
+            model,
+            source=f"паттерн «{pattern.name}»",
+            origin="pattern",
+            **self._pace(body),
         )
         return session.update()
 
@@ -177,6 +188,7 @@ class Api:
         session = self.pool.open(
             built.model,
             source=f"песочница «{project.sandbox.name}»",
+            origin="sandbox",
             **self._pace(body),
         )
         return session.update()
@@ -224,6 +236,33 @@ class Api:
     def close_sim(self, sim_id: str) -> dict[str, Any]:
         self.pool.close(sim_id)
         return {"closed": sim_id}
+
+    # --- кого пускать к симуляции без входа --------------------------------
+    #
+    # Ответ у обоих один: можно, если речь о паттерне. Паттерн -- витрина, его
+    # смотрят и трогают без учётной записи; песочница -- чужая работа. Но у
+    # маршрута `/api/sim` различие спрятано в теле, а у `/api/sim/<id>` не видно
+    # вовсе, поэтому обе проверки живут тут, рядом с тем, что открывает сессии.
+
+    @staticmethod
+    def sim_opens_pattern(body: dict[str, Any]) -> bool:
+        """Открывает ли этот запрос симуляцию паттерна, а не песочницы.
+
+        `POST /api/sim` -- один маршрут на оба случая, и по пути их не
+        различить. Телу тут верить можно: `open_sim` читает его тем же
+        правилом, то есть запрос без `sandbox` песочницу и не запустит.
+        """
+        return not body.get("sandbox")
+
+    def sim_is_of_pattern(self, sim_id: str, *_: Any) -> bool:
+        """Открыта ли эта сессия из паттерна.
+
+        Спрашиваем не путь, а пул: в `/api/sim/<id>` о происхождении сессии
+        ничего нет, и догадываться по идентификатору значило бы пускать к
+        песочнице всякого, кто его угадал. Незнакомая сессия -- тоже «нельзя»:
+        так отказ не отличает «нет такой» от «чужая».
+        """
+        return self.pool.origin_of(sim_id) == "pattern"
 
     # --- песочница --------------------------------------------------------
 
@@ -457,6 +496,16 @@ class Api:
         return {"deleted": pattern_id}
 
 
+def nobody(*_: Any) -> bool:
+    """Закрытый маршрут: без сессии сюда нельзя."""
+    return False
+
+
+def anyone(*_: Any) -> bool:
+    """Открытый маршрут: сессия не нужна."""
+    return True
+
+
 @dataclass(frozen=True)
 class Route:
     method: str
@@ -466,17 +515,37 @@ class Route:
     wants: str = ""
     #: Код успешного ответа. 201 там, где появился новый объект.
     ok: int = 200
+    #: Кому маршрут отвечает без входа. Стоит рядом с методом и путём нарочно:
+    #: требование входа -- свойство маршрута, а не условие внутри обработчика,
+    #: иначе следующий добавленный маршрут откроется по недосмотру. По
+    #: умолчанию -- `nobody`: забытый маршрут обязан оказаться закрытым.
+    #: Функция получает те же аргументы, что уйдут в `call`, -- этим маршрут
+    #: вроде `/api/sim/<id>` решает по самой сессии, а не по пути.
+    anonymous: Callable[..., bool] = nobody
 
 
 def routes(service: Api) -> list[Route]:
     """Таблица маршрутов.
 
     Нарочно плоская и явная: маршрутов десяток, и видеть их все на одном
-    экране важнее, чем не повторять `/api/patterns` дважды.
+    экране важнее, чем не повторять `/api/patterns` дважды. Здесь же видно и
+    границу входа: `anonymous=anyone` -- открыто всем, отсутствие поля --
+    закрыто.
+
+    Граница такая. Библиотеку смотрят и трогают без входа: каталог, карточка и
+    живая симуляция паттерна -- это витрина, на которую ссылаются. Вход нужен
+    там, где запрос меняет состояние библиотеки, лезет в песочницу (чужая
+    работа, а не витрина) или рассказывает о самом хранилище (`/api/health`).
     """
     return [
         Route("GET", re.compile(r"^/api/health$"), service.health),
-        Route("GET", re.compile(r"^/api/catalog$"), service.catalog, wants="params"),
+        Route(
+            "GET",
+            re.compile(r"^/api/catalog$"),
+            service.catalog,
+            wants="params",
+            anonymous=anyone,
+        ),
         Route(
             "POST",
             re.compile(r"^/api/patterns$"),
@@ -484,25 +553,63 @@ def routes(service: Api) -> list[Route]:
             wants="body",
             ok=201,
         ),
-        Route("GET", re.compile(r"^/api/patterns/([^/]+)$"), service.pattern),
+        Route(
+            "GET",
+            re.compile(r"^/api/patterns/([^/]+)$"),
+            service.pattern,
+            anonymous=anyone,
+        ),
         Route("DELETE", re.compile(r"^/api/patterns/([^/]+)$"), service.delete_pattern),
-        Route("POST", re.compile(r"^/api/sim$"), service.open_sim, wants="body", ok=201),
-        Route("GET", re.compile(r"^/api/sim/([^/]+)$"), service.sim, wants="params"),
+        Route(
+            "POST",
+            re.compile(r"^/api/sim$"),
+            service.open_sim,
+            wants="body",
+            ok=201,
+            anonymous=service.sim_opens_pattern,
+        ),
+        Route(
+            "GET",
+            re.compile(r"^/api/sim/([^/]+)$"),
+            service.sim,
+            wants="params",
+            anonymous=service.sim_is_of_pattern,
+        ),
         Route(
             "POST",
             re.compile(r"^/api/sim/([^/]+)/start$"),
             service.sim_start,
             wants="params",
+            anonymous=service.sim_is_of_pattern,
         ),
         Route(
             "POST",
             re.compile(r"^/api/sim/([^/]+)/pause$"),
             service.sim_pause,
             wants="params",
+            anonymous=service.sim_is_of_pattern,
         ),
-        Route("POST", re.compile(r"^/api/sim/([^/]+)/reset$"), service.sim_reset),
-        Route("POST", re.compile(r"^/api/sim/([^/]+)/seek$"), service.sim_seek, wants="body"),
-        Route("DELETE", re.compile(r"^/api/sim/([^/]+)$"), service.close_sim),
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/reset$"),
+            service.sim_reset,
+            anonymous=service.sim_is_of_pattern,
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/seek$"),
+            service.sim_seek,
+            wants="body",
+            anonymous=service.sim_is_of_pattern,
+        ),
+        Route(
+            "DELETE",
+            re.compile(r"^/api/sim/([^/]+)$"),
+            service.close_sim,
+            anonymous=service.sim_is_of_pattern,
+        ),
+        # Песочницы закрыты все до единой, включая чтение: это чья-то работа в
+        # процессе, а не витрина. Поэтому ниже нет ни одного `anonymous`.
         Route("GET", re.compile(r"^/api/sandboxes$"), service.sandboxes),
         Route(
             "POST",
@@ -635,22 +742,22 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/auth/"):
             self._login_step(method, path, params)
             return
-        # `/api/ready` и `/api/session` отвечают до проверки сессии намеренно:
-        # первый нужен выкату (ansible ждёт 200 на 127.0.0.1, и закрывать его
-        # значило бы завязать проверку здоровья службы на чужой сервис),
-        # второй -- интерфейсу, чтобы он показал экран входа, а не пустоту.
-        # Ни тот, ни другой не отдают ничего из библиотеки.
+        # `/api/ready` и `/api/session` отвечают здесь, а не маршрутом: они не о
+        # библиотеке, а о самой службе и о том, кто пришёл. Открыты оба: первый
+        # нужен выкату (ansible ждёт 200 на 127.0.0.1, и закрывать его значило
+        # бы завязать проверку здоровья службы на чужой сервис), второй --
+        # интерфейсу, чтобы он нарисовал кнопку входа, а не пустоту.
         if path == "/api/ready":
             self._send(200, {"ok": True, "version": __version__})
             return
         if path == "/api/session":
             self._send(200, self._session_payload())
             return
-        if not self._entered():
-            self._refuse(path)
-            return
 
         if not path.startswith("/api/"):
+            # Интерфейс отдаётся всем. Редирект на вход отсюда убран нарочно:
+            # без сессии человек должен попасть в библиотеку и увидеть кнопку
+            # входа, а не упереться в чужую форму раньше, чем в содержимое.
             self._static(path, method)
             return
         for route in self.table:
@@ -672,6 +779,12 @@ class Handler(BaseHTTPRequestHandler):
                 arguments.append(params)
             elif route.wants == "body":
                 arguments.append(self._body())
+            # Права проверяются после разбора аргументов и до работы: решение
+            # «пускать ли» у части маршрутов зависит от тела и от того, что за
+            # сессией стоит, а не только от пути.
+            if not self._entered() and not route.anonymous(*arguments):
+                self._refuse()
+                return
             payload = route.call(*arguments)
         except (StoreError, SessionError) as exc:
             self._send(404, {"error": str(exc)})
@@ -704,8 +817,9 @@ class Handler(BaseHTTPRequestHandler):
     # Проверка `Host` выше и вход здесь закрывают разное. Первая отвечает на
     # «с этой ли машины пришёл запрос», второй -- на «кто этот человек».
     # На стенде nginx ходит сюда с `Host: localhost`, то есть для приложения
-    # весь интернет выглядит как своя машина, и без второго рубежа стенд был бы
-    # открыт. Поэтому убрать одно, оставив другое, нельзя.
+    # весь интернет выглядит как своя машина, и без второго рубежа открытым
+    # оказалось бы всё -- песочницы и запись в библиотеку в том числе. Поэтому
+    # убрать одно, оставив другое, нельзя.
 
     def _cookie(self, name: str) -> str | None:
         raw = self.headers.get("Cookie")
@@ -754,20 +868,18 @@ class Handler(BaseHTTPRequestHandler):
             "required": True,
         }
 
-    def _refuse(self, path: str) -> None:
-        """Отказ без сессии. Странице -- редирект, вызову API -- код 401.
+    def _refuse(self) -> None:
+        """Отказ анониму на закрытом маршруте: код 401 и адрес входа.
 
         Редирект в ответ на запрос интерфейса выглядел бы для него как успешный
-        ответ с HTML вместо JSON, поэтому для `/api/` здесь именно 401: по нему
-        интерфейс показывает экран входа, а не ломается на разборе.
+        ответ с HTML вместо JSON, поэтому здесь именно 401: по нему интерфейс
+        предлагает войти, а не ломается на разборе. Адрес входа идёт в теле,
+        чтобы кнопку не пришлось зашивать в интерфейс второй раз.
         """
-        if path.startswith("/api/"):
-            self._send(
-                401,
-                {"error": "нужен вход через Reckue auth", "login": auth.LOGIN_PATH},
-            )
-            return
-        self._redirect(auth.LOGIN_PATH)
+        self._send(
+            401,
+            {"error": "нужен вход через Reckue auth", "login": auth.LOGIN_PATH},
+        )
 
     def _login_step(self, method: str, path: str, params: dict[str, list[str]]) -> None:
         if self.provider is None:
