@@ -15,14 +15,16 @@
 import { useSyncExternalStore } from 'react'
 
 import { OfflineError, isDenied } from '../model/catalog'
+import { loadCells } from '../model/cells'
 import {
   addBlock,
+  addNeuron,
   addRecording,
   addStimulus,
   connect,
   createSandbox,
   listSandboxes,
-  moveBlock,
+  moveObject,
   openSandbox,
   removeObject,
   renameBlock,
@@ -39,24 +41,42 @@ import {
   type SandboxRow,
   type SandboxState,
 } from '../model/sandbox'
-import type { PointModel, RecordedVar, RunSpec } from '../model/types'
+import type { CellKind, PointModel, RecordedVar, RunSpec } from '../model/types'
 import { createStore } from './store'
 
-/** Что выбрано на холсте: блок, связь, стимул или запись. */
+/**
+ * Что выбрано на холсте.
+ *
+ * Клетка -- отдельный род, а не блок из одного нейрона: у неё нет ни портов,
+ * ни карточки, ни Fork, зато есть параметры мембраны. Панель свойств у них
+ * общего не имеет ничего, и сводить их к одному роду пришлось бы ветвлением
+ * внутри каждого поля.
+ */
 export interface Selection {
-  kind: 'block' | 'link' | 'stimulus' | 'recording'
+  kind: 'block' | 'neuron' | 'link' | 'stimulus' | 'recording'
   id: string
 }
 
-/** Начатое соединение: откуда тянем. */
+/**
+ * Начатое соединение: откуда тянем.
+ *
+ * Порт может быть пустым -- это конец связи на самой клетке (сома). У клетки
+ * портов нет, и придумывать ей фиктивный значило бы врать о том, как устроена
+ * связь: сервер и так принимает конец без порта.
+ */
 export interface Pending {
   instance: string
-  port: string
+  port: string | null
 }
 
 export interface SandboxView {
   list: SandboxRow[]
   project: SandboxState | null
+  /**
+   * Палитра типов клеток. Держится рядом с проектом, а не в состоянии
+   * библиотеки: клетка -- не паттерн, и фильтры каталога к ней не применимы.
+   */
+  cells: CellKind[]
   selected: Selection | null
   pending: Pending | null
   busy: boolean
@@ -78,6 +98,7 @@ export interface SandboxView {
 const EMPTY: SandboxView = {
   list: [],
   project: null,
+  cells: [],
   selected: null,
   pending: null,
   busy: false,
@@ -92,11 +113,13 @@ export interface SandboxPorts {
   create: typeof createSandbox
   open: typeof openSandbox
   addBlock: typeof addBlock
+  cells: typeof loadCells
+  addNeuron: typeof addNeuron
   connect: typeof connect
   params: typeof setLinkParams
   rename: typeof renameBlock
   cell: typeof setCellParams
-  move: typeof moveBlock
+  move: typeof moveObject
   stimulate: typeof addStimulus
   driveParams: typeof setStimulusParams
   record: typeof addRecording
@@ -113,11 +136,13 @@ const DEFAULT_PORTS: SandboxPorts = {
   create: createSandbox,
   open: openSandbox,
   addBlock,
+  cells: loadCells,
+  addNeuron,
   connect,
   params: setLinkParams,
   rename: renameBlock,
   cell: setCellParams,
-  move: moveBlock,
+  move: moveObject,
   stimulate: addStimulus,
   driveParams: setStimulusParams,
   record: addRecording,
@@ -127,6 +152,17 @@ const DEFAULT_PORTS: SandboxPorts = {
   undo,
   save,
   asPattern: saveAsPattern,
+}
+
+/**
+ * Куда положить следующий объект, чтобы он не лёг поверх соседа.
+ *
+ * Считаются и блоки, и клетки: место на холсте у них одно, и нумеровать их
+ * по отдельности значило бы класть первую клетку ровно на первый блок.
+ */
+function free(project: SandboxState | null): [number, number] {
+  const index = (project?.blocks.length ?? 0) + (project?.neurons.length ?? 0)
+  return [60 + (index % 3) * 220, 60 + Math.floor(index / 3) * 140]
 }
 
 export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
@@ -203,16 +239,37 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       store.setState({ project: null, selected: null, pending: null, error: null })
     },
 
-    /** Вставить паттерн. Место выбирается так, чтобы блоки не ложились друг на друга. */
-    insert(pattern: string): Promise<void> {
-      const project = store.getState().project
-      const index = project?.blocks.length ?? 0
-      const position: [number, number] = [60 + (index % 3) * 220, 60 + Math.floor(index / 3) * 140]
-      return act((id) => io.addBlock(id, pattern, position))
+    /** Палитра клеток. Спрашивается отдельно от библиотеки: это другой каталог. */
+    async refreshCells(): Promise<void> {
+      try {
+        store.setState({ cells: await io.cells(), error: null, offline: false, denied: false })
+      } catch (reason) {
+        fail(reason)
+      }
     },
 
-    /** Щелчок по порту: первый запоминает источник, второй создаёт связь. */
-    async touchPort(instance: string, port: string): Promise<void> {
+    /** Вставить паттерн. Место выбирается так, чтобы блоки не ложились друг на друга. */
+    insert(pattern: string): Promise<void> {
+      return act((id) => io.addBlock(id, pattern, free(store.getState().project)))
+    },
+
+    /**
+     * Положить клетку из палитры.
+     *
+     * Имя клетке подбирает сервер: он один знает, какие имена уже заняты
+     * блоками, а столкновение с ними всплыло бы иначе только на запуске.
+     */
+    insertCell(cell: string): Promise<void> {
+      return act((id) => io.addNeuron(id, cell, free(store.getState().project)))
+    },
+
+    /**
+     * Щелчок по концу связи: первый запоминает источник, второй создаёт связь.
+     *
+     * Один автомат на порт блока и на точку клетки. Разводить их на два
+     * значило бы, что соединение блока с клеткой не принадлежит ни одному.
+     */
+    async touchEndpoint(instance: string, port: string | null): Promise<void> {
       const { pending } = store.getState()
       if (!pending) {
         store.setState({ pending: { instance, port } })
@@ -235,8 +292,8 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       store.setState({ selected: selection })
     },
 
-    move: (block: string, position: [number, number]) =>
-      act((id) => io.move(id, block, position)),
+    move: (object: string, position: [number, number]) =>
+      act((id) => io.move(id, object, position)),
 
     setParams: (link: string, params: { weight?: number; delay?: number; receptor?: string }) =>
       act((id) => io.params(id, link, params)),
@@ -247,16 +304,17 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       return act((id) => io.rename(id, block, label))
     },
 
-    setCell: (block: string, type: string, params: Partial<PointModel>) =>
-      act((id) => io.cell(id, block, type, params)),
+    setCell: (object: string, type: string, params: Partial<PointModel>) =>
+      act((id) => io.cell(id, object, type, params)),
 
-    stimulate: (instance: string, port: string) =>
+    /** Драйв и запись на конец связи: порт блока или точка клетки (`port: null`). */
+    stimulate: (instance: string, port: string | null) =>
       act((id) => io.stimulate(id, { instance, port })),
 
     setDrive: (stimulus: string, params: DriveParams) =>
       act((id) => io.driveParams(id, stimulus, params)),
 
-    record: (instance: string, port: string) =>
+    record: (instance: string, port: string | null) =>
       act((id) => io.record(id, { instance, port })),
 
     setRecord: (recording: string, variable: RecordedVar) =>

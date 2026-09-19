@@ -745,7 +745,7 @@ def test_the_payload_carries_the_fingerprint_of_the_built_network(base):
     _, changed = ask(
         base,
         "PATCH",
-        f"/api/sandboxes/{sandbox}/blocks/{first}/cells/pyr_l5",
+        f"/api/sandboxes/{sandbox}/objects/{first}/cells/pyr_l5",
         {"vThreshold": -44.0},
     )
     assert changed["fingerprint"] != before, "порог меняет сеть"
@@ -792,7 +792,7 @@ def test_cell_parameters_change_one_block_at_a_time(base):
     status, changed = ask(
         base,
         "PATCH",
-        f"/api/sandboxes/{sandbox}/blocks/{first}/cells/pyr_l5",
+        f"/api/sandboxes/{sandbox}/objects/{first}/cells/pyr_l5",
         {"vThreshold": -44.0, "adaptation": 2.5},
     )
     assert status == 200
@@ -800,7 +800,7 @@ def test_cell_parameters_change_one_block_at_a_time(base):
     assert threshold(edited, "pyr_l5") == -44.0
     assert threshold(untouched, "pyr_l5") == -50.0, "второй экземпляр не задет"
 
-    bad = f"/api/sandboxes/{sandbox}/blocks/{second}/cells/pyr_l5"
+    bad = f"/api/sandboxes/{sandbox}/objects/{second}/cells/pyr_l5"
     assert ask(base, "PATCH", bad, {"tauM": 0})[0] == 400
     assert ask(base, "PATCH", bad, {})[0] == 400
 
@@ -916,6 +916,190 @@ def test_the_address_can_be_widened_for_a_container(tmp_path):
 
 # --- таблица маршрутов: кто отвечает без входа ---------------------------------
 #
+# --- каталог типов клеток и клетка на холсте --------------------------------
+
+
+def test_the_cell_catalog_answers_without_any_storage(base):
+    """Пустое хранилище -- не пустая палитра: класть на холст есть что сразу.
+
+    Пустая библиотека паттернов -- просто пустая библиотека, работать можно.
+    Пустой каталог клеток означал бы, что на холст нельзя положить ничего.
+    """
+    status, payload = ask(base, "GET", "/api/cells")
+    assert status == 200
+    ids = [cell["id"] for cell in payload["cells"]]
+    assert {"pyr", "pv", "sst", "vip", "relay"} <= set(ids)
+
+    pv = next(cell for cell in payload["cells"] if cell["id"] == "pv")
+    # Тормозность считает сервер: от неё зависит фигура на холсте, и вторая
+    # реализация этого слова разошлась бы с первой незаметно.
+    assert pv["inhibitory"] is True
+    assert pv["builtin"] is True
+    assert pv["name"] and pv["note"], "по одному идентификатору клетку не выбрать"
+    assert pv["pointModel"]["vThreshold"] == pytest.approx(-52.0)
+    assert pv["morphology"]["isPoint"] is True
+
+
+def test_a_cell_is_put_on_the_canvas_with_its_place(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Клетки"})
+    status, changed = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/neurons",
+        {"cell": "pyr", "id": "E", "position": [60, 40]},
+    )
+    assert status == 201
+    assert [neuron["id"] for neuron in changed["neurons"]] == ["E"]
+    assert changed["neurons"][0]["position"] == [60, 40]
+    assert changed["neurons"][0]["inhibitory"] is False
+    assert changed["neurons"][0]["pointModel"]["tauM"] == pytest.approx(15.0)
+    # Ответ -- полное состояние проекта, как у всех операций песочницы.
+    assert changed["canUndo"] is True
+    assert changed["blocks"] == []
+
+
+def test_an_unknown_cell_is_named_not_guessed(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Клетки"})
+    status, payload = ask(
+        base, "POST", f"/api/sandboxes/{project['id']}/neurons", {"cell": "нет такой"}
+    )
+    assert status == 400
+    assert "нет типа клетки" in payload["error"]
+
+
+def test_a_cell_cannot_take_the_name_of_a_block(base):
+    """Столкновение имён -- отказ при добавлении, а не сюрприз на запуске."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+
+    status, payload = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr", "id": first}
+    )
+    assert status == 400
+    assert "занято" in payload["error"]
+
+
+def test_putting_a_cell_is_one_step_of_undo(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Клетки"})
+    ask(base, "POST", f"/api/sandboxes/{project['id']}/neurons", {"cell": "pyr"})
+    _, undone = ask(base, "POST", f"/api/sandboxes/{project['id']}/undo")
+    assert undone["neurons"] == []
+    assert undone["canUndo"] is False
+
+
+def test_a_cell_is_moved_by_the_same_route_as_a_block(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Клетки"})
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/neurons",
+        {"cell": "pyr", "id": "E"},
+    )
+    _, before = ask(base, "GET", f"/api/sandboxes/{project['id']}")
+
+    status, moved = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/move",
+        {"id": "E", "position": [220, 90]},
+    )
+    assert status == 200
+    assert moved["neurons"][0]["position"] == [220, 90]
+    assert moved["fingerprint"] == before["fingerprint"], "холст физику не меняет"
+
+
+def test_the_threshold_of_a_cell_is_edited_by_its_own_object(base):
+    """Путь говорит «объект»: мембрану правят и у блока, и у отдельной клетки."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Клетки"})
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/neurons",
+        {"cell": "pyr", "id": "E"},
+    )
+    status, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{project['id']}/objects/E/cells/pyr",
+        {"vThreshold": -44.0},
+    )
+    assert status == 200
+    assert changed["neurons"][0]["pointModel"]["vThreshold"] == pytest.approx(-44.0)
+
+    # Каталог при этом прежний: песочница держит копию типа, а не ссылку.
+    _, palette = ask(base, "GET", "/api/cells")
+    pyr = next(cell for cell in palette["cells"] if cell["id"] == "pyr")
+    assert pyr["pointModel"]["vThreshold"] == pytest.approx(-50.0)
+
+
+def test_two_cells_alone_make_a_working_scheme(base, tmp_path):
+    """Приёмка задачи: схема из двух клеток без единого паттерна библиотеки.
+
+    Возбуждающая и тормозная кладутся из палитры, соединяются точками на себе
+    (порта у клетки нет и быть не может), на одну идёт драйв, со второй
+    пишется потенциал -- и на таймлайне есть спайки.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Две клетки"})
+    sandbox = project["id"]
+
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons",
+        {"cell": "pyr", "id": "E", "position": [80, 60]})
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons",
+        {"cell": "pv", "id": "I", "position": [320, 60]})
+
+    # Конец связи -- точка на самой клетке, а не порт: у клетки портов нет.
+    status, linked = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        # Вес назначен явно: одиночный контакт по умолчанию слабоват, чтобы
+        # довести корзинчатую клетку до порога, а приёмка -- про спайки.
+        {"source": {"instance": "E"}, "target": {"instance": "I"}, "weight": 6.0},
+    )
+    assert status == 201
+    assert linked["links"][0]["source"]["port"] is None
+
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": "E"}, "kind": "poisson", "rate": 600.0},
+    )
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/recordings",
+        {"target": {"instance": "I"}, "var": "v"},
+    )
+
+    _, ready = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    assert ready["problems"] == [], "схема из двух клеток должна считаться"
+    assert ready["blocks"] == [], "ни одного паттерна библиотеки не вставлено"
+
+    status, session = ask(base, "POST", "/api/sim", {"sandbox": sandbox, "pace": 0.0})
+    assert status == 201
+    ask(base, "POST", f"/api/sim/{session['id']}/start")
+    for _ in range(200):
+        _, frame = ask(base, "GET", f"/api/sim/{session['id']}")
+        if frame["spikes"].get("I"):
+            break
+        time.sleep(0.05)
+    spikes = {name: len(times) for name, times in frame["spikes"].items()}
+    assert spikes.get("E", 0) > 0, f"возбуждающая клетка молчит: {spikes}"
+    assert spikes.get("I", 0) > 0, f"торможение не завелось от связи: {spikes}"
+    # Приставки нет ни у одной: это клетки холста, а не нейроны блока.
+    assert all("/" not in name for name in frame["spikes"])
+
+    # Проект сохраняется и открывается с диска с теми же клетками и местами.
+    _, saved = ask(base, "POST", f"/api/sandboxes/{sandbox}/save")
+    assert saved["dirty"] is False
+    reopened = Store(tmp_path).load_sandbox(sandbox)
+    assert {
+        neuron.id: neuron.position for neuron in reopened.neurons.values()
+    } == {"E": (80.0, 60.0), "I": (320.0, 60.0)}
+
+
 # Сам отказ и то, что открыто анониму на живом стенде, проверяет `test_auth`: там
 # есть вход, который можно пройти. Здесь -- таблица: свойство маршрута и полный
 # список открытого на одном экране.

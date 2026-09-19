@@ -153,6 +153,25 @@
   overflow: hidden;
 }
 
+/* Фигура клетки в палитре. Клеймо у неё то же, что на холсте и в миниатюре
+   каталога: тормозная квадратная, возбуждающая скруглённая -- разница видна
+   и там, где цвета нет. */
+.sb-cell-shape svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sb-shape {
+  fill: var(--panel);
+  stroke: var(--exc);
+  stroke-width: 1.6;
+}
+
+.sb-shape.is-inh {
+  stroke: var(--inh);
+}
+
 .sb-row-text {
   display: flex;
   flex-direction: column;

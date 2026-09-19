@@ -35,6 +35,11 @@ class Cell:
     note: str = ""
     #: Встроенная клетка или своя. Встроенную нельзя удалить, можно перекрыть.
     builtin: bool = True
+    #: Откуда клетка пришла -- файл, из которого её разобрали. След
+    #: происхождения, а не ссылка: файл могли переписать или унести, и
+    #: перечитывать его каталог не станет. Нужен затем, чтобы через месяц было
+    #: понятно, чья это клетка и где лежит её исходное описание.
+    source: str | None = None
 
     @property
     def id(self) -> str:
@@ -149,6 +154,10 @@ def catalog(own: list[Cell] | None = None) -> Catalog:
     chosen: dict[str, Cell] = {cell.id: cell for cell in BUILTIN}
     for cell in own or []:
         chosen[cell.id] = Cell(
-            name=cell.name, type=cell.type, note=cell.note, builtin=False
+            name=cell.name,
+            type=cell.type,
+            note=cell.note,
+            builtin=False,
+            source=cell.source,
         )
     return Catalog(list(chosen.values()))

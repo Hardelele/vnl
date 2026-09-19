@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import __version__, api, auth, ir
+from . import __version__, api, auth, cells, ir
 from .catalog import Query
 from .compose import compose
 from .index import Index, IndexUnavailable
@@ -135,6 +135,16 @@ class Api:
 
     def pattern(self, pattern_id: str) -> dict[str, Any]:
         return api.pattern_payload(self.store.load_pattern(pattern_id), body=True)
+
+    def cells(self) -> dict[str, Any]:
+        """Каталог типов клеток: встроенные плюс лежащие в хранилище.
+
+        Отдельный маршрут, а не раздел каталога паттернов: у клетки нет ни
+        ступени разбора, ни портов, ни статуса готовности, и фильтры
+        библиотеки на неё не отвечают. Смешай их -- и слово «блок» стало бы
+        значить и микросхему, и клетку.
+        """
+        return api.cells_payload(cells.catalog(self.store.cells()).cells)
 
     def create_pattern(self, body: dict[str, Any]) -> dict[str, Any]:
         """«Сохранить как паттерн»: проект песочницы ложится в библиотеку.
@@ -400,6 +410,32 @@ class Api:
         )
         return api.sandbox_payload(project)
 
+    def add_neuron(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Положить на холст отдельную клетку из каталога типов.
+
+        Тип берётся из каталога, а не из тела запроса: параметры мембраны
+        правятся потом в панели свойств, и принимать их здесь значило бы
+        завести второй способ описать клетку, который рано или поздно разойдётся
+        с первым.
+        """
+        cell_id = str(body.get("cell") or "")
+        if not cell_id:
+            raise PatternError(
+                'не сказано, какую клетку класть: {"cell": "pyr"}'
+            )
+        try:
+            chosen = cells.catalog(self.store.cells()).get(cell_id)
+        except KeyError as exc:
+            raise PatternError(str(exc).strip("\"'")) from exc
+        project = self._project(sandbox_id)
+        position = body.get("position") or [0.0, 0.0]
+        project.add_neuron(
+            str(body["id"]) if body.get("id") else None,
+            chosen.type,
+            position=(float(position[0]), float(position[1])),
+        )
+        return api.sandbox_payload(project)
+
     def connect(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """Связь между блоками -- настоящий контакт между внутренними точками."""
         project = self._project(sandbox_id)
@@ -444,9 +480,14 @@ class Api:
         return api.sandbox_payload(project)
 
     def cell_params(
-        self, sandbox_id: str, block_id: str, type_id: str, body: dict[str, Any]
+        self, sandbox_id: str, object_id: str, type_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:
-        """Параметры мембраны. Имена полей -- из `api.POINT_FIELDS`."""
+        """Параметры мембраны. Имена полей -- из `api.POINT_FIELDS`.
+
+        Объект -- блок или отдельная клетка: `Project.set_cell` принимает оба,
+        и у блока типы берутся из его снимка, а у клетки -- из общего словаря
+        песочницы.
+        """
         params: dict[str, Any] = {}
         for name, field in api.POINT_FIELDS.items():
             if body.get(name) is None:
@@ -459,10 +500,11 @@ class Api:
                 "нечего менять: ожидались " + ", ".join(api.POINT_FIELDS)
             )
         project = self._project(sandbox_id)
-        project.set_cell(block_id, type_id, **params)
+        project.set_cell(object_id, type_id, **params)
         return api.sandbox_payload(project)
 
-    def move_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def move_object(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Сдвиг по холсту -- для любого объекта: и блока, и отдельной клетки."""
         project = self._project(sandbox_id)
         position = body.get("position") or [0.0, 0.0]
         project.move(str(body.get("id") or ""), (float(position[0]), float(position[1])))
@@ -629,6 +671,12 @@ def routes(service: Api) -> list[Route]:
             anonymous=anyone,
         ),
         Route("DELETE", re.compile(r"^/api/patterns/([^/]+)$"), service.delete_pattern),
+        # Каталог типов клеток закрыт, как и хранилище: встроенный набор
+        # секретом не является, но свои клетки -- это уже содержимое `.vnl`,
+        # и разделять один список на открытую и закрытую половины значило бы
+        # отвечать на один вопрос двумя разными правдами. Палитра живёт в
+        # песочнице, а туда без входа и так не заходят.
+        Route("GET", re.compile(r"^/api/cells$"), service.cells),
         Route(
             "POST",
             re.compile(r"^/api/sim$"),
@@ -702,8 +750,18 @@ def routes(service: Api) -> list[Route]:
             wants="body",
         ),
         Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/neurons$"),
+            service.add_neuron,
+            wants="body",
+            ok=201,
+        ),
+        # Путь говорит «объект», а не «блок»: мембрану правят и у блока, и у
+        # отдельной клетки, а маршрут, врущий о том, что принимает, однажды
+        # заставит завести второй такой же.
+        Route(
             "PATCH",
-            re.compile(r"^/api/sandboxes/([^/]+)/blocks/([^/]+)/cells/([^/]+)$"),
+            re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/cells/([^/]+)$"),
             service.cell_params,
             wants="body",
         ),
@@ -723,7 +781,7 @@ def routes(service: Api) -> list[Route]:
         Route(
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/move$"),
-            service.move_block,
+            service.move_object,
             wants="body",
         ),
         Route(

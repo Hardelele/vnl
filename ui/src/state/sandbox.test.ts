@@ -270,3 +270,99 @@ describe('сохранение паттерном', () => {
     expect(asPattern).not.toHaveBeenCalled()
   })
 })
+
+describe('палитра клеток', () => {
+  const PV = {
+    id: 'pv',
+    name: 'Корзинчатый интернейрон PV',
+    note: 'Быстрое торможение',
+    tags: ['inhibitory'],
+    transmitter: 'gaba',
+    inhibitory: true,
+    builtin: true,
+    source: null,
+    pointModel: POINT,
+    morphology: { name: 'point', isPoint: true, sections: [] },
+  }
+
+  it('спрашивается отдельно от библиотеки и ложится в состояние', async () => {
+    const cells = vi.fn().mockResolvedValue([PV])
+    const control = createSandboxController({ cells })
+
+    await control.refreshCells()
+
+    expect(control.store.getState().cells).toEqual([PV])
+  })
+
+  it('кладёт клетку туда, где нет соседа, и не придумывает ей имя', async () => {
+    const addNeuron = vi.fn().mockResolvedValue(project())
+    const control = await opened({ addNeuron })
+
+    await control.insertCell('pv')
+
+    // Блок в проекте уже один, значит клетка ложится на следующее место, а не
+    // поверх него. Имя подбирает сервер: он один знает, что занято блоками.
+    expect(addNeuron).toHaveBeenCalledWith('s1', 'pv', [280, 60])
+  })
+})
+
+describe('соединение', () => {
+  it('клетка соединяется точкой на себе: порт пустой', async () => {
+    const connect = vi.fn().mockResolvedValue(project())
+    const control = await opened({ connect })
+
+    await control.touchEndpoint('E', null)
+    expect(control.store.getState().pending).toEqual({ instance: 'E', port: null })
+    expect(connect).not.toHaveBeenCalled()
+
+    await control.touchEndpoint('I', null)
+
+    expect(connect).toHaveBeenCalledWith(
+      's1',
+      { instance: 'E', port: null },
+      { instance: 'I', port: null },
+    )
+    expect(control.store.getState().pending).toBeNull()
+  })
+
+  it('один автомат на порт блока и на точку клетки', async () => {
+    const connect = vi.fn().mockResolvedValue(project())
+    const control = await opened({ connect })
+
+    await control.touchEndpoint('ffi', 'out')
+    await control.touchEndpoint('E', null)
+
+    // Блок с клеткой соединяется тем же движением: разведи это на два автомата
+    // -- и такая связь не принадлежала бы ни одному.
+    expect(connect).toHaveBeenCalledWith(
+      's1',
+      { instance: 'ffi', port: 'out' },
+      { instance: 'E', port: null },
+    )
+  })
+
+  it('повторный щелчок по той же точке отменяет начатое', async () => {
+    const connect = vi.fn()
+    const control = await opened({ connect })
+
+    await control.touchEndpoint('E', null)
+    await control.touchEndpoint('E', null)
+
+    expect(connect).not.toHaveBeenCalled()
+    expect(control.store.getState().pending).toBeNull()
+  })
+})
+
+describe('драйв и запись на клетку', () => {
+  it('идут на саму клетку, а не на её порт', async () => {
+    const stimulate = vi.fn().mockResolvedValue(project())
+    const record = vi.fn().mockResolvedValue(project())
+    const control = await opened({ stimulate, record })
+
+    await control.stimulate('E', null)
+    await control.record('E', null)
+
+    expect(stimulate).toHaveBeenCalledWith('s1', { instance: 'E', port: null })
+    expect(record).toHaveBeenCalledWith('s1', { instance: 'E', port: null })
+  })
+})

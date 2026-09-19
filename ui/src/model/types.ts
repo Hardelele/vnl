@@ -55,6 +55,33 @@ export interface Neuron {
   inhibitory: boolean
 }
 
+/**
+ * Тип клетки в каталоге -- то, что кладут на холст из палитры.
+ *
+ * Не разновидность паттерна: портов у клетки нет (соединяется она точками на
+ * себе), внутренностей нет (разворачивать и форкать нечего), зато есть
+ * параметры мембраны, которых у паттерна не бывает. Поэтому и каталог свой, и
+ * ни ступени разбора, ни статуса готовности здесь нет.
+ *
+ * `inhibitory` приходит с сервера (`ir.is_inhibitory_cell`), а не считается
+ * здесь по тегам: от него зависит фигура на холсте, и второе место, где
+ * «тормозная» значит своё, разошлось бы с первым незаметно.
+ */
+export interface CellKind {
+  id: string
+  name: string
+  note: string
+  tags: string[]
+  transmitter: string | null
+  inhibitory: boolean
+  /** Встроенная клетка или заведённая человеком. Встроенную можно перекрыть. */
+  builtin: boolean
+  /** Файл, из которого клетку разобрали; у встроенных пусто. */
+  source: string | null
+  pointModel: PointModel
+  morphology: Morphology
+}
+
 export interface ShortTermDynamics {
   enabled: boolean
   u: number

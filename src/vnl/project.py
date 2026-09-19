@@ -37,6 +37,7 @@ from .patterns import (
     PatternInstance,
     Port,
     Sandbox,
+    SandboxNeuron,
     SandboxRecording,
     SandboxStimulus,
     extract_pattern,
@@ -174,15 +175,24 @@ class Project:
         return self.sandbox.add_instance(pattern, label, instance_id, position)
 
     def add_neuron(
-        self, neuron_id: str, cell_type: ir.CellType
-    ) -> ir.Instance:
-        if neuron_id in self.sandbox.neurons:
-            raise PatternError(f"нейрон {neuron_id!r} уже есть")
-        self._remember(f"добавлен нейрон {neuron_id}")
-        self.sandbox.cell_types.setdefault(cell_type.id, cell_type)
-        neuron = ir.Instance(id=neuron_id, cell_type=cell_type.id)
-        self.sandbox.neurons[neuron_id] = neuron
-        return neuron
+        self,
+        neuron_id: str | None,
+        cell_type: ir.CellType,
+        position: tuple[float, float] = (0.0, 0.0),
+    ) -> SandboxNeuron:
+        """Положить на холст отдельную клетку.
+
+        Имя, если его не назвали, подбирается свободное среди всех объектов
+        холста -- блоков в том числе: столкновение имён иначе всплыло бы только
+        на запуске, когда `compose` разворачивает блок в его нейроны.
+        """
+        label = neuron_id or self.sandbox.free_id(cell_type.id)
+        if label in self.sandbox.taken_ids():
+            # Проверка до снимка истории: отказ не должен оставлять за собой
+            # шаг отмены, который ничего не отменяет.
+            raise PatternError(f"имя {label!r} на холсте уже занято")
+        self._remember(f"положена клетка {label}")
+        return self.sandbox.add_neuron(label, cell_type, position)
 
     def connect(
         self,
@@ -328,10 +338,18 @@ class Project:
             setattr(self.sandbox.run, key, value)
         return self.sandbox.run
 
-    def move(self, block_id: str, position: tuple[float, float]) -> None:
-        """Сдвиг по холсту. На физику не влияет и прогон не старит."""
-        self._remember(f"перемещён {block_id}")
-        self.sandbox.instance(block_id).position = position
+    def move(self, object_id: str, position: tuple[float, float]) -> None:
+        """Сдвиг по холсту. На физику не влияет и прогон не старит.
+
+        Двигается любой объект холста: и блок, и отдельная клетка. Разводить
+        это на две операции незачем -- место на холсте у них одного рода, а
+        второй маршрут пришлось бы выбирать тому, кто тащит фигуру мышью.
+        """
+        target = self.sandbox.neurons.get(object_id)
+        if target is None:
+            target = self.sandbox.instance(object_id)  # проверка до снимка
+        self._remember(f"перемещён {object_id}")
+        target.position = position
 
     def remove(self, object_id: str) -> None:
         """Убрать блок, нейрон или связь вместе со всем, что на них висело."""

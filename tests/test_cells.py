@@ -99,3 +99,233 @@ def test_a_cell_from_the_catalog_can_be_put_into_a_sandbox(tmp_path):
     assert sorted(built.model.instances) == ["A", "B"]
     # У отдельной клетки нет приставки блока: она и есть объект схемы.
     assert all("/" not in name for name in built.model.instances)
+
+
+# --- клетка как объект холста ---------------------------------------------
+
+
+@pytest.fixture
+def ffi():
+    """Готовый паттерн из примеров: нужен там, где клетка стоит рядом с блоком."""
+    from pathlib import Path
+
+    from vnl.patterns import Pattern, Port
+    from vnl.resolve import load
+
+    examples = Path(__file__).resolve().parents[1] / "examples"
+    model, _ = load((examples / "ffi.vnl").read_text(encoding="utf-8"))
+    return Pattern.from_model(
+        model,
+        id="ffi",
+        name="FFI",
+        status="ready",
+        ports=[
+            Port("in", "in", ir.Site("IN", "soma", 0.5)),
+            Port("out", "out", ir.Site("E", "soma", 0.5)),
+        ],
+    )
+
+
+def sandbox_project(tmp_path) -> Project:
+    return Project(Sandbox(id="s1", name="Проба"), Store(tmp_path))
+
+
+def test_a_cell_remembers_where_it_was_put(tmp_path):
+    """Место -- свойство холста, и класть клетку вслепую в угол незачем."""
+    project = sandbox_project(tmp_path)
+    project.add_neuron(None, catalog().get("pv").type, position=(120.0, 60.0))
+
+    neuron = next(iter(project.sandbox.neurons.values()))
+    assert neuron.position == (120.0, 60.0)
+
+
+def test_a_cell_gets_a_free_name_of_its_own(tmp_path):
+    """Второй экземпляр того же типа не затирает первый."""
+    project = sandbox_project(tmp_path)
+    table = catalog()
+    first = project.add_neuron(None, table.get("pyr").type)
+    second = project.add_neuron(None, table.get("pyr").type)
+
+    assert [first.id, second.id] == ["pyr", "pyr2"]
+
+
+def test_a_name_taken_by_a_block_is_refused_when_the_cell_is_put(tmp_path, ffi):
+    """Отказ при добавлении, а не на запуске.
+
+    В собранной сети блок и клетка живут в одном пространстве имён, и
+    столкновение всплыло бы в `compose` -- то есть тогда, когда человек нажал
+    «Запустить» и ждёт спайков, а не имени.
+    """
+    from vnl.patterns import PatternError
+
+    project = sandbox_project(tmp_path)
+    block = project.insert_pattern(ffi)
+
+    with pytest.raises(PatternError, match="уже занято"):
+        project.add_neuron(block.id, catalog().get("pyr").type)
+
+
+def test_editing_the_threshold_in_a_sandbox_leaves_the_catalog_alone(tmp_path):
+    """Каталог -- инвентарь, а не общая с проектом переменная.
+
+    Класть в песочницу ссылку на запись каталога значило бы, что правка порога
+    на холсте меняет клетку у всех проектов сразу, а следующая положенная
+    клетка приезжает уже испорченной.
+    """
+    project = sandbox_project(tmp_path)
+    table = catalog()
+    project.add_neuron("A", table.get("pyr").type)
+    project.set_cell("A", "pyr", v_threshold=-41.0)
+
+    assert project.sandbox.cell_types["pyr"].point_model.v_threshold == pytest.approx(-41.0)
+    assert table.get("pyr").type.point_model.v_threshold == pytest.approx(-50.0)
+    assert catalog().get("pyr").type.point_model.v_threshold == pytest.approx(-50.0)
+
+
+def test_putting_a_cell_is_one_step_of_undo(tmp_path):
+    """«Отменить» убирает клетку целиком, а не её половину."""
+    project = sandbox_project(tmp_path)
+    project.add_neuron(None, catalog().get("pv").type)
+    assert project.can_undo
+
+    project.undo()
+    assert project.sandbox.neurons == {}
+
+
+def test_a_cell_can_be_moved_like_a_block(tmp_path):
+    """Сдвиг -- операция холста, и объект у неё любой."""
+    project = sandbox_project(tmp_path)
+    neuron = project.add_neuron("A", catalog().get("pyr").type)
+    project.move("A", (300.0, 140.0))
+
+    assert project.sandbox.neurons["A"].position == (300.0, 140.0)
+    assert neuron.position == (300.0, 140.0)
+
+
+def test_moving_a_cell_does_not_age_the_run(tmp_path):
+    """Расстановка в модель не попадает, значит прежний прогон остаётся своим."""
+    project = sandbox_project(tmp_path)
+    project.add_neuron("A", catalog().get("pyr").type)
+    before = project.fingerprint()
+
+    project.move("A", (300.0, 140.0))
+    assert project.fingerprint() == before
+
+
+def test_cells_put_by_hand_stay_without_a_prefix_next_to_a_block(tmp_path, ffi):
+    """Клетки блока с приставкой, положенные руками -- без неё."""
+    from vnl.compose import compose
+
+    project = sandbox_project(tmp_path)
+    project.insert_pattern(ffi, instance_id="ffi")
+    project.add_neuron("A", catalog().get("pyr").type)
+
+    names = set(compose(project.sandbox).model.instances)
+    assert "A" in names
+    assert {"ffi/E", "ffi/I", "ffi/IN"} <= names
+
+
+def test_an_already_saved_sandbox_is_read_as_it_was(tmp_path):
+    """Обратная совместимость: у сохранённых нейронов места ещё нет.
+
+    Смена формы `neurons` не должна ронять чтение старого файла -- проект на
+    диске старше этого поля, и открыться он обязан.
+    """
+    import json
+
+    store = Store(tmp_path)
+    path = store.sandbox_path("old")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "id": "old",
+                "name": "Старая",
+                "instances": [],
+                "cell_types": {
+                    "relay": {"id": "relay", "tags": [], "transmitter": None}
+                },
+                # Нейрон старой формы: ни места, ни лишних полей.
+                "neurons": {"A": {"id": "A", "cell_type": "relay", "tags": []}},
+                "links": [],
+                "stimuli": [],
+                "recordings": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    sandbox = store.load_sandbox("old")
+    assert sandbox.neurons["A"].cell_type == "relay"
+    assert sandbox.neurons["A"].position == (0.0, 0.0)
+
+
+def test_a_cell_with_a_place_survives_a_round_trip(tmp_path):
+    """Проект открывается с теми же клетками и на тех же местах."""
+    store = Store(tmp_path)
+    project = Project(Sandbox(id="s2", name="Проба"), store)
+    project.add_neuron("A", catalog().get("pyr").type, position=(40.0, 80.0))
+    project.save()
+
+    back = store.load_sandbox("s2")
+    assert back.neurons["A"].position == (40.0, 80.0)
+    assert back.cell_types["pyr"].point_model.tau_m == pytest.approx(15.0)
+
+
+# --- импорт своей клетки из .vnl ------------------------------------------
+
+
+def test_a_cell_declared_in_a_model_lands_in_the_catalog(tmp_path):
+    """Своя клетка не второго сорта: объявление `cell` уже даёт готовый тип.
+
+    Разбирать файл второй раз ради каталога незачем -- парсер отдаёт
+    `ir.CellType` вместе с морфологией, и класть его в палитру надо тем же
+    движением, каким схема попадает в библиотеку (`vnl add`).
+    """
+    from vnl.cli import main
+
+    source = tmp_path / "own.vnl"
+    source.write_text(
+        'model "своя клетка"\n'
+        "cell fast : inhibitory, gaba { tau_m = 4ms, v_threshold = -54mV }\n",
+        encoding="utf-8",
+    )
+
+    assert main(["cell", "add", str(source), "--root", str(tmp_path / "store"),
+                 "--name", "Быстрая", "--note", "своя"]) == 0
+
+    table = catalog(Store(tmp_path / "store").cells())
+    mine = table.get("fast")
+    assert mine.name == "Быстрая"
+    assert mine.builtin is False
+    assert mine.inhibitory is True
+    assert mine.source == str(source)
+    # Встроенные никуда не делись: своя клетка добавляется, а не подменяет набор.
+    assert len(table) == len(BUILTIN) + 1
+
+
+def test_an_own_cell_overrides_the_builtin_one_through_the_cli(tmp_path):
+    """Поправить пирамиду под свою задачу можно, не трогая инструмент."""
+    from vnl.cli import main
+
+    source = tmp_path / "pyr.vnl"
+    source.write_text(
+        'model "своя пирамида"\ncell pyr : excitatory { v_threshold = -45mV }\n',
+        encoding="utf-8",
+    )
+    main(["cell", "add", str(source), "--root", str(tmp_path / "store")])
+
+    table = catalog(Store(tmp_path / "store").cells())
+    assert len(table) == len(BUILTIN), "перекрытие, а не добавление"
+    assert table.get("pyr").type.point_model.v_threshold == pytest.approx(-45.0)
+
+
+def test_a_file_without_cell_declarations_is_refused(tmp_path, capsys):
+    from vnl.cli import main
+
+    source = tmp_path / "empty.vnl"
+    source.write_text('model "без клеток"\n', encoding="utf-8")
+
+    assert main(["cell", "add", str(source), "--root", str(tmp_path / "store")]) == 1
+    assert "нет ни одного объявления cell" in capsys.readouterr().err

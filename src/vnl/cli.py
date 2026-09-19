@@ -1,4 +1,5 @@
-"""Командная строка: vnl check | run | view | data | export | graph | add | index | serve."""
+"""Командная строка: vnl check | run | view | data | export | graph | add | cell |
+index | serve."""
 
 from __future__ import annotations
 
@@ -282,6 +283,58 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cell(args: argparse.Namespace) -> int:
+    """Типы клеток: посмотреть каталог или добавить свои из `.vnl`.
+
+    Импорт нужен затем, чтобы своя клетка не была вторым сортом: объявление
+    `cell` в модели уже даёт готовый `ir.CellType` вместе с морфологией, и
+    класть её в каталог надо тем же движением, каким схема попадает в
+    библиотеку (`vnl add`). Встроенный набор при этом не трогается -- своя
+    клетка перекрывает встроенную по идентификатору, а не затирает её.
+    """
+    from .cells import Cell, catalog
+    from .store import Store
+
+    store = Store(args.root)
+    if args.action == "list":
+        for cell in catalog(store.cells()).cells:
+            mark = "встроенная" if cell.builtin else "своя"
+            kind = "тормозная" if cell.inhibitory else "возбуждающая"
+            print(f"{cell.id:<10} {cell.name}  [{mark}, {kind}]")
+        return 0
+
+    if not args.file:
+        print("нечего разбирать: vnl cell add <файл.vnl>", file=sys.stderr)
+        return 1
+    model, diagnostics = _read(args.file)
+    _print_diagnostics(diagnostics)
+    if not model.cell_types:
+        print(f"в {args.file} нет ни одного объявления cell", file=sys.stderr)
+        return 1
+    if args.name and len(model.cell_types) > 1:
+        print(
+            f"в {args.file} объявлено {len(model.cell_types)} типов "
+            f"({', '.join(model.cell_types)}) — одно имя на всех не подходит",
+            file=sys.stderr,
+        )
+        return 1
+
+    for type_id, cell_type in model.cell_types.items():
+        cell = Cell(
+            # Человеческого имени в языке нет: `cell pyr_l5 : excitatory` --
+            # это идентификатор, а не подпись. Спрашиваем её флагом, а молча
+            # придумывать не за что -- пусть в каталоге стоит то же имя.
+            name=args.name or type_id,
+            type=cell_type,
+            note=args.note or "",
+            builtin=False,
+            source=args.file,
+        )
+        store.save_cell(cell)
+        print(f"{cell.id} -> {store.cell_path(cell.id)}")
+    return 0
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     """Индекс метаданных: пересобрать или посмотреть состояние.
 
@@ -433,6 +486,16 @@ def main(argv: list[str] | None = None) -> int:
         help="подпись порта, например in=вход схемы",
     )
     add.set_defaults(func=cmd_add)
+
+    cell = sub.add_parser("cell", help="каталог типов клеток: палитра песочницы")
+    cell.add_argument("action", choices=("add", "list"))
+    cell.add_argument("file", nargs="?", help="файл .vnl с объявлениями cell")
+    cell.add_argument("--root", default=".vnl", help="каталог хранилища")
+    cell.add_argument(
+        "--name", help="имя для каталога (по умолчанию идентификатор типа)"
+    )
+    cell.add_argument("--note", help="чем клетка занята в схеме")
+    cell.set_defaults(func=cmd_cell)
 
     index = sub.add_parser("index", help="индекс метаданных библиотеки в Postgres")
     index.add_argument("action", choices=("rebuild", "status"))

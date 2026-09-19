@@ -14,9 +14,11 @@
 import type { CellState } from '../../model/sim'
 import type {
   DriveKind,
+  Endpoint,
   SandboxBlock,
   SandboxCell,
   SandboxDrive,
+  SandboxNeuron,
   SandboxRecording,
   SandboxState,
 } from '../../model/sandbox'
@@ -54,6 +56,17 @@ const CELL_FIELDS: Array<{ key: CellField; label: string; step?: number }> = [
   { key: 'rIn', label: 'Rвх, МОм', step: 10 },
 ]
 
+/**
+ * Адрес конца связи одной строкой.
+ *
+ * У блока это `ffi.out` -- порт; у клетки порта нет, и печатать `E.null`
+ * нельзя: такого адреса не существует. Пишется само имя клетки -- ровно то,
+ * чем она зовётся и в собранной сети.
+ */
+export function where(endpoint: Pick<Endpoint, 'instance' | 'port'>): string {
+  return endpoint.port ? `${endpoint.instance}.${endpoint.port}` : endpoint.instance
+}
+
 export function Properties({
   selection,
   project,
@@ -68,7 +81,8 @@ export function Properties({
       <>
         <Head title="Свойства" />
         <p className="sb-hint">
-          Выберите блок или связь. Соединение — щелчок по порту, потом по второму.
+          Выберите клетку, блок или связь. Соединение — щелчок по точке
+          подключения, потом по второй.
         </p>
       </>
     )
@@ -77,6 +91,11 @@ export function Properties({
   if (selection.kind === 'block') {
     const block = project.blocks.find((item) => item.id === selection.id)
     return block ? <BlockProps block={block} cells={cells} /> : null
+  }
+
+  if (selection.kind === 'neuron') {
+    const neuron = project.neurons.find((item) => item.id === selection.id)
+    return neuron ? <NeuronProps neuron={neuron} cells={cells} /> : null
   }
 
   if (selection.kind === 'link') {
@@ -88,8 +107,7 @@ export function Properties({
         <Head title="Связь" note={link.id} />
         <div className="row">
           <span className="mono row-path">
-            {link.source.instance}.{link.source.port} → {link.target.instance}.
-            {link.target.port}
+            {where(link.source)} → {where(link.target)}
           </span>
         </div>
         <SelectField
@@ -203,6 +221,94 @@ function BlockProps({
 }
 
 /**
+ * Свойства отдельной клетки: параметры мембраны, драйв, запись и удаление.
+ *
+ * Ни портов, ни «Fork», ни «Открыть карточку» здесь нет, и это не упущение.
+ * Портов у клетки не бывает -- соединяется она точкой на себе; разворачивать и
+ * форкать нечего -- внутренностей нет; карточки нет тоже -- показывать в ней
+ * схему из одного узла значит показывать пустое место. Общего с панелью блока
+ * у этой панели ровно ничего, поэтому она и отдельная.
+ *
+ * Параметры мембраны правятся так же, как у блока: в IR они висят на типе
+ * клетки, а не на нейроне, -- но словарь типов у отдельных клеток общий на
+ * песочницу, и правка задевает всех её клеток этого типа. Каталог при этом не
+ * трогается: песочница держит копию типа.
+ */
+function NeuronProps({
+  neuron,
+  cells,
+}: {
+  neuron: SandboxNeuron
+  cells: Record<string, CellState>
+}) {
+  const control = sandboxController
+  // Приставки у отдельной клетки нет: в собранной сети она зовётся так же.
+  const state = cells[neuron.id]
+  return (
+    <>
+      <Head title="Клетка" note={neuron.id} />
+      <div className="row">
+        <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
+        <span className="mono row-dim">{neuron.cellType}</span>
+        <span className="mono row-dim row-end">
+          {state ? `${state.v.toFixed(1)} мВ` : neuron.inhibitory ? 'тормозная' : 'возбуждающая'}
+        </span>
+      </div>
+
+      {neuron.pointModel ? (
+        <>
+          <Section title="Мембрана" />
+          {CELL_FIELDS.map((field) => (
+            <NumberField
+              key={field.key}
+              label={field.label}
+              step={field.step}
+              value={neuron.pointModel![field.key]}
+              onChange={(value) =>
+                void control.setCell(neuron.id, neuron.cellType, { [field.key]: value })
+              }
+            />
+          ))}
+        </>
+      ) : (
+        // Потерянный тип чинят, а не скрывают: клетка остаётся на холсте и
+        // говорит, чего ей не хватает.
+        <p className="sb-note">
+          Тип клетки «{neuron.cellType}» в проекте не найден — параметры мембраны
+          править не по чему.
+        </p>
+      )}
+
+      <div className="sb-actions">
+        {/* Драйв и запись идут на саму клетку: порта, на который их вешают у
+            блока, здесь нет. */}
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => void control.stimulate(neuron.id, null)}
+        >
+          Драйв на {neuron.id}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => void control.record(neuron.id, null)}
+        >
+          Записывать {neuron.id}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => void control.remove(neuron.id)}
+        >
+          Убрать клетку
+        </button>
+      </div>
+    </>
+  )
+}
+
+/**
  * Параметры одного типа клеток блока.
  *
  * Свёрнуто, потому что у микросхемы типов бывает три, а полей у каждого
@@ -247,9 +353,7 @@ function DriveProps({ drive }: { drive: SandboxDrive }) {
     <>
       <Head title="Стимул" note={drive.id} />
       <div className="row">
-        <span className="mono row-path">
-          → {drive.target.instance}.{drive.target.port}
-        </span>
+        <span className="mono row-path">→ {where(drive.target)}</span>
       </div>
       <SelectField<DriveKind>
         label="Род"
@@ -312,9 +416,7 @@ function RecordProps({ record }: { record: SandboxRecording }) {
     <>
       <Head title="Запись" note={record.id} />
       <div className="row">
-        <span className="mono row-path">
-          {record.target.instance}.{record.target.port}
-        </span>
+        <span className="mono row-path">{where(record.target)}</span>
       </div>
       <SelectField<RecordedVar>
         label="Величина"

@@ -27,6 +27,19 @@ export interface Endpoint {
 }
 
 /**
+ * Куда щёлкнули, чтобы начать или закончить связь.
+ *
+ * Порт может отсутствовать, и это не пропуск: у клетки портов нет вовсе --
+ * она соединяется точкой на себе (по умолчанию сомой), и сервер разбирает
+ * такой конец связи через `resolve_endpoint`. Заводить ради клетки
+ * фиктивный порт «сома» значило бы врать на обеих сторонах.
+ */
+export interface EndpointRef {
+  instance: string
+  port: string | null
+}
+
+/**
  * Клетки блока, сгруппированные по типу.
  *
  * Параметры мембраны в IR висят на типе клетки, а не на нейроне, поэтому
@@ -49,6 +62,23 @@ export interface SandboxBlock {
   counts: { neurons: number; contacts: number }
   scheme: Scheme
   cells: SandboxCell[]
+}
+
+/**
+ * Отдельная клетка на холсте.
+ *
+ * Не маленький блок: портов нет, внутренностей нет, карточки нет -- а есть
+ * параметры мембраны, которых у блока не бывает. `pointModel` пуст, если тип
+ * клетки в песочнице потерян: такое чинят, а не скрывают, и из дерева объектов
+ * клетка при этом не исчезает.
+ */
+export interface SandboxNeuron {
+  id: string
+  cellType: string
+  position: [number, number]
+  /** Считает сервер: от этого зависит фигура на холсте. */
+  inhibitory: boolean
+  pointModel: PointModel | null
 }
 
 export interface SandboxLink {
@@ -87,8 +117,7 @@ export interface SandboxState {
   id: string
   name: string
   blocks: SandboxBlock[]
-  /** Отдельный нейрон; `pointModel` пуст, если его тип неизвестен. */
-  neurons: Array<{ id: string; cellType: string; pointModel: PointModel | null }>
+  neurons: SandboxNeuron[]
   links: SandboxLink[]
   stimuli: SandboxDrive[]
   recordings: SandboxRecording[]
@@ -161,10 +190,24 @@ export function addBlock(
   return send<SandboxState>(`${at(id)}/blocks`, 'POST', { pattern, position })
 }
 
+/**
+ * Положить на холст отдельную клетку из каталога типов.
+ *
+ * Параметры мембраны сюда не передаются: тип берётся из каталога целиком, а
+ * правят его потом в панели свойств -- уже в этой песочнице и только в ней.
+ */
+export function addNeuron(
+  id: string,
+  cell: string,
+  position: [number, number],
+): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/neurons`, 'POST', { cell, position })
+}
+
 export function connect(
   id: string,
-  source: { instance: string; port: string },
-  target: { instance: string; port: string },
+  source: EndpointRef,
+  target: EndpointRef,
 ): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/links`, 'POST', { source, target })
 }
@@ -194,15 +237,21 @@ export function renameBlock(
   )
 }
 
-/** Параметры мембраны. Правится тип клетки внутри блока -- см. `SandboxCell`. */
+/**
+ * Параметры мембраны. Правится тип клетки, а не нейрон -- см. `SandboxCell`.
+ *
+ * Объект -- любой на холсте: у блока типы свои, из его снимка, у отдельной
+ * клетки общие для песочницы. Поэтому и путь говорит «объект»: маршрут,
+ * врущий о том, что принимает, однажды заставит завести второй такой же.
+ */
 export function setCellParams(
   id: string,
-  block: string,
+  object: string,
   type: string,
   params: Partial<PointModel>,
 ): Promise<SandboxState> {
   return send<SandboxState>(
-    `${at(id)}/blocks/${encodeURIComponent(block)}/cells/${encodeURIComponent(type)}`,
+    `${at(id)}/objects/${encodeURIComponent(object)}/cells/${encodeURIComponent(type)}`,
     'PATCH',
     params,
   )
@@ -243,25 +292,20 @@ export function setRunParams(
   return send<SandboxState>(`${at(id)}/run`, 'PATCH', params)
 }
 
-export function moveBlock(
+/** Сдвиг по холсту -- для любого объекта: и блока, и отдельной клетки. */
+export function moveObject(
   id: string,
-  block: string,
+  object: string,
   position: [number, number],
 ): Promise<SandboxState> {
-  return send<SandboxState>(`${at(id)}/move`, 'POST', { id: block, position })
+  return send<SandboxState>(`${at(id)}/move`, 'POST', { id: object, position })
 }
 
-export function addStimulus(
-  id: string,
-  target: { instance: string; port: string },
-): Promise<SandboxState> {
+export function addStimulus(id: string, target: EndpointRef): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/stimuli`, 'POST', { target })
 }
 
-export function addRecording(
-  id: string,
-  target: { instance: string; port: string },
-): Promise<SandboxState> {
+export function addRecording(id: string, target: EndpointRef): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/recordings`, 'POST', { target })
 }
 

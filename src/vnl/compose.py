@@ -89,7 +89,9 @@ def compose(sandbox: Sandbox) -> Composition:
         type_id = _adopt_cell_type(
             model, sandbox.cell_types.get(neuron.cell_type), neuron.cell_type, problems
         )
-        model.instances[neuron_id] = replace(copy.deepcopy(neuron), cell_type=type_id)
+        # Имя без приставки: отдельная клетка и есть объект схемы, а приставка
+        # разводит нейроны разных экземпляров одного паттерна.
+        model.instances[neuron_id] = replace(neuron.instance(), cell_type=type_id)
         mapping.owner[neuron_id] = None
 
     for name, modulator in sandbox.modulators.items():

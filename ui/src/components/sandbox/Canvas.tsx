@@ -1,5 +1,5 @@
 /**
- * Холст песочницы: блоки с портами и связи между ними.
+ * Холст песочницы: блоки с портами, отдельные клетки и связи между ними.
  *
  * Паттерн показан одним блоком, а не своей начинкой: на холсте важно, что с
  * чем соединено, а внутренности блока не редактируются -- для переделки есть
@@ -7,33 +7,49 @@
  * протягивание требует зажатой кнопки и промаха не прощает, а щелчок по
  * кружку порта одинаково работает и мышью, и пальцем.
  *
+ * Клетка -- не маленький блок, и рисуется она иначе: фигурой без портов.
+ * Обозначения те же, что в миниатюре каталога и на схеме прогона
+ * (`Thumbnail`, `miniature`): возбуждающая скруглённая, тормозная квадратная --
+ * так разница читается и там, где цвета нет. Тормозность приходит с сервера
+ * полем `inhibitory`; считать её здесь значило бы завести второе место, где
+ * это слово означает своё.
+ *
+ * Соединяется клетка точкой на себе, а не портом: у неё одна точка подключения
+ * -- сома, и щелчок по ней выбирает конец связи с пустым портом. Фиктивный
+ * порт «сома» пришлось бы поддерживать и на сервере, где его нет.
+ *
  * Подсветка блока -- его собственная активность: в собранной сети клетки блока
- * получают имена с приставкой (`ffi/E`), по ним и видно, спайкнул ли кто-то
- * внутри прямо сейчас.
+ * получают имена с приставкой (`ffi/E`). Отдельная клетка светится по своему
+ * имени -- приставки у неё нет, она и есть объект схемы.
  */
 
 import { useState, type PointerEvent } from 'react'
 
 import type { CellState } from '../../model/sim'
-import type { SandboxBlock, SandboxLink } from '../../model/sandbox'
+import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
 import type { Pending, Selection } from '../../state/sandbox'
 import './canvas.css'
 
 const WIDTH = 760
 const HEIGHT = 420
 const BOX = { width: 150, height: 62 }
+/** Фигура клетки. Уже блока: у неё нет ни портов, ни счётчиков внутри. */
+const DOT = { width: 74, height: 38 }
 
 export type Point = { x: number; y: number }
 
 export interface CanvasProps {
   blocks: SandboxBlock[]
+  neurons: SandboxNeuron[]
   links: SandboxLink[]
   cells: Record<string, CellState>
   selected: Selection | null
   pending: Pending | null
   onPickBlock: (id: string) => void
+  onPickNeuron: (id: string) => void
   onPickLink: (id: string) => void
-  onPickPort: (instance: string, port: string) => void
+  /** Конец связи: порт блока или точка клетки (`port: null`). */
+  onPickEndpoint: (instance: string, port: string | null) => void
   onMove: (id: string, position: [number, number]) => void
   onEmpty: () => void
 }
@@ -58,6 +74,43 @@ export function portPoint(
   }
 }
 
+/**
+ * Точка, за которую клетку соединяют, -- её сома.
+ *
+ * Рисуется справа, где у блока выходы: связь читается слева направо. Это
+ * только место на картинке: адрес у клетки один и тот же, с какой бы стороны
+ * связь к ней ни подходила, -- порта у неё нет вовсе.
+ */
+export function somaPoint(position: [number, number]): Point {
+  return { x: position[0] + DOT.width / 2, y: position[1] }
+}
+
+/**
+ * Где связь касается объекта: у блока -- его порт, у клетки -- край фигуры.
+ *
+ * Край, а не центр: линия, упирающаяся в середину фигуры, перечёркивает
+ * подпись, а знак на её конце пропадает под заливкой. Сторона выбирается по
+ * ходу связи -- уходит справа, приходит слева.
+ */
+export function endpointPoint(
+  endpoint: { instance: string; port: string | null },
+  side: 'source' | 'target',
+  blocks: SandboxBlock[],
+  neurons: SandboxNeuron[],
+  positionOf: (id: string, fallback: [number, number]) => [number, number],
+): Point | null {
+  const block = blocks.find((item) => item.id === endpoint.instance)
+  if (block) {
+    return endpoint.port
+      ? portPoint(block, endpoint.port, positionOf(block.id, block.position))
+      : null
+  }
+  const neuron = neurons.find((item) => item.id === endpoint.instance)
+  if (!neuron) return null
+  const [x, y] = positionOf(neuron.id, neuron.position)
+  return { x: x + (side === 'source' ? DOT.width / 2 : -DOT.width / 2), y }
+}
+
 /** Имя блока в одну строку: длинное вылезает за коробку, а коробка фиксирована. */
 export function short(label: string, limit = 18): string {
   return label.length <= limit ? label : label.slice(0, limit - 1).trimEnd() + '…'
@@ -69,31 +122,37 @@ function spiking(block: SandboxBlock, cells: Record<string, CellState>): boolean
 
 export function Canvas({
   blocks,
+  neurons,
   links,
   cells,
   selected,
   pending,
   onPickBlock,
+  onPickNeuron,
   onPickLink,
-  onPickPort,
+  onPickEndpoint,
   onMove,
   onEmpty,
 }: CanvasProps) {
-  /** Блок, который сейчас тащат. Пока тащат -- рисуем его из этого состояния. */
+  /** Объект, который сейчас тащат. Пока тащат -- рисуем его из этого состояния. */
   const [drag, setDrag] = useState<{ id: string; position: [number, number] } | null>(
     null,
   )
 
-  const positionOf = (block: SandboxBlock): [number, number] =>
-    drag && drag.id === block.id ? drag.position : block.position
+  const positionOf = (id: string, fallback: [number, number]): [number, number] =>
+    drag && drag.id === id ? drag.position : fallback
 
-  const startDrag = (event: PointerEvent<SVGGElement>, block: SandboxBlock): void => {
+  const startDrag = (
+    event: PointerEvent<SVGGElement>,
+    id: string,
+    from: [number, number],
+  ): void => {
     const svg = event.currentTarget.ownerSVGElement
     if (!svg) return
     const scale = WIDTH / svg.getBoundingClientRect().width
     const grabX = event.clientX
     const grabY = event.clientY
-    const [startX, startY] = block.position
+    const [startX, startY] = from
 
     const where = (moved: { clientX: number; clientY: number }): [number, number] => [
       Math.round(startX + (moved.clientX - grabX) * scale),
@@ -101,7 +160,7 @@ export function Canvas({
     ]
 
     const move = (moved: globalThis.PointerEvent): void =>
-      setDrag({ id: block.id, position: where(moved) })
+      setDrag({ id, position: where(moved) })
 
     const drop = (dropped: globalThis.PointerEvent): void => {
       window.removeEventListener('pointermove', move)
@@ -111,7 +170,7 @@ export function Canvas({
       // Сдвиг отправляется один раз, на отпускании: холст физику не меняет, а
       // каждый промежуточный пиксель в истории отмены только мешал бы.
       if (Math.abs(x - startX) > 2 || Math.abs(y - startY) > 2) {
-        onMove(block.id, [x, y])
+        onMove(id, [x, y])
       }
     }
 
@@ -132,6 +191,7 @@ export function Canvas({
           key={link.id}
           link={link}
           blocks={blocks}
+          neurons={neurons}
           positionOf={positionOf}
           selected={selected?.kind === 'link' && selected.id === link.id}
           onPick={() => onPickLink(link.id)}
@@ -139,14 +199,14 @@ export function Canvas({
       ))}
 
       {blocks.map((block) => {
-        const [x, y] = positionOf(block)
+        const [x, y] = positionOf(block.id, block.position)
         const chosen = selected?.kind === 'block' && selected.id === block.id
         const active = spiking(block, cells)
         return (
           <g
             key={block.id}
             className={`cv-block${chosen ? ' is-on' : ''}${active ? ' is-spiking' : ''}`}
-            onPointerDown={(event) => startDrag(event, block)}
+            onPointerDown={(event) => startDrag(event, block.id, block.position)}
             onClick={() => onPickBlock(block.id)}
           >
             <rect x={x} y={y} width={BOX.width} height={BOX.height} rx={10} />
@@ -169,7 +229,7 @@ export function Canvas({
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation()
-                    onPickPort(block.id, port.name)
+                    onPickEndpoint(block.id, port.name)
                   }}
                 >
                   <circle cx={point.x} cy={point.y} r={5} />
@@ -188,9 +248,57 @@ export function Canvas({
         )
       })}
 
-      {blocks.length === 0 ? (
+      {neurons.map((neuron) => {
+        const [x, y] = positionOf(neuron.id, neuron.position)
+        const chosen = selected?.kind === 'neuron' && selected.id === neuron.id
+        // Приставки у отдельной клетки нет: в собранной сети она зовётся так же.
+        const active = cells[neuron.id]?.spiked ?? false
+        const soma = somaPoint([x, y])
+        const waiting = pending?.instance === neuron.id
+        return (
+          <g
+            key={neuron.id}
+            className={`cv-cell${neuron.inhibitory ? ' is-inh' : ''}${
+              chosen ? ' is-on' : ''
+            }${active ? ' is-spiking' : ''}`}
+            onPointerDown={(event) => startDrag(event, neuron.id, neuron.position)}
+            onClick={() => onPickNeuron(neuron.id)}
+          >
+            <rect
+              x={x - DOT.width / 2}
+              y={y - DOT.height / 2}
+              width={DOT.width}
+              height={DOT.height}
+              // Тормозная клетка квадратная, возбуждающая скруглённая -- те же
+              // обозначения, что в миниатюре каталога и на схеме прогона.
+              rx={neuron.inhibitory ? 4 : DOT.height / 2}
+            />
+            <text className="cv-label" x={x} y={y + 4} textAnchor="middle">
+              {short(neuron.id, 9)}
+              <title>
+                {neuron.id} · {neuron.cellType}
+              </title>
+            </text>
+            <g
+              className={`cv-soma${waiting ? ' is-waiting' : ''}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                // Порта нет: конец связи -- точка на самой клетке.
+                onPickEndpoint(neuron.id, null)
+              }}
+            >
+              <circle cx={soma.x} cy={soma.y} r={5}>
+                <title>сома {neuron.id}: щёлкните, чтобы соединить</title>
+              </circle>
+            </g>
+          </g>
+        )
+      })}
+
+      {blocks.length === 0 && neurons.length === 0 ? (
         <text className="cv-empty" x={WIDTH / 2} y={HEIGHT / 2} textAnchor="middle">
-          Пусто. Вставьте паттерн из библиотеки слева.
+          Пусто. Положите клетку из палитры или вставьте паттерн слева.
         </text>
       ) : null}
     </svg>
@@ -200,21 +308,20 @@ export function Canvas({
 function Link({
   link,
   blocks,
+  neurons,
   positionOf,
   selected,
   onPick,
 }: {
   link: SandboxLink
   blocks: SandboxBlock[]
-  positionOf: (block: SandboxBlock) => [number, number]
+  neurons: SandboxNeuron[]
+  positionOf: (id: string, fallback: [number, number]) => [number, number]
   selected: boolean
   onPick: () => void
 }) {
-  const from = blocks.find((block) => block.id === link.source.instance)
-  const to = blocks.find((block) => block.id === link.target.instance)
-  if (!from || !to || !link.source.port || !link.target.port) return null
-  const start = portPoint(from, link.source.port, positionOf(from))
-  const end = portPoint(to, link.target.port, positionOf(to))
+  const start = endpointPoint(link.source, 'source', blocks, neurons, positionOf)
+  const end = endpointPoint(link.target, 'target', blocks, neurons, positionOf)
   if (!start || !end) return null
 
   // Связь ведётся кривой: две прямые между соседними блоками сливаются, и

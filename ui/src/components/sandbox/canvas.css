@@ -41,6 +41,42 @@
   pointer-events: none;
 }
 
+/* Отдельная клетка. Форму задаёт rx в разметке: тормозная квадратная,
+   возбуждающая скруглённая -- разница читается и без цвета. */
+.cv-cell rect {
+  fill: var(--panel);
+  stroke: var(--exc);
+  stroke-width: 1.6;
+  cursor: grab;
+}
+
+.cv-cell.is-inh rect {
+  stroke: var(--inh);
+}
+
+.cv-cell.is-on rect {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+
+.cv-cell.is-spiking rect {
+  fill: var(--selected);
+}
+
+/* Точка подключения клетки -- её сома. Порта у клетки нет, поэтому и подписи
+   рядом нет: подписывать нечего, точка одна. */
+.cv-soma circle {
+  fill: var(--panel);
+  stroke: var(--line-strong);
+  stroke-width: 1.6;
+  cursor: crosshair;
+}
+
+.cv-soma.is-waiting circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
 .cv-port circle {
   fill: var(--panel);
   stroke: var(--exc);

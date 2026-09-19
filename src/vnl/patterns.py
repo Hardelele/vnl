@@ -256,6 +256,31 @@ class PatternInstance:
 
 
 @dataclass
+class SandboxNeuron:
+    """Отдельная клетка на холсте: нейрон IR плюс место, где он лежит.
+
+    Координаты живут здесь, а не в `ir.Instance`, потому что расстановка --
+    свойство холста, а не сети: `compose` её не переносит, а `fingerprint`
+    считается по модели, иначе сдвиг клетки объявлял бы прежний прогон
+    устаревшим.
+
+    Поля нарочно плоские, а не `{instance, position}`: `from_plain` заполняет
+    только объявленные поля, и уже сохранённые песочницы держат нейрон как
+    `{"id", "cell_type", "tags"}`. Плоская запись читает их как есть и
+    подставляет место по умолчанию; обёртка на таком файле упала бы.
+    """
+
+    id: str
+    cell_type: str
+    tags: tuple[str, ...] = ()
+    position: tuple[float, float] = (0.0, 0.0)
+
+    def instance(self) -> ir.Instance:
+        """Тот же нейрон для сети. Места на холсте в модели нет."""
+        return ir.Instance(id=self.id, cell_type=self.cell_type, tags=self.tags)
+
+
+@dataclass
 class Endpoint:
     """Конец связи в песочнице: либо порт блока, либо точка отдельного нейрона."""
 
@@ -319,7 +344,7 @@ class Sandbox:
     name: str
     instances: list[PatternInstance] = field(default_factory=list)
     cell_types: dict[str, ir.CellType] = field(default_factory=dict)
-    neurons: dict[str, ir.Instance] = field(default_factory=dict)
+    neurons: dict[str, SandboxNeuron] = field(default_factory=dict)
     links: list[Link] = field(default_factory=list)
     modulators: dict[str, ir.Modulator] = field(default_factory=dict)
     stimuli: list[SandboxStimulus] = field(default_factory=list)
@@ -340,6 +365,50 @@ class Sandbox:
         known = ", ".join(i.id for i in self.instances) or "блоков нет"
         raise PatternError(f"в песочнице нет блока {instance_id!r} ({known})")
 
+    def taken_ids(self) -> set[str]:
+        """Имена, занятые объектами холста: блоки и отдельные клетки вместе.
+
+        Вместе, потому что в собранной сети они живут в одном пространстве
+        имён: клетка с именем блока столкнулась бы с его нейронами уже в
+        `compose`, то есть на запуске. Отказывать надо при добавлении.
+        """
+        return {item.id for item in self.instances} | set(self.neurons)
+
+    def free_id(self, base: str) -> str:
+        """Свободное имя объекта холста, начиная с предложенного."""
+        used = self.taken_ids()
+        chosen = base
+        counter = 2
+        while chosen in used:
+            chosen = f"{base}{counter}"
+            counter += 1
+        return chosen
+
+    def add_neuron(
+        self,
+        neuron_id: str | None,
+        cell_type: ir.CellType,
+        position: tuple[float, float] = (0.0, 0.0),
+    ) -> SandboxNeuron:
+        """Положить на холст отдельную клетку.
+
+        В песочницу кладётся копия типа, а не запись каталога: правка порога в
+        панели свойств идёт через `set_cell` прямо по этому объекту, и общая с
+        каталогом ссылка означала бы, что следующая положенная клетка приедет
+        уже с чужим порогом. По той же причине экземпляр паттерна хранит
+        снимок, а не ссылку на библиотеку.
+        """
+        chosen = neuron_id or self.free_id(cell_type.id)
+        if chosen in self.taken_ids():
+            raise PatternError(f"имя {chosen!r} на холсте уже занято")
+        self.cell_types.setdefault(cell_type.id, copy.deepcopy(cell_type))
+        neuron = SandboxNeuron(
+            id=chosen, cell_type=cell_type.id, position=position
+        )
+        self.neurons[chosen] = neuron
+        self.updated_at = _now()
+        return neuron
+
     def add_instance(
         self,
         pattern: Pattern,
@@ -348,13 +417,7 @@ class Sandbox:
         position: tuple[float, float] = (0.0, 0.0),
     ) -> PatternInstance:
         """Вставить паттерн. Кладётся снимок, а не ссылка на библиотеку."""
-        used = {item.id for item in self.instances} | set(self.neurons)
-        base = instance_id or _slug(pattern.name)
-        chosen = base
-        counter = 2
-        while chosen in used:
-            chosen = f"{base}{counter}"
-            counter += 1
+        chosen = self.free_id(instance_id or _slug(pattern.name))
 
         item = PatternInstance(
             id=chosen,
@@ -435,13 +498,22 @@ def extract_pattern(
     notes: list[str] = []
     body = ir.Model(name=name)
 
-    # Отдельные нейроны переносятся как есть.
+    # Отдельные нейроны переносятся как есть -- без места на холсте: в теле
+    # паттерна его негде держать, да и раскладку карточка считает сама.
     for neuron_id in sorted(chosen & set(sandbox.neurons)):
         neuron = sandbox.neurons[neuron_id]
-        body.instances[neuron_id] = copy.deepcopy(neuron)
-        body.cell_types.setdefault(
-            neuron.cell_type, copy.deepcopy(sandbox.cell_types[neuron.cell_type])
-        )
+        body.instances[neuron_id] = neuron.instance()
+        cell_type = sandbox.cell_types.get(neuron.cell_type)
+        if cell_type is None:
+            # Потерянный тип -- замечание, а не отказ: паттерн уже собран,
+            # и человеку надо сказать, чего в нём не хватает, а не уронить
+            # сохранение обвалом.
+            notes.append(
+                f"у клетки {neuron_id} неизвестен тип {neuron.cell_type!r} — "
+                "в паттерне её нечем считать"
+            )
+            continue
+        body.cell_types.setdefault(neuron.cell_type, copy.deepcopy(cell_type))
 
     # Выбранные блоки разворачиваются внутрь нового паттерна: вложенных
     # блоков в первой версии нет, поэтому содержимое переносится плоско.

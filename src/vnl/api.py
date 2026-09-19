@@ -437,6 +437,47 @@ def catalog_payload_of(
     }
 
 
+# --- каталог типов клеток -------------------------------------------------
+
+
+def cell_payload(cell: Any) -> dict[str, Any]:
+    """Тип клетки для палитры.
+
+    Собран из тех же кусков, что тип клетки внутри модели (`_point_model`,
+    `_morphology`): палитра и панель свойств показывают одни и те же поля, и
+    второй вид одной мембраны разошёлся бы с первым на первой же правке.
+
+    Тормозность считается здесь, а не в интерфейсе: от неё зависит фигура на
+    холсте, и второе место, где «тормозная» значит своё, разойдётся с первым
+    незаметно.
+    """
+    cell_type = cell.type
+    return {
+        "id": cell.id,
+        "name": cell.name,
+        "note": cell.note,
+        "tags": list(cell_type.tags),
+        "transmitter": cell_type.transmitter,
+        "inhibitory": ir.is_inhibitory_cell(cell_type),
+        "builtin": cell.builtin,
+        "source": cell.source,
+        "pointModel": _point_model(cell_type.point_model),
+        "morphology": _morphology(cell_type.morphology),
+    }
+
+
+def cells_payload(cells: Sequence[Any]) -> dict[str, Any]:
+    """Каталог типов клеток: встроенные и свои одним списком.
+
+    Одним списком нарочно: для того, кто кладёт клетку на холст, «встроенная»
+    -- пометка, а не другой сорт вещи. Порядок задаёт `cells.catalog`.
+    """
+    return {
+        "schema": SCHEMA_VERSION,
+        "cells": [cell_payload(cell) for cell in cells],
+    }
+
+
 # --- песочница ------------------------------------------------------------
 
 
@@ -508,6 +549,16 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
             {
                 "id": neuron.id,
                 "cellType": neuron.cell_type,
+                "position": list(neuron.position),
+                # Тормозная клетка рисуется другой фигурой, и решает это
+                # сервер: интерфейс, считающий тормозность сам, разойдётся с
+                # `ir.is_inhibitory_cell` незаметно. У клетки с потерянным
+                # типом решать не по чему -- тогда она просто не тормозная.
+                "inhibitory": (
+                    ir.is_inhibitory_cell(sandbox.cell_types[neuron.cell_type])
+                    if neuron.cell_type in sandbox.cell_types
+                    else False
+                ),
                 # Тип может быть и неизвестным: это чинят, а не скрывают, --
                 # нейрон обязан остаться в дереве объектов.
                 "pointModel": (

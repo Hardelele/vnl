@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react'
 
-import type { PatternDraft, SandboxBlock } from '../../model/sandbox'
+import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
 import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
 import { canChange, goToLogin, useSession } from '../../state/session'
@@ -26,20 +26,29 @@ import { Thumbnail } from '../catalog/Thumbnail'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { Canvas } from './Canvas'
-import { Properties, RunFields } from './Properties'
+import { Properties, RunFields, where } from './Properties'
 import { SavePattern } from './SavePattern'
 import './sandbox.css'
 
-type LeftTab = 'library' | 'objects'
+/**
+ * Вкладки левой панели.
+ *
+ * Клетки -- отдельная вкладка, а не раздел внутри библиотеки. Библиотека
+ * ищется и фильтруется по ступени разбора и статусу готовности; к клетке ни то
+ * ни другое не применимо, и в этих фильтрах она была бы ровно тем смешением,
+ * из-за которого одиночные клетки из библиотеки когда-то и убрали.
+ */
+type LeftTab = 'cells' | 'library' | 'objects'
 
 export function SandboxScreen() {
   const control = sandboxController
   const sim = simController
-  const [tab, setTab] = useState<LeftTab>('library')
+  const [tab, setTab] = useState<LeftTab>('cells')
   /** Открыта ли форма сохранения. Имя и порты спрашивают до записи. */
   const [saving, setSaving] = useState(false)
 
   const list = useSandbox((state) => state.list)
+  const palette = useSandbox((state) => state.cells)
   const project = useSandbox((state) => state.project)
   const selected = useSandbox((state) => state.selected)
   const pending = useSandbox((state) => state.pending)
@@ -74,6 +83,7 @@ export function SandboxScreen() {
       return
     }
     void control.refreshList()
+    void control.refreshCells()
     void catalogController.refresh()
   }, [control, allowed])
 
@@ -117,8 +127,8 @@ export function SandboxScreen() {
         <h1 className="sb-title">Песочница</h1>
         {error ? <p className="sb-alert">{error}</p> : null}
         <p className="sb-hint">
-          Проект — это схема, собранная из паттернов библиотеки. Их можно
-          соединять, запускать и сохранять.
+          Проект — это схема: отдельные клетки из палитры и блоки из библиотеки
+          паттернов. Их можно соединять, запускать и сохранять.
         </p>
         <div className="sb-projects">
           {list.map((row) => (
@@ -146,7 +156,7 @@ export function SandboxScreen() {
     )
   }
 
-  const inhibitory = neuronKinds(project.blocks)
+  const inhibitory = neuronKinds(project.blocks, project.neurons)
   /** Сессия считает не эту схему: её результат уже про другую сеть. */
   const stale = Boolean(simId && built && built !== project.fingerprint)
 
@@ -268,7 +278,9 @@ export function SandboxScreen() {
       ) : null}
       {pending ? (
         <p className="sb-warn">
-          Выбран порт {pending.instance}.{pending.port} — щёлкните по второму порту,
+          {/* Подсказка одинаково говорит про порт блока и про клетку: у клетки
+              порта нет, и «Выбран порт E.null» было бы неправдой. */}
+          Начало связи: {where(pending)} — щёлкните по второй точке подключения,
           чтобы соединить.{' '}
           <button type="button" className="sb-link" onClick={() => control.cancelPending()}>
             отменить
@@ -279,6 +291,17 @@ export function SandboxScreen() {
       <div className="sb-body">
         <aside className="panel sb-left">
           <div className="sb-tabs">
+            <button
+              type="button"
+              className={`lib-tab${tab === 'cells' ? ' is-on' : ''}`}
+              onClick={() => {
+                setTab('cells')
+                // Каталог пополняют и мимо этого экрана -- `vnl cell add`.
+                void control.refreshCells()
+              }}
+            >
+              Клетки
+            </button>
             <button
               type="button"
               className={`lib-tab${tab === 'library' ? ' is-on' : ''}`}
@@ -301,7 +324,49 @@ export function SandboxScreen() {
             </button>
           </div>
 
-          {tab === 'library' ? (
+          {tab === 'cells' ? (
+            <div className="sb-list">
+              {/* В строке -- фигура клетки, имя и медиатор. Фигура та же, что
+                  на холсте и в миниатюре каталога: класть на схему человек
+                  будет именно её, и узнавать её он должен заранее. */}
+              {palette.map((cell) => (
+                <div className="sb-row" key={cell.id}>
+                  <span className="sb-mini sb-cell-shape">
+                    <svg viewBox="0 0 40 24" role="img" aria-label={cell.name}>
+                      <rect
+                        className={`sb-shape${cell.inhibitory ? ' is-inh' : ''}`}
+                        x={4}
+                        y={5}
+                        width={32}
+                        height={14}
+                        rx={cell.inhibitory ? 3 : 7}
+                      />
+                    </svg>
+                  </span>
+                  <span className="sb-row-text">
+                    <span className="sb-row-name" title={cell.note || cell.name}>
+                      {cell.name}
+                    </span>
+                    <span className="mono sb-level">
+                      {cell.transmitter ?? cell.id}
+                      {cell.builtin ? '' : ' · своя'}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="sb-plus"
+                    title={`Положить на холст: ${cell.note || cell.name}`}
+                    onClick={() => void control.insertCell(cell.id)}
+                  >
+                    +
+                  </button>
+                </div>
+              ))}
+              {palette.length === 0 ? (
+                <p className="sb-hint">Каталог типов клеток пуст.</p>
+              ) : null}
+            </div>
+          ) : tab === 'library' ? (
             <div className="sb-list">
               {/* Миниатюра та же, что в каталоге, только мельче: по одному
                   имени блок в списке из сорока не выбрать, а вторая реализация
@@ -345,10 +410,21 @@ export function SandboxScreen() {
                   onPick={() => control.select({ kind: 'block', id: block.id })}
                 />
               ))}
+              {/* Клетка в дереве наравне с блоком: она такой же объект холста,
+                  и выбрать её здесь надо уметь так же, как блок. */}
+              {project.neurons.map((neuron) => (
+                <Row
+                  key={neuron.id}
+                  label={`${neuron.id} · ${neuron.cellType}`}
+                  kind="клетка"
+                  on={selected?.kind === 'neuron' && selected.id === neuron.id}
+                  onPick={() => control.select({ kind: 'neuron', id: neuron.id })}
+                />
+              ))}
               {project.links.map((link) => (
                 <Row
                   key={link.id}
-                  label={`${link.source.instance}.${link.source.port} → ${link.target.instance}.${link.target.port}`}
+                  label={`${where(link.source)} → ${where(link.target)}`}
                   kind="связь"
                   on={selected?.kind === 'link' && selected.id === link.id}
                   onPick={() => control.select({ kind: 'link', id: link.id })}
@@ -357,7 +433,7 @@ export function SandboxScreen() {
               {project.stimuli.map((drive) => (
                 <Row
                   key={drive.id}
-                  label={`${drive.id} → ${drive.target.instance}.${drive.target.port}`}
+                  label={`${drive.id} → ${where(drive.target)}`}
                   kind="стимул"
                   on={selected?.kind === 'stimulus' && selected.id === drive.id}
                   onPick={() => control.select({ kind: 'stimulus', id: drive.id })}
@@ -366,7 +442,7 @@ export function SandboxScreen() {
               {project.recordings.map((record) => (
                 <Row
                   key={record.id}
-                  label={`${record.id} · ${record.target.instance}.${record.target.port}`}
+                  label={`${record.id} · ${where(record.target)}`}
                   kind="запись"
                   on={selected?.kind === 'recording' && selected.id === record.id}
                   onPick={() => control.select({ kind: 'recording', id: record.id })}
@@ -379,13 +455,17 @@ export function SandboxScreen() {
         <section className="sb-canvas">
           <Canvas
             blocks={project.blocks}
+            neurons={project.neurons}
             links={project.links}
             cells={cells}
             selected={selected}
             pending={pending}
             onPickBlock={(id) => control.select({ kind: 'block', id })}
+            onPickNeuron={(id) => control.select({ kind: 'neuron', id })}
             onPickLink={(id) => control.select({ kind: 'link', id })}
-            onPickPort={(instance, port) => void control.touchPort(instance, port)}
+            onPickEndpoint={(instance, port) =>
+              void control.touchEndpoint(instance, port)
+            }
             onMove={(id, position) => void control.move(id, position)}
             onEmpty={() => control.select(null)}
           />
@@ -470,13 +550,25 @@ function Row({
   )
 }
 
-/** Тормозность клеток собранной сети: имена в ней с приставкой блока. */
-function neuronKinds(blocks: SandboxBlock[]): Record<string, boolean> {
+/**
+ * Тормозность клеток собранной сети.
+ *
+ * Имена клеток блока идут с приставкой (`ffi/E`) -- ею разведены нейроны
+ * разных экземпляров одного паттерна. У положенной руками клетки приставки
+ * нет: она и есть объект схемы, и в сети зовётся своим именем.
+ */
+function neuronKinds(
+  blocks: SandboxBlock[],
+  neurons: SandboxNeuron[],
+): Record<string, boolean> {
   const kinds: Record<string, boolean> = {}
   for (const block of blocks) {
     for (const neuron of block.scheme.neurons) {
       kinds[`${block.id}/${neuron.id}`] = neuron.inhibitory
     }
+  }
+  for (const neuron of neurons) {
+    kinds[neuron.id] = neuron.inhibitory
   }
   return kinds
 }
