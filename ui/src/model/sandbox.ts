@@ -8,7 +8,15 @@
  */
 
 import { request } from './catalog'
-import type { PatternPort, PointModel, RecordedVar, RunSpec, Scheme } from './types'
+import type {
+  CatalogLevel,
+  PatternDetail,
+  PatternPort,
+  PointModel,
+  RecordedVar,
+  RunSpec,
+  Scheme,
+} from './types'
 
 /** Конец связи: порт блока или точка отдельного нейрона. */
 export interface Endpoint {
@@ -90,6 +98,16 @@ export interface SandboxState {
   canUndo: boolean
   /** Что мешает запуску. Пусто -- можно считать. */
   problems: string[]
+  /**
+   * Что предложить в форме «Сохранить как паттерн»: клетка без входящих связей
+   * похожа на вход, без исходящих -- на выход.
+   *
+   * Догадку считает сервер (`patterns.suggest_ports`), а не интерфейс: тот же
+   * вопрос задаёт Claude через MCP, и вторая реализация слова «похоже на вход»
+   * разошлась бы с первой незаметно. Решает всё равно человек -- имя порта
+   * увидит каждый, кто вставит блок.
+   */
+  portHints: PatternPort[]
   /**
    * Отпечаток собираемой сети. Открытая сессия считает модель на момент своего
    * запуска, поэтому по расхождению отпечатков видно, что её результат -- про
@@ -260,4 +278,28 @@ export function undo(id: string): Promise<SandboxState> {
 
 export function save(id: string): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/save`, 'POST')
+}
+
+/** Что человек вводит в форме сохранения: имя, ступень каталога и порты. */
+export interface PatternDraft {
+  name: string
+  level: CatalogLevel
+  ports: PatternPort[]
+}
+
+/**
+ * «Сохранить как паттерн»: проект уезжает в библиотеку.
+ *
+ * Отвечает не состоянием песочницы, а паттерном: сама песочница не меняется --
+ * сохранение не подменяет проект блоком и ничего в нём не двигает. Порты
+ * уходят тем же видом, каким пришли в `portHints`: сервер их так и читает, и
+ * второй формат одного порта завёлся бы ровно здесь.
+ */
+export function saveAsPattern(id: string, draft: PatternDraft): Promise<PatternDetail> {
+  return send<PatternDetail>('/patterns', 'POST', {
+    sandbox: id,
+    name: draft.name,
+    level: draft.level,
+    ports: draft.ports,
+  })
 }

@@ -373,3 +373,49 @@
   font-size: var(--text-xs);
   color: var(--faint);
 }
+
+/* Форма «Сохранить как паттерн».
+   Стоит поперёк экрана, а не в правой панели: сохранение -- это про всю схему
+   сразу, и порты в узкой колонке пришлось бы читать в три строки каждый. */
+.sb-save {
+  margin: 0 var(--space-3) var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+/* Поля формы -- во всю оставшуюся ширину. В правой панели свойств 150
+   пикселей хватает на число, а здесь вводят имя паттерна и имена портов:
+   обрезанное имя нельзя ни прочесть, ни проверить перед записью. */
+.sb-save .sb-field input[type='text'] {
+  width: auto;
+  flex: 1;
+  max-width: 420px;
+}
+
+.sb-save .sb-field select {
+  width: auto;
+  min-width: 220px;
+}
+
+.sb-port {
+  gap: var(--space-3);
+}
+
+.sb-port-on {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+/* Адрес точки -- справа и мелким: имя правят, а адрес читают. */
+.sb-port-site {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.sb-save-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}

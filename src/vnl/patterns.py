@@ -38,6 +38,16 @@ CatalogLevel = Literal["L0", "L1", "L2", "L3", "L4", "L5"]
 PatternStatus = Literal["draft", "ready"]
 PortDirection = Literal["in", "out", "mod"]
 
+#: Направления порта списком, а не только типом: `Literal` живёт в проверке
+#: типов, а запрос из интерфейса приходит строкой, и сверять её надо в рантайме.
+PORT_DIRECTIONS: tuple[PortDirection, ...] = ("in", "out", "mod")
+
+#: Чем разделены имя блока и имя нейрона внутри него в собранной сети
+#: (`ffi/E`). То же значение у `compose.SEPARATOR`; здесь оно нужно, чтобы
+#: сделать из имени нейрона имя порта, а импортировать сборку отсюда нельзя --
+#: она сама импортирует этот модуль.
+NESTED = "/"
+
 #: Ступени разбора библиотеки, в том порядке, в котором их читают.
 #:
 #: Это не масштаб конструкции («сколько клеток»), а ступень: что нужно понять
@@ -156,12 +166,16 @@ class Pattern:
         level: CatalogLevel = DRAFT_LEVEL,
         taken: Iterable[str] = (),
     ) -> "Pattern":
-        """Пустой черновик -- то, что открывает «Добавить» в библиотеке.
+        """Паттерн без начинки. Нужен ради имени и свободного идентификатора.
 
-        Черновик кладётся в библиотеку сразу, а не после первой правки: иначе
-        «продолжу позже» держалось бы только на незакрытой вкладке. Пустой он
-        честно показывает, чего ему не хватает (`validate`), и удаляется одним
-        действием, если передумали.
+        В библиотеку такой больше не кладут. Пустой черновик заводила кнопка
+        «Добавить», и наполнить его было нечем: редактора тела схемы нет и не
+        будет -- схему собирают в песочнице и оттуда сохраняют паттерном
+        (`Project.as_pattern`). Второй редактор означал бы две разные правды о
+        том, как рисуют схему.
+
+        Остаётся здесь как способ получить свободный идентификатор из имени:
+        так его берут `vnl add` и сохранение из песочницы.
         """
         return Pattern(
             id=_unique(_slug(name), taken),
@@ -518,6 +532,54 @@ def _dedupe_ports(ports: list[Port]) -> list[Port]:
         if name not in seen:
             seen[name] = replace(port, name=name)
     return list(seen.values())
+
+
+def suggest_ports(model: ir.Model) -> list[Port]:
+    """Что предложить в форме «Сохранить как паттерн».
+
+    Предложить, а не решить. Имя порта увидит каждый, кто вставит блок, и
+    подставить его молча значило бы назвать чужую точку подключения за автора.
+    Догадка простая и проверяемая глазами: клетка, в которую никто не стреляет,
+    похожа на вход; клетка, которая никуда не стреляет, -- на выход. Одинокая
+    клетка получает и то и другое: она и вход, и выход.
+
+    Считается в Python, а не в интерфейсе: тот же вопрос задаст Claude через
+    MCP, и вторая реализация слова «похоже на вход» разошлась бы с первой
+    незаметно.
+    """
+    incoming = {contact.post.instance for contact in model.contacts}
+    outgoing = {contact.pre.instance for contact in model.contacts}
+    ports: list[Port] = []
+    for neuron_id in model.instances:
+        if neuron_id not in incoming:
+            ports.append(
+                Port(
+                    name=_port_label("in", neuron_id),
+                    direction="in",
+                    site=ir.Site(instance=neuron_id, section="soma", fraction=0.5),
+                    note="входящих связей нет — похоже на вход",
+                )
+            )
+        if neuron_id not in outgoing:
+            ports.append(
+                Port(
+                    name=_port_label("out", neuron_id),
+                    direction="out",
+                    site=ir.Site(instance=neuron_id, section="soma", fraction=0.5),
+                    note="исходящих связей нет — похоже на выход",
+                )
+            )
+    return _dedupe_ports(ports)
+
+
+def _port_label(prefix: str, instance: str) -> str:
+    """Имя порта из имени нейрона собранной сети.
+
+    В собранной сети нейрон внутри блока называется `ffi/E`, а в имени порта
+    косой черте не место: порт пишут руками и в адресе контакта
+    (`IN.soma`).
+    """
+    return f"{prefix}_{instance.replace(NESTED, '_')}"
 
 
 def _port_name(endpoint: Endpoint, direction: str) -> str:

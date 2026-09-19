@@ -39,6 +39,21 @@ def _site(site: ir.Site) -> dict[str, Any]:
     }
 
 
+def _port(port: Any) -> dict[str, Any]:
+    """Порт наружу. Один вид на карточку, на блок в песочнице и на догадку.
+
+    Он же принимается обратно при сохранении паттерна (`server.Api._ports`):
+    интерфейс возвращает то, что получил, поправив имена, -- и два формата
+    одного порта завелись бы ровно на этом шаге.
+    """
+    return {
+        "name": port.name,
+        "direction": port.direction,
+        "site": _site(port.site),
+        "note": port.note,
+    }
+
+
 def _morphology(morph) -> dict[str, Any]:
     return {
         "name": morph.name,
@@ -361,15 +376,7 @@ def pattern_payload(pattern: Any, body: bool = False) -> dict[str, Any]:
         "levelName": pattern.level_name,
         "status": pattern.status,
         "statusName": STATUS_NAMES.get(pattern.status, pattern.status),
-        "ports": [
-            {
-                "name": port.name,
-                "direction": port.direction,
-                "site": _site(port.site),
-                "note": port.note,
-            }
-            for port in pattern.ports
-        ],
+        "ports": [_port(port) for port in pattern.ports],
         "counts": {
             "neurons": len(pattern.body.instances),
             "contacts": len(pattern.body.contacts),
@@ -487,15 +494,7 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 "patternId": block.pattern_id,
                 "label": block.label,
                 "position": list(block.position),
-                "ports": [
-                    {
-                        "name": port.name,
-                        "direction": port.direction,
-                        "site": _site(port.site),
-                        "note": port.note,
-                    }
-                    for port in block.snapshot.ports
-                ],
+                "ports": [_port(port) for port in block.snapshot.ports],
                 "counts": {
                     "neurons": len(block.snapshot.body.instances),
                     "contacts": len(block.snapshot.body.contacts),
@@ -555,6 +554,13 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
             "level": sandbox.run.level,
             "seed": sandbox.run.seed,
         },
+        # Что предложить в форме «Сохранить как паттерн»: клетка без входящих
+        # связей похожа на вход, без исходящих -- на выход. Догадка приходит
+        # вместе с остальным состоянием, а не отдельным запросом: это часть
+        # того же ответа, из которого живут все представления проекта. Считает
+        # её Python (`patterns.suggest_ports`) -- тот же вопрос задаст Claude
+        # через MCP, и вторая реализация разошлась бы с первой незаметно.
+        "portHints": [_port(port) for port in project.port_hints()],
         # Факты о проекте, а не подписи из макета (#483).
         "dirty": project.dirty,
         "canUndo": project.can_undo,

@@ -4,11 +4,11 @@ import {
   ApiError,
   OfflineError,
   catalogQueryString,
-  createDraft,
+  deletePattern,
   loadCatalog,
   whenUnauthorized,
 } from './catalog'
-import { openSandbox } from './sandbox'
+import { openSandbox, saveAsPattern } from './sandbox'
 
 function reply(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -75,7 +75,14 @@ describe('каталог', () => {
       'fetch',
       vi.fn().mockResolvedValue(reply({ error: "уровень 'L9' не из каталога" }, 400)),
     )
-    const failure = await createDraft('x', 'L9' as 'L2').catch((error) => error)
+    const failure: ApiError = await saveAsPattern('проба', {
+      name: 'x',
+      level: 'L9' as 'L2',
+      ports: [],
+    }).then(
+      () => { throw new Error('ожидался отказ') },
+      (error: ApiError) => error,
+    )
     expect(failure).toBeInstanceOf(ApiError)
     expect(failure.status).toBe(400)
     expect(failure.message).toContain('L9')
@@ -88,18 +95,45 @@ describe('каталог', () => {
     expect(failure.message).toContain('vnl serve')
   })
 
-  it('черновик создаётся запросом POST с именем', async () => {
+  it('паттерн сохраняется из песочницы: имя, ступень и порты', async () => {
     const fetcher = vi.fn().mockResolvedValue(reply({ id: 'proba', name: 'Проба' }, 201))
     vi.stubGlobal('fetch', fetcher)
 
-    const created = await createDraft('Проба')
+    const port = {
+      name: 'вход',
+      direction: 'in' as const,
+      site: { instance: 'ffi/IN', section: 'soma', fraction: 0.5 },
+      note: '',
+    }
+    const created = await saveAsPattern('проба', {
+      name: 'Проба',
+      level: 'L1',
+      ports: [port],
+    })
 
     expect(created.id).toBe('proba')
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
+    // Маршрут тот же, что и был: «создать паттерн» -- POST на библиотеку,
+    // изменился только источник начинки -- песочница.
     expect(url).toBe('/api/patterns')
     expect(init.method).toBe('POST')
-    // Ступень по умолчанию -- первая: черновик ещё не «вычислительный примитив».
-    expect(JSON.parse(String(init.body))).toEqual({ name: 'Проба', level: 'L0' })
+    expect(JSON.parse(String(init.body))).toEqual({
+      sandbox: 'проба',
+      name: 'Проба',
+      level: 'L1',
+      ports: [port],
+    })
+  })
+
+  it('удаление -- DELETE по имени, и имя кодируется', async () => {
+    const fetcher = vi.fn().mockResolvedValue(reply({ deleted: 'схема' }))
+    vi.stubGlobal('fetch', fetcher)
+
+    await deletePattern('схема')
+
+    const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/patterns/' + encodeURIComponent('схема'))
+    expect(init.method).toBe('DELETE')
   })
 })
 

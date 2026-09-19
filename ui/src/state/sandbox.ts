@@ -27,6 +27,7 @@ import {
   removeObject,
   renameBlock,
   save,
+  saveAsPattern,
   setCellParams,
   setLinkParams,
   setRecordingVar,
@@ -34,6 +35,7 @@ import {
   setStimulusParams,
   undo,
   type DriveParams,
+  type PatternDraft,
   type SandboxRow,
   type SandboxState,
 } from '../model/sandbox'
@@ -62,6 +64,15 @@ export interface SandboxView {
   offline: boolean
   /** Отказ был «нужен вход»: поправимо входом, а не перезапуском сервера. */
   denied: boolean
+  /**
+   * Что получилось у последнего «Сохранить как паттерн»: имя и ступень.
+   *
+   * Держится в состоянии, а не в компоненте: сохранение -- единственное
+   * действие песочницы, после которого ничего на экране не меняется (проект тот
+   * же), и без прямого «готово, паттерн такой-то» человек не узнает, случилось
+   * ли оно вообще.
+   */
+  saved: { id: string; name: string; levelName: string } | null
 }
 
 const EMPTY: SandboxView = {
@@ -73,6 +84,7 @@ const EMPTY: SandboxView = {
   error: null,
   offline: false,
   denied: false,
+  saved: null,
 }
 
 export interface SandboxPorts {
@@ -93,6 +105,7 @@ export interface SandboxPorts {
   remove: typeof removeObject
   undo: typeof undo
   save: typeof save
+  asPattern: typeof saveAsPattern
 }
 
 const DEFAULT_PORTS: SandboxPorts = {
@@ -113,6 +126,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   remove: removeObject,
   undo,
   save,
+  asPattern: saveAsPattern,
 }
 
 export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
@@ -254,6 +268,42 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     undo: () => act((id) => io.undo(id), { selected: null }),
     save: () => act((id) => io.save(id)),
+
+    /**
+     * «Сохранить как паттерн»: проект уезжает в библиотеку.
+     *
+     * Состояние проекта не заменяется: сохранение песочницу не меняет, и
+     * подменять её ответом о другом объекте было бы неправдой. Меняется только
+     * `saved` -- то, что человек прочтёт как «получилось».
+     */
+    async saveAsPattern(draft: PatternDraft): Promise<boolean> {
+      const project = store.getState().project
+      if (!project) return false
+      store.setState({ busy: true, saved: null })
+      try {
+        const pattern = await io.asPattern(project.id, draft)
+        store.setState({
+          busy: false,
+          error: null,
+          offline: false,
+          denied: false,
+          saved: {
+            id: pattern.id,
+            name: pattern.name,
+            levelName: pattern.levelName,
+          },
+        })
+        return true
+      } catch (reason) {
+        fail(reason)
+        return false
+      }
+    },
+
+    /** Убрать отметку об удачном сохранении: форму открывают заново. */
+    forgetSaved(): void {
+      store.setState({ saved: null })
+    },
   }
 }
 

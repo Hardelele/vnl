@@ -135,13 +135,70 @@ def test_missing_pattern_is_named(base):
     assert "нет" in payload["error"]
 
 
-def test_add_creates_a_draft_that_survives_a_restart(base, tmp_path):
-    status, created = ask(base, "POST", "/api/patterns", {"name": "Прямое торможение"})
+# --- «Сохранить как паттерн»: схему собирают в песочнице --------------------
+#
+# Пустого черновика этот маршрут больше не заводит: наполнить его было нечем --
+# редактора тела схемы нет и не будет. Поэтому здесь проверяется не «появился
+# объект», а «появился паттерн, который открывается и считается».
+
+
+def ready_project(base) -> tuple[str, str, str]:
+    """Проект, который считается: два блока, связь, стимул и запись.
+
+    Ровно то, что должно уехать в паттерн: собранная сеть -- в тело, драйв и
+    записи -- в витрину карточки. Без драйва сохранённый паттерн открылся бы
+    молчащим, а это и есть жалоба, из которой выросла задача (#525).
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {
+            "source": {"instance": first, "port": "out"},
+            "target": {"instance": second, "port": "in"},
+        },
+    )
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": first, "port": "in"}, "rate": 250, "amplitude": 1.5},
+    )
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/recordings",
+        {"target": {"instance": second, "port": "out"}},
+    )
+    return sandbox, first, second
+
+
+def save_as_pattern(base, sandbox: str, **body):
+    """Сохранение с портами, которые предложил сам сервер.
+
+    Так же поступает и человек в форме: правит предложенные имена, а не
+    выдумывает адреса клеток заново.
+    """
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    payload: dict = {"sandbox": sandbox, "ports": project["portHints"]}
+    payload.update(body)
+    return ask(base, "POST", "/api/patterns", payload)
+
+
+def test_a_project_is_saved_as_a_pattern_that_survives_a_restart(base, tmp_path):
+    sandbox, _, _ = ready_project(base)
+    status, created = save_as_pattern(
+        base, sandbox, name="Прямое торможение", level="L1"
+    )
     assert status == 201
-    assert created["status"] == "draft"
-    assert created["statusName"] == "Черновик"
-    # Пустой черновик честно говорит, чего ему не хватает.
-    assert created["problems"]
+    assert created["level"] == "L1"
+    # Тело паттерна -- собранная сеть: два блока по три клетки.
+    assert created["counts"]["neurons"] == 6
+    assert created["problems"] == [], "сохранённый паттерн не должен быть неполным"
+    assert created["status"] == "ready"
 
     _, catalog = ask(base, "GET", "/api/catalog")
     assert catalog["total"] == 2
@@ -149,19 +206,122 @@ def test_add_creates_a_draft_that_survives_a_restart(base, tmp_path):
     assert Store(tmp_path).load_pattern(created["id"]).name == "Прямое торможение"
 
 
-def test_a_second_draft_does_not_overwrite_the_first(base):
-    _, first = ask(base, "POST", "/api/patterns", {"name": "Схема"})
-    _, second = ask(base, "POST", "/api/patterns", {"name": "Схема"})
+def test_the_saved_pattern_keeps_the_demo_and_can_be_run(base):
+    """Пункт приёмки: паттерн из песочницы открывается и в нём идёт время.
+
+    Стимулы и записи проекта уезжают в витрину карточки, а из тела уходят: в
+    чужую сеть чужой драйв не едет, но без него карточка была бы картинкой.
+    """
+    sandbox, _, _ = ready_project(base)
+    _, created = save_as_pattern(base, sandbox, name="С драйвом")
+    assert created["demo"]["stimuli"], "стимул песочницы -- витрина карточки"
+    assert created["demo"]["recordings"]
+    assert created["demo"]["run"]["duration"] > 0
+    assert created["body"]["stimuli"] == [], "в теле драйва не остаётся"
+    assert created["body"]["recordings"] == []
+
+    status, sim = ask(
+        base, "POST", "/api/sim", {"pattern": created["id"], "pace": 2000}
+    )
+    assert status == 201
+    assert len(sim["cells"]) == 6
+
+    ask(base, "POST", f"/api/sim/{sim['id']}/start")
+    # Время идёт в фоне, поэтому ждём спайков, а не фиксированную паузу:
+    # именно «запустил и увидел разряды» и означает, что паттерн живой.
+    deadline = time.monotonic() + 20
+    live = sim
+    while time.monotonic() < deadline:
+        _, live = ask(base, "GET", f"/api/sim/{sim['id']}")
+        if any(live["spikes"].values()):
+            break
+    assert any(live["spikes"].values()), "сохранённый паттерн молчит -- он мёртвый"
+
+
+def test_ports_are_named_by_the_human_and_lead_where_told(base):
+    """Порт -- то, чем блок подключают снаружи, и называет его человек.
+
+    Сервер только предлагает: клетка без входящих связей похожа на вход, без
+    исходящих -- на выход. Имя из формы должно доехать до карточки вместе с той
+    точкой, на которую его поставили.
+    """
+    sandbox, first, second = ready_project(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    hints = project["portHints"]
+    assert [(port["direction"], port["site"]["instance"]) for port in hints] == [
+        ("in", f"{first}/IN"),
+        ("out", f"{second}/E"),
+    ]
+
+    _, created = save_as_pattern(
+        base,
+        sandbox,
+        name="Цепочка",
+        ports=[
+            {**hints[0], "name": "вход"},
+            {**hints[1], "name": "выход"},
+        ],
+    )
+    named = {port["name"]: port["site"]["instance"] for port in created["ports"]}
+    assert named == {"вход": f"{first}/IN", "выход": f"{second}/E"}
+
+
+def test_a_pattern_without_ports_is_refused(base):
+    """Блок без портов не подключить, а молча решать за автора нельзя."""
+    sandbox, _, _ = ready_project(base)
+    status, payload = save_as_pattern(base, sandbox, name="Без портов", ports=[])
+    assert status == 400
+    assert "портов" in payload["error"]
+
+
+def test_a_port_into_nowhere_names_what_there_is(base):
+    sandbox, _, _ = ready_project(base)
+    status, payload = save_as_pattern(
+        base,
+        sandbox,
+        ports=[{"name": "вход", "direction": "in", "site": {"instance": "нету"}}],
+    )
+    assert status == 400
+    assert "нету" in payload["error"]
+
+    assert save_as_pattern(
+        base, sandbox, ports=[{"name": "вход", "direction": "in"}]
+    )[0] == 400
+
+
+def test_a_project_that_does_not_compute_is_not_saved(base):
+    """Несчитаемая схема в библиотеке -- это как раз мёртвый паттерн."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Пустая"})
+    status, payload = ask(
+        base, "POST", "/api/patterns", {"sandbox": project["id"], "name": "Пусто"}
+    )
+    assert status == 400
+    assert "нечего" in payload["error"]
+
+
+def test_saving_without_a_sandbox_says_where_schemes_come_from(base):
+    status, payload = ask(base, "POST", "/api/patterns", {"name": "Сама по себе"})
+    assert status == 400
+    assert "песочниц" in payload["error"]
+
+
+def test_a_second_pattern_does_not_overwrite_the_first(base):
+    sandbox, _, _ = ready_project(base)
+    _, first = save_as_pattern(base, sandbox, name="Схема")
+    _, second = save_as_pattern(base, sandbox, name="Схема")
     assert first["id"] != second["id"]
 
 
-def test_draft_without_a_name_is_still_openable(base):
-    _, created = ask(base, "POST", "/api/patterns", {})
-    assert created["name"] == "Без имени"
+def test_a_pattern_without_a_name_takes_the_project_name(base):
+    """Имя проекта -- разумное умолчание: другого имени у схемы не было."""
+    sandbox, _, _ = ready_project(base)
+    _, created = save_as_pattern(base, sandbox)
+    assert created["name"] == "Проба"
 
 
 def test_unknown_level_is_refused(base):
-    status, payload = ask(base, "POST", "/api/patterns", {"name": "x", "level": "L9"})
+    sandbox, _, _ = ready_project(base)
+    status, payload = save_as_pattern(base, sandbox, name="x", level="L9")
     assert status == 400
     assert "L9" in payload["error"]
 
@@ -175,12 +335,18 @@ def test_broken_json_is_refused(base):
     assert error.value.code == 400
 
 
-def test_delete_removes_the_draft(base):
-    _, created = ask(base, "POST", "/api/patterns", {"name": "Черновик"})
+def test_delete_removes_the_pattern_and_says_so(base):
+    """Удаление необратимо, поэтому ответ должен быть внятным в оба конца."""
+    sandbox, _, _ = ready_project(base)
+    _, created = save_as_pattern(base, sandbox, name="На выброс")
     status, payload = ask(base, "DELETE", f"/api/patterns/{created['id']}")
     assert status == 200
     assert payload["deleted"] == created["id"]
-    assert ask(base, "DELETE", f"/api/patterns/{created['id']}")[0] == 404
+
+    assert ask(base, "GET", f"/api/patterns/{created['id']}")[0] == 404
+    status, payload = ask(base, "DELETE", f"/api/patterns/{created['id']}")
+    assert status == 404, "«такого нет» отличается от «удалено»"
+    assert created["id"] in payload["error"]
 
 
 def test_unknown_route_is_named(base):
@@ -282,9 +448,12 @@ def test_a_simulation_opens_paused_at_zero(base):
     assert set(sim["cells"]) == {"IN", "E", "I"}
 
 
-def test_a_simulation_needs_something_to_run(base):
-    _, draft = ask(base, "POST", "/api/patterns", {"name": "Пустой"})
-    status, payload = ask(base, "POST", "/api/sim", {"pattern": draft["id"]})
+def test_a_simulation_needs_something_to_run(base, tmp_path):
+    # Паттерн без нейронов кладём в хранилище руками: маршрут библиотеки
+    # таких больше не делает -- он сохраняет посчитанную схему из песочницы.
+    empty = Pattern.empty("Пустой")
+    Store(tmp_path).save_pattern(empty)
+    status, payload = ask(base, "POST", "/api/sim", {"pattern": empty.id})
     assert status == 400
     assert "нет ни одного нейрона" in payload["error"]
 

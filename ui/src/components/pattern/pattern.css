@@ -215,3 +215,21 @@
 .row-pick.is-on {
   background: var(--selected);
 }
+
+/* Удаление: единственное необратимое действие на карточке. Цвет опасности, но
+   не заливка -- кнопка стоит рядом с управлением временем, и красная плашка
+   перетянула бы на себя весь заголовок. */
+.pat-drop {
+  border-color: var(--status-danger);
+  color: var(--status-danger);
+}
+
+.pat-drop:hover:not(:disabled) {
+  background: var(--red-100);
+}
+
+/* Вопрос подтверждения -- на месте кнопки, а не окном поверх экрана. */
+.pat-ask {
+  font-size: var(--text-sm);
+  color: var(--status-danger);
+}

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError, OfflineError } from '../model/catalog'
 import { createCatalogController, type CatalogPorts } from './catalog'
-import type { Catalog, CatalogLevel, PatternDetail } from '../model/types'
+import type { Catalog, CatalogLevel } from '../model/types'
 
 function catalogWith(ids: string[]): Catalog {
   return {
@@ -151,37 +151,6 @@ describe('фильтры', () => {
   })
 })
 
-describe('черновик', () => {
-  it('после создания список перечитывается', async () => {
-    const load = vi.fn().mockResolvedValue(catalogWith(['новый']))
-    const add = vi.fn().mockResolvedValue({ id: 'новый' } as PatternDetail)
-    const control = createCatalogController({
-      load,
-      add,
-      schedule: manualClock().schedule,
-    })
-
-    const created = await control.addDraft('Новый')
-
-    expect(created?.id).toBe('новый')
-    expect(add).toHaveBeenCalledWith('Новый', 'L0')
-    expect(load).toHaveBeenCalledTimes(1)
-  })
-
-  it('отказ сервера попадает на экран, а не в консоль', async () => {
-    const control = createCatalogController({
-      load: vi.fn().mockResolvedValue(catalogWith([])),
-      add: vi.fn().mockRejectedValue(new Error("уровень 'L9' не из каталога")),
-      schedule: manualClock().schedule,
-    })
-
-    const created = await control.addDraft('x')
-
-    expect(created).toBeNull()
-    expect(control.store.getState().error).toContain('L9')
-  })
-})
-
 describe('сервер не запущен', () => {
   it('отмечается отдельно от прочих ошибок', async () => {
     const control = createCatalogController({
@@ -199,14 +168,13 @@ describe('сервер не запущен', () => {
 })
 
 describe('отказ по входу', () => {
-  it('черновик без входа -- не поломка, а нужен вход', async () => {
+  it('закрытый каталог -- не поломка, а нужен вход', async () => {
     const control = createCatalogController({
-      load: vi.fn().mockResolvedValue(catalogWith([])),
-      add: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
+      load: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
       schedule: manualClock().schedule,
     })
 
-    await control.addDraft('Новый')
+    await control.refresh()
 
     const state = control.store.getState()
     // Отличать это от поломки обязательно: у одного отказа лечение -- вход, у
@@ -217,13 +185,13 @@ describe('отказ по входу', () => {
   })
 
   it('удачный запрос снимает отметку', async () => {
-    const control = createCatalogController({
-      load: vi.fn().mockResolvedValue(catalogWith(['ffi'])),
-      add: vi.fn().mockRejectedValue(new ApiError('нужен вход', 401)),
-      schedule: manualClock().schedule,
-    })
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('нужен вход', 401))
+      .mockResolvedValue(catalogWith(['ffi']))
+    const control = createCatalogController({ load, schedule: manualClock().schedule })
 
-    await control.addDraft('Новый')
+    await control.refresh()
     await control.refresh()
 
     // Человек вошёл в другой вкладке: отметка -- состояние, а не история.

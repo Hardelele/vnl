@@ -15,14 +15,22 @@
  * обновлён, закрыт целиком), нажатое ведёт ко входу, а то, что читалось само,
  * объясняется подписью: уводить с экрана человека, ничего не нажимавшего,
  * нельзя.
+ *
+ * Менять библиотеку карточка умеет ровно одним действием -- удалить паттерн, -- и
+ * без входа этой кнопки нет вовсе. Прежние «Fork» и «В песочницу» стояли здесь
+ * погашенными с подписью «появится вместе с песочницей», и это было неправдой:
+ * песочница давно есть, а дорога в неё идёт через её же панель «Библиотека», где
+ * у каждого паттерна кнопка «+». Погашенная кнопка врёт про возможности, поэтому
+ * её здесь нет; переход с карточки прямо в песочницу -- отдельная задача (#526),
+ * потому что требует перехода между экранами, а не вызова к серверу.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 
 import { LINKS, NEURONS, PORTS, counted } from '../../lib/plural'
-import { isDenied, loadPattern } from '../../model/catalog'
+import { deletePattern, isDenied, loadPattern } from '../../model/catalog'
 import type { Contact, Neuron, PatternDetail } from '../../model/types'
-import { goToLogin, loginAt, useSession } from '../../state/session'
+import { canChange, goToLogin, loginAt, useSession } from '../../state/session'
 import { simController, useSim } from '../../state/sim'
 import { LoginHint } from '../shell/Login'
 import { Inspector } from '../live/Inspector'
@@ -44,6 +52,9 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const [engine, setEngine] = useState<'elk' | 'builtin'>('builtin')
   /** Клетка, открытая в инспекторе. Общая для схемы, таймлайна и списка. */
   const [neuron, setNeuron] = useState<string | null>(null)
+  /** Спросили ли про удаление. Действие необратимо, поэтому в два шага. */
+  const [dropping, setDropping] = useState(false)
+  const [busyDrop, setBusyDrop] = useState(false)
   const remember = useCallback((chosen: 'elk' | 'builtin') => setEngine(chosen), [])
 
   const control = simController
@@ -58,6 +69,7 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
   const simError = useSim((view) => view.error)
   const simDenied = useSim((view) => view.denied)
   const login = useSession(loginAt)
+  const allowed = useSession(canChange)
 
   useEffect(() => {
     let alive = true
@@ -120,22 +132,41 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
           {pattern.demo?.run.dt ?? 0} мс
         </p>
         <div className="pat-actions">
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled
-            title="Появится вместе с песочницей (#478, #479)"
-          >
-            Fork
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled
-            title="Появится вместе с песочницей (#478, #479)"
-          >
-            В песочницу
-          </button>
+          {/* Удаление -- единственное действие карточки, которое меняет
+              библиотеку, и без входа его тут нет вовсе: так же, как в каталоге
+              нет кнопки, которая вместо своей работы предлагает войти. */}
+          {allowed ? (
+            dropping ? (
+              <>
+                <span className="pat-ask">Удалить «{pattern.name}» насовсем?</span>
+                <button
+                  type="button"
+                  className="btn-secondary pat-drop"
+                  disabled={busyDrop}
+                  onClick={() => void drop()}
+                >
+                  Удалить
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setDropping(false)}
+                >
+                  Отмена
+                </button>
+              </>
+            ) : (
+              // Спрашиваем на месте, а не окном поверх экрана: действие
+              // необратимо, но и уводить внимание с карточки незачем.
+              <button
+                type="button"
+                className="btn-secondary pat-drop"
+                onClick={() => setDropping(true)}
+              >
+                Удалить
+              </button>
+            )
+          ) : null}
           <Transport
             state={state}
             time={time}
@@ -249,6 +280,31 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
       </div>
     </div>
   )
+
+  /**
+   * Удалить паттерн и уйти в библиотеку.
+   *
+   * Обратно на карточку возвращаться некуда: паттерна больше нет, а экран,
+   * который показывает удалённое, врёт. Каталог перечитается сам при открытии.
+   */
+  async function drop(): Promise<void> {
+    setBusyDrop(true)
+    try {
+      await deletePattern(id)
+      onBack()
+    } catch (reason) {
+      const failure = reason as Error
+      setBusyDrop(false)
+      setDropping(false)
+      // Отказ по входу -- это кончившаяся сессия: человек нажал и ждёт
+      // результата, а не приглашения нажать то же самое второй раз.
+      if (isDenied(failure)) {
+        goToLogin()
+        return
+      }
+      setError(failure.message)
+    }
+  }
 }
 
 /**

@@ -21,22 +21,26 @@ import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from . import ir
 from .compose import Composition, compose
 from .patterns import (
     CatalogLevel,
     DRAFT_LEVEL,
+    PORT_DIRECTIONS,
+    DemoRun,
     Endpoint,
     Link,
     Pattern,
     PatternError,
     PatternInstance,
+    Port,
     Sandbox,
     SandboxRecording,
     SandboxStimulus,
     extract_pattern,
+    suggest_ports,
 )
 from .sim import SimResult, simulate
 from .store import Store, to_plain
@@ -366,6 +370,100 @@ class Project:
     ) -> tuple[Pattern, list[str]]:
         """Выделение -> паттерн. Песочница остаётся как была."""
         return extract_pattern(self.sandbox, selection, name, level)
+
+    # --- проект -> паттерн библиотеки -------------------------------------
+
+    def port_hints(self) -> list[Port]:
+        """Догадка о портах для формы сохранения. Считается по собранной сети.
+
+        Имена в ней с приставкой блока (`ffi/E`), и это те же имена, которыми
+        порт потом ссылается на свою точку, -- поэтому догадка и считается после
+        сборки, а не по холсту.
+        """
+        return suggest_ports(compose(self.sandbox).model)
+
+    def as_pattern(
+        self,
+        name: str,
+        ports: list[Port],
+        level: CatalogLevel = DRAFT_LEVEL,
+        pattern_id: str | None = None,
+        taken: Iterable[str] = (),
+    ) -> Pattern:
+        """Проект песочницы -> паттерн библиотеки. Песочницу не меняет.
+
+        Тело паттерна -- собранная сеть, то есть ровно то, что считалось на
+        холсте. Стимулы, записи и параметры прогона уезжают в витрину (`demo`):
+        в чужую сеть они не поедут, а без них карточка откроется мёртвой --
+        сеть без драйва молчит, и запускать в ней нечего. Это и есть причина,
+        по которой сохранение идёт через сборку, а не через отдельный редактор.
+
+        Порты обязательны и приходят снаружи: имя порта видно всем, кто вставит
+        блок, и выбрать его должен человек. Разумное предложение считает
+        `port_hints`, но подставить его молча нельзя.
+        """
+        chosen = name.strip()
+        if not chosen:
+            raise PatternError("у паттерна должно быть имя")
+
+        built = compose(self.sandbox)
+        if built.problems:
+            # Сохранить несчитаемую схему -- значит положить в библиотеку то,
+            # что не откроется и не запустится. Ровно на это и жалуются.
+            raise PatternError(
+                "схема не считается, сохранять нечего:\n  "
+                + "\n  ".join(built.problems)
+            )
+
+        self._check_ports(ports, set(built.model.instances))
+
+        pattern = Pattern.from_model(
+            built.model,
+            id=pattern_id or Pattern.empty(chosen, taken=taken).id,
+            name=chosen,
+            ports=list(ports),
+            level=level,
+        )
+        if pattern.demo is None:
+            # Прогон -- часть витрины даже там, где стимулов нет: без него
+            # карточка покажет «прогон 0 мс», и время в ней никуда не пойдёт.
+            pattern.demo = DemoRun(run=copy.deepcopy(built.model.run))
+        # Готовность -- это факт, а не выбор в форме: паттерн с портами и
+        # нейронами подключается, и объявлять его черновиком незачем.
+        pattern.status = "draft" if pattern.validate() else "ready"
+        return pattern
+
+    @staticmethod
+    def _check_ports(ports: list[Port], known: set[str]) -> None:
+        """Порты до сохранения: названы, не повторяются и смотрят внутрь.
+
+        Проверка здесь, а не в `Pattern.validate`: та говорит, чего паттерну не
+        хватает, когда он уже лежит в библиотеке, а тут надо отказать до
+        записи -- иначе сохранение молча даст черновик с портом в никуда.
+        """
+        if not ports:
+            raise PatternError(
+                "паттерн без портов не подключить: назовите хотя бы один вход "
+                "или выход"
+            )
+        seen: set[str] = set()
+        for port in ports:
+            if not port.name.strip():
+                raise PatternError("у порта должно быть имя: его увидит каждый, "
+                                   "кто вставит блок")
+            if port.name in seen:
+                raise PatternError(f"порт {port.name!r} назван дважды")
+            seen.add(port.name)
+            if port.direction not in PORT_DIRECTIONS:
+                raise PatternError(
+                    f"у порта {port.name!r} направление {port.direction!r}, "
+                    f"а бывают: {', '.join(PORT_DIRECTIONS)}"
+                )
+            if port.site.instance not in known:
+                raise PatternError(
+                    f"порт {port.name!r} смотрит на {port.site.instance!r}, "
+                    f"которого в схеме нет; есть: {', '.join(sorted(known))}"
+                )
 
     # --- запуск и сохранение ---------------------------------------------
 

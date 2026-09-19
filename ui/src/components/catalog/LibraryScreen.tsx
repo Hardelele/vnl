@@ -5,15 +5,17 @@
  * количество в группе по своему фильтру значило бы завести вторую истину о
  * том, что подходит, -- и однажды показать «L2 (7)» над четырьмя карточками.
  *
- * «Добавить» сразу заводит черновик с рабочим именем: пустая форма имени
- * посреди каталога спрашивает то, чего человек ещё не решил, а переименование
- * -- дело карточки паттерна (#478).
+ * Заводить паттерны отсюда нельзя, и это решение, а не пропуск. Кнопка
+ * «Добавить» клала в библиотеку пустой черновик -- и дорога кончалась за ней:
+ * наполнить его было нечем, потому что редактора тела схемы нет и не будет.
+ * Схему собирают в песочнице и оттуда сохраняют паттерном («Сохранить как
+ * паттерн»); второй редактор означал бы две разные правды о том, как рисуют
+ * схему (#525).
  *
- * Смотреть каталог можно без входа, менять библиотеку -- нет. Правило не
- * объявляется: без сессии «Добавить» просто нет. Кнопка, которая вместо своей
- * работы предлагает войти, и подпись «заводить и удалять -- после входа» --
- * это разговор о том, чего человек не просил; вход есть в панели, и кому он
- * нужен, тот его найдёт (#518).
+ * Смотреть каталог можно без входа. Правило не объявляется: того, что требует
+ * входа, здесь просто нет. Кнопка, которая вместо своей работы предлагает
+ * войти, -- разговор о том, чего человек не просил; вход есть в панели, и кому
+ * он нужен, тот его найдёт (#518).
  */
 
 import { useEffect } from 'react'
@@ -21,12 +23,10 @@ import { useEffect } from 'react'
 import { PATTERNS, counted } from '../../lib/plural'
 import type { Catalog, Pattern, PatternStatus } from '../../model/types'
 import { catalogController, useCatalog } from '../../state/catalog'
-import { canChange, goToLogin, loginAt, useSession } from '../../state/session'
+import { loginAt, useSession } from '../../state/session'
 import { LoginHint } from '../shell/Login'
 import { PatternCard } from './PatternCard'
 import './library.css'
-
-const NEW_DRAFT_NAME = 'Новый паттерн'
 
 const STATUS_TABS: Array<{ id: PatternStatus | null; label: string }> = [
   { id: null, label: 'Все' },
@@ -41,7 +41,6 @@ export interface LibraryScreenProps {
 export function LibraryScreen({ onOpen }: LibraryScreenProps) {
   const state = useCatalog((current) => current)
   const control = catalogController
-  const allowed = useSession(canChange)
   const login = useSession(loginAt)
 
   useEffect(() => {
@@ -80,13 +79,6 @@ export function LibraryScreen({ onOpen }: LibraryScreenProps) {
               </button>
             ))}
           </div>
-          {/* Без сессии кнопки нет вовсе: нажимать её всё равно некуда, а
-              «войдите, чтобы добавить» -- предложение, о котором не просили. */}
-          {allowed ? (
-            <button type="button" className="btn-primary" onClick={() => void add()}>
-              Добавить
-            </button>
-          ) : null}
         </div>
       </header>
 
@@ -105,14 +97,6 @@ export function LibraryScreen({ onOpen }: LibraryScreenProps) {
       {catalog ? <Groups catalog={catalog} onOpen={onOpen} /> : null}
     </div>
   )
-
-  /** «Добавить»: новый черновик. Без сессии кнопки нет, но сессия могла кончиться. */
-  async function add(): Promise<void> {
-    await control.addDraft(NEW_DRAFT_NAME)
-    // Сессия могла кончиться, пока вкладка была открыта: человек нажал и ждёт
-    // результата, поэтому его ведут ко входу, а не просят нажать ещё раз.
-    if (catalogController.store.getState().denied) goToLogin()
-  }
 }
 
 function summary(catalog: Catalog | null, loading: boolean): string {
@@ -142,7 +126,8 @@ function Groups({
       <p className="lib-empty">
         {catalog.total
           ? 'Ничего не нашлось. Попробуйте другое слово или снимите фильтр.'
-          : 'Библиотека пуста. «Добавить» заведёт первый черновик.'}
+          : 'Библиотека пуста. Схему собирают в песочнице и сохраняют оттуда — ' +
+            'кнопкой «Сохранить как паттерн».'}
       </p>
     )
   }

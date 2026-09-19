@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react'
 
-import type { SandboxBlock } from '../../model/sandbox'
+import type { PatternDraft, SandboxBlock } from '../../model/sandbox'
 import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
 import { canChange, goToLogin, useSession } from '../../state/session'
@@ -27,6 +27,7 @@ import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { Canvas } from './Canvas'
 import { Properties, RunFields } from './Properties'
+import { SavePattern } from './SavePattern'
 import './sandbox.css'
 
 type LeftTab = 'library' | 'objects'
@@ -35,6 +36,8 @@ export function SandboxScreen() {
   const control = sandboxController
   const sim = simController
   const [tab, setTab] = useState<LeftTab>('library')
+  /** Открыта ли форма сохранения. Имя и порты спрашивают до записи. */
+  const [saving, setSaving] = useState(false)
 
   const list = useSandbox((state) => state.list)
   const project = useSandbox((state) => state.project)
@@ -42,6 +45,11 @@ export function SandboxScreen() {
   const pending = useSandbox((state) => state.pending)
   const error = useSandbox((state) => state.error)
   const denied = useSandbox((state) => state.denied)
+  const savedId = useSandbox((state) => state.saved?.id ?? null)
+  const savedName = useSandbox((state) => state.saved?.name ?? null)
+  const savedLevel = useSandbox((state) => state.saved?.levelName ?? null)
+  /** Идёт запрос к проекту. Имя своё: `busy` ниже -- про симуляцию. */
+  const keeping = useSandbox((state) => state.busy)
   const allowed = useSession(canChange)
 
   const catalog = useCatalog((state) => state.catalog)
@@ -207,6 +215,18 @@ export function SandboxScreen() {
         >
           Отменить
         </button>
+        {/* Отсюда схема попадает в библиотеку -- и только отсюда: второго
+            редактора схем нет, а пустой черновик наполнять было нечем (#525). */}
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            control.forgetSaved()
+            setSaving(true)
+          }}
+        >
+          Сохранить как паттерн
+        </button>
         <span className={`sb-dirty${project.dirty ? ' is-on' : ''}`}>
           {project.dirty ? 'не сохранено' : 'сохранено'}
         </span>
@@ -227,6 +247,24 @@ export function SandboxScreen() {
           Схема изменилась — на таймлайне прогон прежней. «Запустить» соберёт
           сеть заново.
         </p>
+      ) : null}
+      {/* Сохранение песочницу не меняет, поэтому без прямого «получилось»
+          нельзя понять, случилось ли оно. Имя и ступень -- те, что записаны. */}
+      {savedId && savedName ? (
+        <p className="sb-warn">
+          Паттерн «{savedName}» лежит в библиотеке{savedLevel ? ` — ${savedLevel}` : ''}.
+          Он есть во вкладке «Библиотека» слева: его можно вставить сюда же блоком.
+        </p>
+      ) : null}
+      {saving ? (
+        <SavePattern
+          projectName={project.name}
+          hints={project.portHints}
+          levels={catalog?.levels ?? []}
+          busy={keeping}
+          onCancel={() => setSaving(false)}
+          onSave={(draft) => void keep(draft)}
+        />
       ) : null}
       {pending ? (
         <p className="sb-warn">
@@ -371,6 +409,16 @@ export function SandboxScreen() {
       </div>
     </div>
   )
+
+  /** Сохранить проект паттерном. Форма закрывается только на удачном ответе. */
+  async function keep(draft: PatternDraft): Promise<void> {
+    if (await control.saveAsPattern(draft)) {
+      setSaving(false)
+      // Библиотеку слева перечитываем сразу: свежий паттерн должен появиться
+      // там, где его вставляют, а не после переключения вкладок.
+      void catalogController.refresh()
+    }
+  }
 
   async function start(): Promise<void> {
     // Симуляция открывается на первом запуске: собирать сеть до того, как её

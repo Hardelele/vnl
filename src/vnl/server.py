@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import __version__, api, auth
+from . import __version__, api, auth, ir
 from .catalog import Query
 from .compose import compose
 from .index import Index, IndexUnavailable
@@ -69,8 +69,8 @@ from .patterns import (
     DRAFT_LEVEL,
     LEVEL_NAMES,
     Endpoint,
-    Pattern,
     PatternError,
+    Port,
     Sandbox,
     SandboxRecording,
     SandboxStimulus,
@@ -137,20 +137,85 @@ class Api:
         return api.pattern_payload(self.store.load_pattern(pattern_id), body=True)
 
     def create_pattern(self, body: dict[str, Any]) -> dict[str, Any]:
-        """«Добавить»: пустой черновик, с которого начинается новая схема."""
-        name = str(body.get("name") or "").strip() or "Без имени"
+        """«Сохранить как паттерн»: проект песочницы ложится в библиотеку.
+
+        Раньше этот же маршрут заводил пустой черновик -- и на этом дорога
+        кончалась: наполнить его было нечем, потому что редактора тела схемы
+        нет и не будет. Схему собирают в песочнице, и оттуда она сохраняется
+        паттерном; второй редактор означал бы две разные правды о том, как
+        рисуют схему.
+
+        Маршрут остался тем же: «создать паттерн» -- это по-прежнему POST на
+        библиотеку, изменился только источник начинки. Имя, ступень и порты
+        приходят из формы: порт -- то, чем блок подключают снаружи, и называет
+        его человек, а не сервер.
+        """
+        sandbox_id = str(body.get("sandbox") or "")
+        if not sandbox_id:
+            raise PatternError(
+                "паттерн собирается в песочнице: нужно сказать, какую сохранять "
+                '-- {"sandbox": "<id>"}'
+            )
         # Ступень по умолчанию -- там же, где её знает остальной код: литерал
-        # здесь означал бы вторую истину, и при смене оси каталога черновики
+        # здесь означал бы вторую истину, и при смене оси каталога паттерны
         # молча поехали бы не на ту ступень.
         level = str(body.get("level") or DRAFT_LEVEL)
         if level not in LEVEL_NAMES:
             raise PatternError(
                 f"уровень {level!r} не из каталога: {', '.join(LEVEL_NAMES)}"
             )
-        taken = [item.id for item in self.store.patterns()]
-        pattern = Pattern.empty(name, level, taken)  # type: ignore[arg-type]
-        self.store.save_pattern(pattern)
+        project = self._project(sandbox_id)
+        pattern = project.as_pattern(
+            str(body.get("name") or "").strip() or project.sandbox.name,
+            self._ports(body.get("ports")),
+            level,  # type: ignore[arg-type]
+            pattern_id=str(body["id"]) if body.get("id") else None,
+            taken=[item.id for item in self.store.patterns()],
+        )
+        project.save_as_pattern(pattern)
         return api.pattern_payload(pattern, body=True)
+
+    @staticmethod
+    def _ports(data: Any) -> list[Port]:
+        """Порты из запроса. Вид тот же, что в ответе (`api.pattern_payload`).
+
+        Симметрия не украшение: интерфейс предлагает порты полем `portHints`
+        песочницы и возвращает их же, поправив имена, -- а разбирать в запросе
+        не то, что отдаётся в ответе, значит заводить два формата одного порта.
+        """
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            raise PatternError(
+                'порты передаются списком: {"ports": [{"name": "вход", '
+                '"direction": "in", "site": {"instance": "IN"}}]}'
+            )
+        ports: list[Port] = []
+        for item in data:
+            site = item.get("site") if isinstance(item, dict) else None
+            if not isinstance(item, dict) or not isinstance(site, dict):
+                raise PatternError(
+                    'порт пишется как {"name": "вход", "direction": "in", '
+                    '"site": {"instance": "IN", "section": "soma"}}'
+                )
+            if not site.get("instance"):
+                raise PatternError(
+                    f"у порта {item.get('name') or '?'} не сказано, на какую "
+                    "клетку он смотрит"
+                )
+            ports.append(
+                Port(
+                    name=str(item.get("name") or "").strip(),
+                    direction=str(item.get("direction") or "in"),  # type: ignore[arg-type]
+                    site=ir.Site(
+                        instance=str(site["instance"]),
+                        section=str(site.get("section") or "soma"),
+                        fraction=float(site.get("fraction", 0.5)),
+                    ),
+                    note=str(item.get("note") or ""),
+                )
+            )
+        return ports
 
     # --- симуляция --------------------------------------------------------
 

@@ -71,6 +71,15 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
     dirty: false,
     canUndo: false,
     problems: [],
+    // Что сервер предложит в форме «Сохранить как паттерн».
+    portHints: [
+      {
+        name: 'in_ffi_IN',
+        direction: 'in',
+        site: { instance: 'ffi/IN', section: 'soma', fraction: 0.5 },
+        note: 'входящих связей нет — похоже на вход',
+      },
+    ],
     fingerprint: 'abc123',
     updatedAt: '',
     ...patch,
@@ -202,5 +211,62 @@ describe('отказ по входу', () => {
     // человек не должен: сказать надо про вход, а не убрать работу.
     expect(state.denied).toBe(true)
     expect(state.project?.id).toBe('s1')
+  })
+})
+
+
+describe('сохранение паттерном', () => {
+  const PORT = {
+    name: 'вход',
+    direction: 'in' as const,
+    site: { instance: 'ffi/IN', section: 'soma', fraction: 0.5 },
+    note: '',
+  }
+
+  it('порты и ступень уходят как введены, а проект не подменяется', async () => {
+    const asPattern = vi
+      .fn()
+      .mockResolvedValue({ id: 'cepochka', name: 'Цепочка', levelName: 'Сети' })
+    const control = await opened({ asPattern })
+
+    const done = await control.saveAsPattern({
+      name: 'Цепочка',
+      level: 'L3',
+      ports: [PORT],
+    })
+
+    expect(done).toBe(true)
+    expect(asPattern).toHaveBeenCalledWith('s1', {
+      name: 'Цепочка',
+      level: 'L3',
+      ports: [PORT],
+    })
+    const state = control.store.getState()
+    // Песочница от сохранения не меняется: подменить её паттерном было бы
+    // неправдой о том, что сейчас на холсте.
+    expect(state.project?.id).toBe('s1')
+    // А вот сказать «получилось» обязательно: на экране иначе ничего не менялось.
+    expect(state.saved).toEqual({ id: 'cepochka', name: 'Цепочка', levelName: 'Сети' })
+  })
+
+  it('отказ сервера виден, и «получилось» не появляется', async () => {
+    const control = await opened({
+      asPattern: vi.fn().mockRejectedValue(new Error('паттерн без портов не подключить')),
+    })
+
+    const done = await control.saveAsPattern({ name: 'Никак', level: 'L0', ports: [] })
+
+    expect(done).toBe(false)
+    const state = control.store.getState()
+    expect(state.error).toContain('без портов')
+    expect(state.saved).toBeNull()
+  })
+
+  it('без открытого проекта ничего не посылает', async () => {
+    const asPattern = vi.fn()
+    const control = createSandboxController({ asPattern })
+
+    expect(await control.saveAsPattern({ name: 'x', level: 'L0', ports: [] })).toBe(false)
+    expect(asPattern).not.toHaveBeenCalled()
   })
 })

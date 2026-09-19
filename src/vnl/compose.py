@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 
 from . import ir
 from .patterns import (
+    NESTED,
     Endpoint,
     Link,
     PatternError,
@@ -31,7 +32,10 @@ from .patterns import (
     resolve_endpoint,
 )
 
-SEPARATOR = "/"
+#: Приставка блока в именах собранной сети. Значение одно на весь проект и
+#: живёт в `patterns.NESTED`: из него же собираются имена портов, и две копии
+#: разошлись бы на первой правке.
+SEPARATOR = NESTED
 
 
 @dataclass

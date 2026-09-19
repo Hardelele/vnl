@@ -145,29 +145,11 @@ export async function loadPattern(id: string, base?: string): Promise<PatternDet
 }
 
 /**
- * «Добавить»: пустой черновик, который сразу лежит в библиотеке.
+ * Удалить паттерн из библиотеки. Необратимо, поэтому спрашивают до вызова.
  *
- * Ступень по умолчанию -- первая ступень схем (`L0`), а не та, что выше:
- * черновик ещё ничего не умеет, и записывать его в «вычислительные примитивы»
- * (`L2`) значило бы обещать за автора. То же решение и на сервере
- * (`patterns.DRAFT_LEVEL`).
+ * Возврата нет и быть не должно: тело ответа -- только подтверждение, а
+ * состояние каталога после удаления перечитывается целиком.
  */
-export async function createDraft(
-  name: string,
-  level: Catalog['levels'][number]['id'] = 'L0',
-  base?: string,
-): Promise<PatternDetail> {
-  return ask<PatternDetail>(
-    '/patterns',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, level }),
-    },
-    base,
-  )
-}
-
 export async function deletePattern(id: string, base?: string): Promise<void> {
   await ask(`/patterns/${encodeURIComponent(id)}`, { method: 'DELETE' }, base)
 }

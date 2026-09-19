@@ -8,19 +8,19 @@
  *
  * Сам отбор по-прежнему делает сервер (`vnl/catalog.py`): здесь только строка
  * запроса и набор выбранных чипов.
+ *
+ * Менять библиотеку отсюда нельзя, и это не упущение. Схема собирается в
+ * песочнице и оттуда сохраняется паттерном (`model/sandbox.saveAsPattern`):
+ * прежняя кнопка «Добавить» заводила пустой черновик, который потом нечем было
+ * наполнить, -- дорога кончалась сразу за ней. Удаление живёт на карточке
+ * паттерна, там же, где видно, что именно удаляют (#525). Здесь -- только
+ * чтение каталога, и после удаления он перечитывается сам при возврате.
  */
 
 import { useSyncExternalStore } from 'react'
 
-import {
-  OfflineError,
-  createDraft,
-  deletePattern,
-  isDenied,
-  loadCatalog,
-  type CatalogQuery,
-} from '../model/catalog'
-import type { Catalog, CatalogLevel, PatternDetail, PatternStatus } from '../model/types'
+import { OfflineError, isDenied, loadCatalog, type CatalogQuery } from '../model/catalog'
+import type { Catalog, CatalogLevel, PatternStatus } from '../model/types'
 import { createStore, type Store } from './store'
 
 /** Пауза после набора: ждём, пока человек допишет слово, а не букву. */
@@ -47,16 +47,12 @@ export interface CatalogState {
 
 export interface CatalogPorts {
   load: (query: CatalogQuery) => Promise<Catalog>
-  add: (name: string, level: CatalogLevel) => Promise<PatternDetail>
-  drop: (id: string) => Promise<void>
   /** Отложенный вызов -- параметром, чтобы тест не ждал настоящие миллисекунды. */
   schedule: (run: () => void, delay: number) => () => void
 }
 
 const DEFAULT_PORTS: CatalogPorts = {
   load: (query) => loadCatalog(query),
-  add: (name, level) => createDraft(name, level),
-  drop: (id) => deletePattern(id),
   schedule: (run, delay) => {
     const timer = setTimeout(run, delay)
     return () => clearTimeout(timer)
@@ -84,8 +80,6 @@ export interface CatalogController {
   /** Переключатель «Все / Готов / Черновик»: выбран ровно один, `null` -- все. */
   pickStatus: (status: PatternStatus | null) => void
   clearFilters: () => void
-  addDraft: (name: string, level?: CatalogLevel) => Promise<PatternDetail | null>
-  remove: (id: string) => Promise<void>
   /** Отменить отложенный запрос: экран закрыли, ответ уже никому не нужен. */
   dispose: () => void
 }
@@ -99,7 +93,7 @@ function toggle<T>(values: T[], value: T): T[] {
 export function createCatalogController(
   ports: Partial<CatalogPorts> = {},
 ): CatalogController {
-  const { load, add, drop, schedule } = { ...DEFAULT_PORTS, ...ports }
+  const { load, schedule } = { ...DEFAULT_PORTS, ...ports }
   const store = createStore<CatalogState>({ ...EMPTY })
 
   // Номер запроса: ответ принимается только если он на последний вопрос.
@@ -172,36 +166,6 @@ export function createCatalogController(
     clearFilters() {
       store.setState({ text: '', levels: [], statuses: [] })
       void refresh()
-    },
-
-    // Ступень по умолчанию -- первая ступень схем: см. `createDraft` и
-    // `patterns.DRAFT_LEVEL`. Черновик не «вычислительный примитив» (`L2`).
-    async addDraft(name, level = 'L0') {
-      try {
-        const created = await add(name, level)
-        await refresh()
-        return created
-      } catch (reason) {
-        store.setState({
-          error: reason instanceof Error ? reason.message : String(reason),
-          offline: reason instanceof OfflineError,
-          denied: isDenied(reason),
-        })
-        return null
-      }
-    },
-
-    async remove(id) {
-      try {
-        await drop(id)
-      } catch (reason) {
-        store.setState({
-          error: reason instanceof Error ? reason.message : String(reason),
-          offline: reason instanceof OfflineError,
-          denied: isDenied(reason),
-        })
-      }
-      await refresh()
     },
 
     dispose() {
