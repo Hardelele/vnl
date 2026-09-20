@@ -436,7 +436,18 @@ class Api:
         return api.sandbox_payload(self._project(sandbox_id))
 
     def add_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Вставить паттерн блоком. В проект кладётся снимок, а не ссылка."""
+        """Вставить паттерн блоком. В проект кладётся снимок, а не ссылка.
+
+        `demo: true` -- переход с карточки паттерна (#526): вместе с блоком в
+        проект ложится его витрина -- стимулы, записи и параметры прогона --
+        настоящими объектами песочницы. Признак в теле, а не отдельный
+        маршрут: вставляется в обоих случаях один и тот же паттерн в тот же
+        проект, и второй маршрут пришлось бы держать в согласии с первым.
+
+        Умолчание -- «нет», и это не осторожность, а правило: вставка из
+        панели «Библиотека» кладёт молчащий блок (`patterns.adopt_demo`
+        разбирает, почему у двух дорог разный ответ).
+        """
         pattern_id = str(body.get("pattern") or "")
         if not pattern_id:
             raise PatternError("не сказано, что вставлять: нужен pattern")
@@ -446,6 +457,7 @@ class Api:
             self.store.load_pattern(pattern_id),
             label=body.get("label"),
             position=(float(position[0]), float(position[1])),
+            demo=bool(body.get("demo")),
         )
         return api.sandbox_payload(project)
 

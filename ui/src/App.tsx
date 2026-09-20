@@ -14,9 +14,16 @@
  * Роутера нет: экранов три, адресная строка локального инструмента никому не
  * нужна, а библиотека роутинга привела бы за собой собственное состояние рядом
  * с уже имеющимся.
+ *
+ * Переход с карточки паттерна в песочницу живёт здесь же (#526): переключить
+ * экран умеет только оболочка, а серверу об этом знать нечего -- вставку он
+ * принимает тем же маршрутом, что и кнопка «+» в панели «Библиотека».
+ * Оболочка при этом несёт ровно имя паттерна, а не вставляет его сама: в какой
+ * проект он ляжет, решает песочница -- она одна знает, открыт ли проект и что
+ * лежит в списке.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { LibraryScreen } from './components/catalog/LibraryScreen'
 import { PatternScreen } from './components/pattern/PatternScreen'
@@ -26,6 +33,7 @@ import { PATTERNS, counted } from './lib/plural'
 import { whenUnauthorized } from './model/catalog'
 import { useCatalog } from './state/catalog'
 import {
+  SANDBOX_LOCKED,
   canChange,
   goToLogin,
   logoutAt,
@@ -35,13 +43,20 @@ import {
   whoLabel,
 } from './state/session'
 
-/** Почему песочница закрыта. Тем же словом, что и панель на самом экране. */
-const SANDBOX_LOCKED = 'Песочница открыта после входа: это чужая работа, а не витрина'
-
 export function App() {
   const [screen, setScreen] = useState<Screen>('library')
   /** Открытый паттерн. Он же решает, что показывать поверх библиотеки. */
   const [pattern, setPattern] = useState<string | null>(null)
+  /**
+   * Паттерн, который несут с карточки в песочницу (#526).
+   *
+   * Отдельное состояние, а не `pattern`: карточку с экрана мы уводим, но
+   * просьба «положи его в проект» переживает этот уход и гаснет только тогда,
+   * когда песочница её исполнила. Иначе переход пришлось бы делать из
+   * карточки, а она не знает ни про открытый проект, ни про список.
+   */
+  const [carry, setCarry] = useState<string | null>(null)
+  const forget = useCallback(() => setCarry(null), [])
 
   // Из стора берутся только простые величины. Селектор, собирающий объект,
   // возвращал бы каждый раз новый -- а `useSyncExternalStore` считает это
@@ -105,6 +120,10 @@ export function App() {
             goToLogin()
             return
           }
+          // Уход по вкладке -- это отказ от того, что несли: человек выбрал
+          // другое место, и класть паттерн, о котором он уже передумал, в
+          // первый попавшийся проект было бы самодеятельностью.
+          setCarry(null)
           setPattern(null)
           setScreen(chosen)
         }}
@@ -116,9 +135,16 @@ export function App() {
           уносила бы за край как раз то, ради чего в неё и заходят (#504). */}
       <main className={`shell-screen${screen === 'sandbox' ? ' is-window' : ''}`}>
         {screen === 'sandbox' ? (
-          <SandboxScreen />
+          <SandboxScreen bring={carry} onBrought={forget} />
         ) : pattern ? (
-          <PatternScreen id={pattern} onBack={() => setPattern(null)} />
+          <PatternScreen
+            id={pattern}
+            onBack={() => setPattern(null)}
+            onToSandbox={() => {
+              setCarry(pattern)
+              setScreen('sandbox')
+            }}
+          />
         ) : (
           <LibraryScreen onOpen={setPattern} />
         )}

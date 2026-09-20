@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from vnl import ir
+from vnl.compose import compose
 from vnl.patterns import (
     Endpoint,
     Link,
@@ -17,6 +18,7 @@ from vnl.patterns import (
 )
 from vnl.project import Project
 from vnl.resolve import load
+from vnl.sim import simulate
 from vnl.store import Store, to_plain
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -1010,3 +1012,102 @@ def test_a_saved_sandbox_is_not_rewritten(project):
 
     assert project.sandbox.links[0].receptor == "ampa"
     assert any("old" in note for note in project.warnings()), project.warnings()
+
+
+# --- переход с карточки: витрина едет вместе с блоком (#526) --------------
+
+
+def test_the_library_insert_still_brings_a_silent_block(project, ffi):
+    """Правило прежнее: вставка из панели «Библиотека» драйва не тащит.
+
+    Блок, приехавший в чужую сеть со своим стимулом, спорил бы с тем входом,
+    ради которого его и ставят. Проверяется здесь, рядом с переходом с
+    карточки, чтобы два ответа на один вопрос разошлись заметно.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+
+    assert project.sandbox.stimuli == [] and project.sandbox.recordings == []
+    assert any("спайкать" in note for note in project.warnings()), project.warnings()
+
+
+def test_the_demo_travels_with_the_block_from_the_card(project, ffi):
+    """Переход с карточки: витрина ложится настоящими объектами проекта.
+
+    Цель -- внутренний узел блока (`a/IN`), а не порт: витрина нацелена на
+    клетки, и половина её (драйв на `I.soma`) ярлыка-порта не имеет вовсе.
+    """
+    project.insert_pattern(ffi, instance_id="a", demo=True)
+
+    drive = project.sandbox.stimuli[0]
+    assert drive.id == "a.drive"
+    assert drive.target.instance == "a/IN" and drive.target.port is None
+    assert drive.kind == "poisson" and drive.rate == 250.0
+    assert drive.amplitude == 1.5 and (drive.start, drive.stop) == (20.0, 380.0)
+
+    assert [rec.target.instance for rec in project.sandbox.recordings] == [
+        "a/IN",
+        "a/E",
+        "a/I",
+        "a/E",
+        "a/E",
+    ]
+    # Прогон -- паттерна, а не прежний проектный: драйв идёт до 380-й мс, и на
+    # двухсотмиллисекундном прогоне картина была бы не та, что на карточке.
+    assert project.sandbox.run.duration == 400.0 and project.sandbox.run.seed == 7
+    assert not project.warnings(), "драйв есть -- жаловаться не на что"
+
+
+def test_the_demo_does_not_get_into_the_body_of_the_block(project, ffi):
+    """Витрина едет экспериментом проекта, а не частью схемы.
+
+    Снимок блока остаётся тем же, что при обычной вставке: сохрани человек
+    проект паттерном, стимулы снова отделятся от конструкции.
+    """
+    block = project.insert_pattern(ffi, instance_id="a", demo=True)
+
+    assert block.snapshot.body.stimuli == []
+    assert block.snapshot.body.recordings == []
+    assert not compose(project.sandbox).model.contacts[0].id.startswith("drive")
+
+
+def test_undo_takes_the_demo_back_with_the_block(project, ffi):
+    """Один шаг истории на весь переход, а не три.
+
+    Иначе первое «Отменить» оставило бы драйв, целящийся в исчезнувший блок.
+    """
+    project.insert_pattern(ffi, instance_id="a", demo=True)
+    project.undo()
+
+    assert project.sandbox.instances == []
+    assert project.sandbox.stimuli == [] and project.sandbox.recordings == []
+    assert project.sandbox.run.duration == 200.0, "прогон вернулся проектный"
+
+
+def test_two_cards_bring_two_drives_that_can_be_told_apart(project, ffi):
+    """Имя стимула -- с приставкой блока: в дереве объектов они лежат вместе."""
+    project.insert_pattern(ffi, instance_id="a", demo=True)
+    project.insert_pattern(ffi, instance_id="b", demo=True)
+
+    assert [stim.id for stim in project.sandbox.stimuli] == ["a.drive", "b.drive"]
+    assert [stim.target.instance for stim in project.sandbox.stimuli] == [
+        "a/IN",
+        "b/IN",
+    ]
+
+
+def test_the_brought_demo_runs_the_same_as_the_card(project, ffi):
+    """Приёмка задачи: та же картина, что на карточке, при том же зерне.
+
+    Считается дважды -- витриной паттерна (`demo_model`, как её считает
+    карточка) и собранной песочницей, -- и счётчики спайков сверяются по
+    именам с точностью до приставки блока. Сверять надо именно спайки: они и
+    есть то, ради чего человек переходит с карточки, а совпадение чисел в
+    полях ещё не значит, что сеть ведёт себя так же.
+    """
+    project.insert_pattern(ffi, instance_id="a", demo=True)
+
+    card = simulate(ffi.demo_model()).spike_count()
+    yard = simulate(compose(project.sandbox).model).spike_count()
+
+    assert card, "на карточке сеть спайкает -- иначе сверять нечего"
+    assert {name.split("/", 1)[-1]: count for name, count in yard.items()} == card

@@ -213,12 +213,23 @@ export function openSandbox(id: string): Promise<SandboxState> {
   return ask<SandboxState>(at(id))
 }
 
+/**
+ * Вставить паттерн блоком.
+ *
+ * `demo` -- переход с карточки паттерна (#526): вместе с блоком в проект
+ * ложатся стимулы и записи витрины и параметры её прогона. Умолчание -- «нет»,
+ * и это не осторожность, а правило: кнопка «+» в панели «Библиотека» кладёт
+ * молчащий блок, потому что чужой драйв в собираемой сети спорил бы с тем
+ * входом, ради которого блок и ставят. Разбор -- на сервере, в
+ * `patterns.adopt_demo`: там же, где эти объекты и заводятся.
+ */
 export function addBlock(
   id: string,
   pattern: string,
   position: [number, number],
+  demo = false,
 ): Promise<SandboxState> {
-  return send<SandboxState>(`${at(id)}/blocks`, 'POST', { pattern, position })
+  return send<SandboxState>(`${at(id)}/blocks`, 'POST', { pattern, position, demo })
 }
 
 /**

@@ -596,6 +596,80 @@ def test_a_block_carries_the_snapshot_it_was_inserted_with(base):
     assert project["dirty"] is True
 
 
+def test_a_block_from_the_library_panel_stays_silent(base):
+    """Правило прежнее: вставка из панели «Библиотека» драйва не тащит (#526).
+
+    Стоит рядом с переходом с карточки нарочно: два ответа на один вопрос
+    обязаны расходиться заметно, а не по недосмотру.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+
+    assert project["stimuli"] == [] and project["recordings"] == []
+    assert any("спайкать" in note for note in project["warnings"]), project["warnings"]
+
+
+def test_a_block_from_the_card_brings_its_demo(base):
+    """Переход с карточки: витрина едет объектами проекта (#526).
+
+    Признак в теле запроса, а не отдельный маршрут: вставляется тот же паттерн
+    в тот же проект, и второй маршрут пришлось бы держать в согласии с первым.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "С карточки"})
+    status, project = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/blocks",
+        {"pattern": "ffi", "demo": True},
+    )
+    assert status == 201
+
+    block = project["blocks"][0]["id"]
+    drive = project["stimuli"][0]
+    assert drive["target"]["instance"] == f"{block}/IN"
+    assert drive["target"]["port"] is None
+    assert (drive["kind"], drive["rate"], drive["amplitude"]) == ("poisson", 250.0, 1.5)
+    assert (drive["start"], drive["stop"]) == (20.0, 380.0)
+    assert len(project["recordings"]) == 5
+    # Прогон -- паттерна: драйв идёт до 380-й мс, и на чужой длительности
+    # картина была бы не та, что на карточке.
+    assert project["run"]["duration"] == 400.0 and project["run"]["seed"] == 7
+    assert project["warnings"] == [], "драйв есть -- жаловаться не на что"
+
+    # Весь переход -- один шаг истории: иначе первое «Отменить» оставило бы
+    # драйв, целящийся в исчезнувший блок.
+    _, back = ask(base, "POST", f"/api/sandboxes/{project['id']}/undo")
+    assert back["blocks"] == [] and back["stimuli"] == [] and back["recordings"] == []
+
+
+def test_a_brought_demo_gives_the_same_picture_as_the_card(base):
+    """Приёмка #526: те же счётчики спайков, что на карточке, при том же зерне."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Сверка"})
+    _, project = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{project['id']}/blocks",
+        {"pattern": "ffi", "demo": True},
+    )
+    _, opened = ask(base, "POST", "/api/sim", {"sandbox": project["id"]})
+    _, card = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+
+    ask(base, "POST", f"/api/sim/{opened['id']}/seek", {"time": 400.0})
+    ask(base, "POST", f"/api/sim/{card['id']}/seek", {"time": 400.0})
+    _, yard_state = ask(base, "GET", f"/api/sim/{opened['id']}")
+    _, card_state = ask(base, "GET", f"/api/sim/{card['id']}")
+
+    def counts(state) -> dict[str, int]:
+        """Счётчики спайков с точностью до приставки блока: `ffi/E` и `E`."""
+        return {
+            name.split("/", 1)[-1]: len(times)
+            for name, times in state["spikes"].items()
+        }
+
+    assert sum(counts(card_state).values()) > 0, "иначе сверять нечего"
+    assert counts(yard_state) == counts(card_state)
+
+
 def test_connecting_two_blocks_makes_a_real_link(base):
     sandbox = sandbox_with_two_blocks(base)
     _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")

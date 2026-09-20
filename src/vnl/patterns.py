@@ -721,6 +721,95 @@ def _rewired(
     )
 
 
+def adopt_demo(
+    sandbox: Sandbox, block_id: str
+) -> tuple[list[SandboxStimulus], list[SandboxRecording]]:
+    """Витрина паттерна -> настоящие объекты проекта (#526).
+
+    Правило «стимулы не переезжают при вставке блока» (`Pattern.from_model`,
+    `DemoRun`) этим не отменяется, а уточняется по дороге, которой человек
+    пришёл. Вставка из панели «Библиотека» -- это «дай кусок схемы в мою сеть»,
+    и чужой драйв в ней лишний: он спорил бы с тем входом, ради которого блок
+    и ставят. Переход с карточки -- другая просьба: «дай мне то же самое, но
+    чтобы покрутить». Там витрина и есть предмет просьбы, и без неё блок
+    приезжает молчащим -- чтобы увидеть ровно то, что было на карточке,
+    человеку пришлось бы заводить драйв и подбирать числа заново.
+
+    Едет витрина не частью схемы, а экспериментом проекта: `SandboxStimulus` и
+    `SandboxRecording` лежат рядом с проектными, правятся той же панелью
+    свойств и снимаются как любые другие. В `body` снимка блока не попадает
+    ничего -- сохрани человек проект паттерном, витрина снова отделится
+    (`Project.as_pattern`).
+
+    Цель -- внутренний узел (`ffi/IN`), а не порт блока (`ffi.in`), даже когда
+    порт смотрит ровно туда же. Физически это одна точка (`resolve_endpoint`
+    разворачивает порт в неё же), но витрина нацелена на клетки, а порт --
+    удобный ярлык частой точки, выбранный автором паттерна: драйв на `I.soma`
+    ярлыка не имеет вовсе, и половина витрины адресовалась бы портами, а
+    половина узлами. Один род адреса на всю витрину честнее.
+
+    Параметры прогона тоже переезжают: витрина без них -- набор чисел про
+    другое время. Драйв ffi идёт с 20-й по 380-ю мс, и в проекте с прогоном по
+    умолчанию (500 мс, зерно 1) он дал бы не ту картину, что на карточке, --
+    а сверить её с карточкой и есть смысл перехода. Разобранная альтернатива --
+    оставить прогон проекта нетронутым: отвергнута потому, что тогда «то же
+    самое, но чтобы покрутить» получалось бы только после ручной подгонки трёх
+    чисел, то есть ровно той работы, от которой переход и избавляет. Цена --
+    прогон проекта, куда блок кладут вторым, меняется молча; она уплачена тем,
+    что вся операция -- один шаг истории и отменяется целиком.
+    """
+    block = sandbox.instance(block_id)
+    demo = block.snapshot.demo
+    if demo is None:
+        return [], []
+
+    def inside(site: ir.Site) -> Endpoint:
+        return Endpoint(
+            instance=f"{block_id}{NESTED}{site.instance}",
+            section=site.section,
+            fraction=site.fraction,
+        )
+
+    # Имя с приставкой блока: в дереве объектов стимулы проекта лежат общим
+    # списком, и два блока с витриной дали бы два «drive», про которые не
+    # видно, чей какой. Приставка -- тот же адрес, которым зовётся цель
+    # (`ffi/IN`), так что читается сразу. `_unique` поверх -- на случай, если
+    # такое имя человек уже занял руками.
+    taken_stimuli = {item.id for item in sandbox.stimuli}
+    taken_recordings = {item.id for item in sandbox.recordings}
+    stimuli: list[SandboxStimulus] = []
+    for stim in demo.stimuli:
+        chosen = _unique(f"{block_id}.{stim.id}", taken_stimuli)
+        taken_stimuli.add(chosen)
+        stimuli.append(
+            SandboxStimulus(
+                id=chosen,
+                target=inside(stim.target),
+                kind=stim.kind,
+                receptor=stim.receptor,
+                amplitude=stim.amplitude,
+                rate=stim.rate,
+                times=tuple(stim.times),
+                start=stim.start,
+                stop=stim.stop,
+            )
+        )
+
+    recordings: list[SandboxRecording] = []
+    for rec in demo.recordings:
+        chosen = _unique(f"{block_id}.{rec.id}", taken_recordings)
+        taken_recordings.add(chosen)
+        recordings.append(
+            SandboxRecording(id=chosen, target=inside(rec.target), var=rec.var)
+        )
+
+    sandbox.stimuli.extend(stimuli)
+    sandbox.recordings.extend(recordings)
+    sandbox.run = copy.deepcopy(demo.run)
+    sandbox.updated_at = _now()
+    return stimuli, recordings
+
+
 def extract_pattern(
     sandbox: Sandbox,
     selection: list[str],
