@@ -17,7 +17,9 @@
 
 import { useEffect, useState } from 'react'
 
+import { CELLS, counted } from '../../lib/plural'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
+import type { CellState } from '../../model/sim'
 import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
 import { canChange, goToLogin, useSession } from '../../state/session'
@@ -25,6 +27,7 @@ import { simController, useSim } from '../../state/sim'
 import { Thumbnail } from '../catalog/Thumbnail'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
+import { ActivityPanel } from './ActivityPanel'
 import { Canvas } from './Canvas'
 import { Properties, RunFields, where } from './Properties'
 import { SavePattern } from './SavePattern'
@@ -243,6 +246,11 @@ export function SandboxScreen() {
         </span>
       </header>
 
+      {/* Сообщения и формы -- своей полосой, а не в общем потоке экрана: экран
+          песочницы высотой ровно в окно и целиком не скроллится, поэтому
+          длинная форма сохранения должна прокручиваться внутри себя, а не
+          выдавливать холст с таймлайном за край (#504). */}
+      <div className="sb-notes">
       {error || simError ? (
         <p className="sb-alert" role="alert">
           {error ?? simError}
@@ -297,6 +305,7 @@ export function SandboxScreen() {
           </button>
         </p>
       ) : null}
+      </div>
 
       <div className="sb-body">
         <aside className="panel sb-left">
@@ -486,17 +495,6 @@ export function SandboxScreen() {
             onToggleBlock={(id) => control.toggleBlock(id)}
             onEmpty={() => control.select(null)}
           />
-          <Timeline
-            duration={duration || project.run.duration}
-            time={time}
-            dt={dt}
-            order={Object.keys(cells)}
-            spikes={spikes}
-            traces={traces}
-            inhibitory={inhibitory}
-            onSeek={(moment) => void sim.seek(moment)}
-            disabled={!duration}
-          />
         </section>
 
         <aside className="panel sb-right">
@@ -510,6 +508,25 @@ export function SandboxScreen() {
           <RunFields run={project.run} />
         </aside>
       </div>
+
+      {/* Таймлайн живёт в прибитой снизу панели, а не под холстом: иначе он
+          уезжает за край экрана вместе с транспортом. Транспорт при этом
+          остаётся в панели сверху -- она `flex:none` в окне фиксированной
+          высоты и не уезжает никуда, так что второй его экземпляр здесь был бы
+          вторым «управлением временем» на одном экране (#504). */}
+      <ActivityPanel summary={summary(cells, spikes, time, Boolean(duration))}>
+        <Timeline
+          duration={duration || project.run.duration}
+          time={time}
+          dt={dt}
+          order={Object.keys(cells)}
+          spikes={spikes}
+          traces={traces}
+          inhibitory={inhibitory}
+          onSeek={(moment) => void sim.seek(moment)}
+          disabled={!duration}
+        />
+      </ActivityPanel>
     </div>
   )
 
@@ -536,6 +553,27 @@ export function SandboxScreen() {
     }
     await sim.start()
   }
+}
+
+/**
+ * Что панель говорит о себе свёрнутой.
+ *
+ * Свёрнутая панель отдаёт холст схеме целиком, и строка в ней -- единственное,
+ * что остаётся от прогона на экране. Поэтому в ней то, ради чего таймлайн и
+ * разворачивают: сколько клеток и как часто они разряжаются. Частота средняя
+ * по клеткам -- панель в одну строку, и перечислить их все в ней негде.
+ */
+function summary(
+  cells: Record<string, CellState>,
+  spikes: Record<string, number[]>,
+  elapsed: number,
+  ran: boolean,
+): string {
+  const count = Object.keys(cells).length
+  if (!ran || count === 0) return 'прогона ещё не было'
+  const fired = Object.values(spikes).reduce((sum, times) => sum + times.length, 0)
+  const rate = elapsed > 0 ? (fired / count / elapsed) * 1000 : 0
+  return `${counted(count, CELLS)} · ${rate.toFixed(0)} Гц`
 }
 
 /** Имя нового проекта. Одинаковые имена в списке делают его бесполезным. */

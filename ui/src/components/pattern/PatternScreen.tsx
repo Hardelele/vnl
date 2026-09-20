@@ -35,7 +35,7 @@ import { simController, useSim } from '../../state/sim'
 import { LoginHint } from '../shell/Login'
 import { Inspector } from '../live/Inspector'
 import { LiveScheme } from '../live/LiveScheme'
-import { Timeline } from '../live/Timeline'
+import { TIMELINE_HINT, Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import './pattern.css'
 
@@ -203,6 +203,14 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
               selected={neuron}
               onPick={setNeuron}
             />
+          </div>
+          {/* Заголовок таймлайна даёт панель, а не он сам: на этом экране он
+              стоит внутри карточки схемы, и второй заголовок был бы вторым
+              заголовком в одной рамке. Жесты названы здесь же -- строка та же,
+              что в песочнице (#504). */}
+          <div className="panel-head">
+            <span className="panel-title">Активность сети</span>
+            <span className="mono panel-note">{TIMELINE_HINT}</span>
           </div>
           <Timeline
             duration={duration || (pattern.demo?.run.duration ?? 1)}

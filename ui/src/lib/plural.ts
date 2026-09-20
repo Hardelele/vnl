@@ -38,3 +38,5 @@ export const NEURONS: Forms = { one: 'нейрон', few: 'нейрона', many
 export const LINKS: Forms = { one: 'связь', few: 'связи', many: 'связей' }
 
 export const PORTS: Forms = { one: 'порт', few: 'порта', many: 'портов' }
+
+export const CELLS: Forms = { one: 'клетка', few: 'клетки', many: 'клеток' }
