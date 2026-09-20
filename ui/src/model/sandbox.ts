@@ -370,6 +370,20 @@ export function addRecording(id: string, target: EndpointRef): Promise<SandboxSt
   return send<SandboxState>(`${at(id)}/recordings`, 'POST', { target })
 }
 
+/**
+ * Разобрать блок: вместо коробки -- его клетки, связи и типы (#532).
+ *
+ * Операция обратная вставке паттерна. Тела у запроса нет: разбирают блок
+ * целиком, а имена клеткам подбирает сервер -- он один знает, что в проекте
+ * уже занято, и столкновение всплыло бы иначе только на запуске.
+ */
+export function ungroupBlock(id: string, object: string): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/objects/${encodeURIComponent(object)}/ungroup`,
+    'POST',
+  )
+}
+
 export function removeObject(id: string, object: string): Promise<SandboxState> {
   return send<SandboxState>(
     `${at(id)}/objects/${encodeURIComponent(object)}`,

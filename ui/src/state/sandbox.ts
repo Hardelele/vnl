@@ -37,6 +37,7 @@ import {
   setRunParams,
   setStimulusParams,
   undo,
+  ungroupBlock,
   type ContactParams,
   type DriveParams,
   type PatternDraft,
@@ -140,6 +141,7 @@ export interface SandboxPorts {
   record: typeof addRecording
   recordVar: typeof setRecordingVar
   run: typeof setRunParams
+  ungroup: typeof ungroupBlock
   remove: typeof removeObject
   undo: typeof undo
   save: typeof save
@@ -164,6 +166,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   record: addRecording,
   recordVar: setRecordingVar,
   run: setRunParams,
+  ungroup: ungroupBlock,
   remove: removeObject,
   undo,
   save,
@@ -373,6 +376,19 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       act((id) => io.recordVar(id, recording, variable)),
 
     setRun: (params: Partial<RunSpec>) => act((id) => io.run(id, params)),
+
+    /**
+     * Разобрать блок на клетки и связи (#532).
+     *
+     * Выделение снимается: блока с этим именем больше нет, и панель свойств
+     * показывала бы пустоту. Раскрытие тоже забывается -- раскрывать стало
+     * нечего.
+     */
+    ungroup: (block: string) =>
+      act((id) => io.ungroup(id, block), {
+        selected: null,
+        opened: store.getState().opened.filter((item) => item !== block),
+      }),
 
     remove: (object: string) => act((id) => io.remove(id, object), { selected: null }),
 

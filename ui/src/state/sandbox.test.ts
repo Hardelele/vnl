@@ -141,6 +141,22 @@ describe('настройки блока', () => {
   })
 })
 
+describe('разбор блока (#532)', () => {
+  it('снимает выделение и раскрытие: блока с этим именем больше нет', async () => {
+    const ungroup = vi.fn().mockResolvedValue(project({ blocks: [] }))
+    const control = await opened({ ungroup })
+    control.select({ kind: 'block', id: 'ffi' })
+    control.toggleBlock('ffi')
+
+    await control.ungroup('ffi')
+
+    expect(ungroup).toHaveBeenCalledWith('s1', 'ffi')
+    expect(control.store.getState().selected).toBeNull()
+    expect(control.store.getState().opened).toEqual([])
+    expect(control.store.getState().project?.blocks).toEqual([])
+  })
+})
+
 describe('настройки стимула и записи', () => {
   it('меняет частоту и окно драйва', async () => {
     const driveParams = vi.fn().mockResolvedValue(project())

@@ -43,6 +43,7 @@ from .patterns import (
     extract_pattern,
     suggest_ports,
     touches,
+    ungroup_block,
 )
 from .sim import SimResult, simulate
 from .store import Store, to_plain
@@ -433,6 +434,28 @@ class Project:
         sandbox.recordings = [
             r for r in sandbox.recordings if not touches(r.target, object_id)
         ]
+
+    def ungroup(self, block_id: str) -> list[str]:
+        """Разобрать блок: вместо коробки -- его клетки, связи и типы (#532).
+
+        Операция обратная вставке паттерна и симметричная `extract`: та
+        собирает паттерн из выбранного, эта раскладывает блок обратно. Нужна
+        там, где от паттерна нужна половина или его надо переделать на месте:
+        `fork` на этот вопрос не отвечает -- он кладёт правимую копию в
+        библиотеку, а речь про этот проект.
+
+        Шаг отмены один на всю операцию, поэтому «Отменить» возвращает блок
+        целиком, а не оставляет рассыпанные клетки: история хранит снимок
+        состояния, и снимается он здесь один раз -- до первой правки.
+
+        Само разворачивание живёт в `patterns.ungroup_block` рядом с `free_id`
+        и `extract_pattern`: имена холста раздаются там же, где раздаются имена
+        блокам и клеткам, и второе место, решающее «свободно ли имя», разошлось
+        бы с первым.
+        """
+        self.sandbox.instance(block_id)  # проверка до снимка истории
+        self._remember(f"разобран {block_id}")
+        return ungroup_block(self.sandbox, block_id)
 
     def stimulate(self, stimulus: SandboxStimulus) -> SandboxStimulus:
         self._remember(f"стимул {stimulus.id}")

@@ -732,6 +732,47 @@ def test_removing_a_block_takes_its_links(base):
     assert after["links"] == [], "связь висела на удалённом блоке"
 
 
+def test_a_block_is_taken_apart_into_cells_and_links(base):
+    """Разбор -- смена вида, а не схемы: ответ отдаёт песочницу целиком (#532)."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": first, "port": "in"}},
+    )
+    _, before = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+
+    status, after = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup"
+    )
+    assert status == 200
+    assert [block["id"] for block in after["blocks"]] == [second]
+    assert sorted(neuron["id"] for neuron in after["neurons"]) == ["E", "I", "IN"]
+    assert len(after["links"]) == 3
+    assert after["problems"] == []
+    # Драйв бил в порт `in`, то есть в IN, -- туда же он бьёт и теперь.
+    assert after["stimuli"][0]["target"]["instance"] == "IN"
+    assert after["stimuli"][0]["target"]["port"] is None
+    # Тормозная клетка осталась тормозной: тип приехал вместе с ней.
+    assert next(item for item in after["neurons"] if item["id"] == "I")["inhibitory"]
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert [block["id"] for block in undone["blocks"]] == [first, second]
+    assert undone["neurons"] == [] and len(undone["links"]) == 0
+    assert undone["fingerprint"] == before["fingerprint"], "отмена вернула ту же сеть"
+
+
+def test_ungroup_refuses_what_is_not_a_block(base):
+    sandbox = sandbox_with_two_blocks(base)
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr"})
+
+    assert ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/pyr/ungroup")[0] == 400
+    assert ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/нет/ungroup")[0] == 400
+
+
 def test_saving_puts_the_project_on_disk(base, tmp_path):
     sandbox = sandbox_with_two_blocks(base)
     _, saved = ask(base, "POST", f"/api/sandboxes/{sandbox}/save")
