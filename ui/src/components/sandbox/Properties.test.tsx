@@ -42,6 +42,10 @@ const GLOSSARY: Glossary = {
   cell: { tauM: 'За сколько мембрана забывает заряд.' },
   contact: { receptor: 'Чем контакт действует на цель.', weight: 'Сила контакта.' },
   port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
+  recorded: [
+    { id: 'v', name: 'мембранный потенциал', unit: 'мВ' },
+    { id: 'g_exc', name: 'возбуждающая проводимость', unit: 'нСм' },
+  ],
 }
 
 /** Каталог клеток -- ради `note`: текст написан в `vnl/cells.py`. */
@@ -140,7 +144,9 @@ const PROJECT = {
   neurons: [CELL],
   links: [],
   stimuli: [],
-  recordings: [],
+  recordings: [
+    { id: 'r1', target: { object: 'X', port: null }, var: 'g_exc' },
+  ],
 } as unknown as SandboxState
 
 let root: Root | null = null
@@ -447,5 +453,19 @@ describe('подписи расшифровываются подсказкой (
       (node) => node.textContent === 'mod',
     ) as HTMLElement
     expect(mod.title).toBe('Модуляция.')
+  })
+
+  it('величина записи выбирается из реестра сервера, а не из списка в коде', async () => {
+    // Имена величин уже написаны в `ir.RECORDED` -- по ним подписаны оси
+    // графика и колонки CSV. Свой список здесь значил бы, что новая величина
+    // появляется в симуляторе и не появляется в поле выбора (#546).
+    await mount({ selection: { kind: 'recording', id: 'r1' } })
+
+    const select = host.querySelector('select') as HTMLSelectElement
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      'мембранный потенциал',
+      'возбуждающая проводимость',
+    ])
+    expect(select.value).toBe('g_exc')
   })
 })

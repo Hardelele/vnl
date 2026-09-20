@@ -114,6 +114,18 @@ export interface Glossary {
   cell: Record<string, string>
   contact: Record<string, string>
   port: Record<string, string>
+  recorded: RecordedKind[]
+}
+
+/**
+ * Величина записи из реестра сервера (`ir.RECORDED`): как её звать и в чём
+ * мерить. Своего списка в браузере нет по той же причине, что и у рецепторов:
+ * подпись `g_exc` не должна значить на карточке одно, а на оси графика другое.
+ */
+export interface RecordedKind {
+  id: RecordedVar
+  name: string
+  unit: string
 }
 
 export interface ShortTermDynamics {

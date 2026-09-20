@@ -107,3 +107,32 @@
 .scheme-cell.is-pickable rect {
   cursor: pointer;
 }
+
+/* Выбранная связь -- та же, что подсвечена строкой в списке (#546). Цвет
+   выбора общий с клеткой, но линия ещё и утолщается: у линии нет заливки, и
+   один цвет на фоне схемы из трёх цветов читается хуже, чем у фигуры. */
+.scheme-link.is-on path:not(.scheme-hit) {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.scheme-link.is-on .scheme-cap {
+  fill: var(--accent);
+}
+
+.scheme-link.is-inh.is-on .scheme-cap {
+  fill: none;
+  stroke: var(--accent);
+}
+
+/* Полоса попадания: шире линии, невидима и ловит только штрих, а не
+   прямоугольник вокруг ломаной, -- иначе она перекрывала бы соседние связи. */
+.scheme-link path.scheme-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+}
+
+.scheme-link.is-pickable {
+  cursor: pointer;
+}

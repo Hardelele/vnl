@@ -11,7 +11,7 @@
  * ровно столько, сколько параметров у модели: они будут только прибывать.
  */
 
-import { NO_GLOSSARY } from '../../model/glossary'
+import { NO_GLOSSARY, receptorNote } from '../../model/glossary'
 import type { CellState } from '../../model/sim'
 import type {
   DriveKind,
@@ -36,21 +36,6 @@ import { sandboxController, type Selection } from '../../state/sandbox'
 import { Vitals } from '../live/Vitals'
 
 /**
- * Подсказка к рецептору: объяснение плюс его же числа.
- *
- * Числа берутся из полей ответа, а не пересказываются словами: реверсал и спад
- * -- те самые, по которым синапс и считается, и повтори их в тексте, правка
- * `tau_decay` оставила бы в подсказке старое число.
- */
-function receptorHint(receptor: {
-  note: string
-  reversal: number
-  tauDecay: number
-}): string {
-  return `${receptor.note} Реверсал ${receptor.reversal} мВ, спад ${receptor.tauDecay} мс.`
-}
-
-/**
  * Список рецепторов для поля выбора.
  *
  * Своего списка в браузере нет: он приходит из `ir.RECEPTORS` вместе с
@@ -66,7 +51,7 @@ function receptorOptions(
   return glossary.receptors.map((item) => ({
     id: item.id,
     name: item.id,
-    note: receptorHint(item),
+    note: receptorNote(item),
   }))
 }
 
@@ -83,15 +68,21 @@ function cellHint(palette: CellKind[], type: string): string | undefined {
   return kind.note ? `${kind.name}. ${kind.note}` : kind.name
 }
 
-/** Что можно записывать: реестр живёт в `ir.RECORDED`. */
-const RECORDED: Array<{ id: RecordedVar; name: string }> = [
-  { id: 'v', name: 'потенциал' },
-  { id: 'g', name: 'проводимость' },
-  { id: 'g_exc', name: 'возбуждение' },
-  { id: 'g_inh', name: 'торможение' },
-  { id: 'w', name: 'вес' },
-  { id: 'spikes', name: 'спайки' },
-]
+/**
+ * Что можно записывать. Список приходит из реестра сервера (`ir.RECORDED`) тем
+ * же ответом, что и рецепторы: своя копия имён здесь значила бы, что новая
+ * величина появляется в симуляторе и не появляется в поле выбора.
+ *
+ * Пока словаря нет, в списке стоит одно текущее значение -- по тому же
+ * правилу, что и у рецепторов: поле обязано показывать то, что в проекте.
+ */
+function recordedOptions(
+  glossary: Glossary,
+  value: RecordedVar,
+): Array<{ id: RecordedVar; name: string }> {
+  if (!glossary.recorded.length) return [{ id: value, name: value }]
+  return glossary.recorded.map((item) => ({ id: item.id, name: item.name }))
+}
 
 /** Правятся только числа: род модели (`kind`) -- это другой солвер, не поле. */
 type CellField = Exclude<keyof PointModel, 'kind'>
@@ -262,7 +253,7 @@ export function Properties({
   }
 
   const record = project.recordings.find((item) => item.id === selection.id)
-  return record ? <RecordProps record={record} /> : null
+  return record ? <RecordProps record={record} glossary={glossary} /> : null
 }
 
 function BlockProps({
@@ -713,7 +704,13 @@ function DriveProps({
   )
 }
 
-function RecordProps({ record }: { record: SandboxRecording }) {
+function RecordProps({
+  record,
+  glossary,
+}: {
+  record: SandboxRecording
+  glossary: Glossary
+}) {
   const control = sandboxController
   return (
     <>
@@ -724,7 +721,7 @@ function RecordProps({ record }: { record: SandboxRecording }) {
       <SelectField<RecordedVar>
         label="Величина"
         value={record.var}
-        options={RECORDED}
+        options={recordedOptions(glossary, record.var)}
         onChange={(value) => void control.setRecord(record.id, value)}
       />
       <Remove what="запись" id={record.id} />

@@ -1,5 +1,5 @@
 /**
- * Карточка паттерна: удаление и то, чего на ней больше нет.
+ * Карточка паттерна: выбор связи, драйв на виду и удаление.
  *
  * Здесь настоящий React и настоящий разбор ответов, потому что проверяется
  * именно то, что видно на экране: есть ли кнопка, спрашивает ли она, уходит ли
@@ -16,9 +16,64 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PatternScreen } from './PatternScreen'
 import type { SessionInfo } from '../../model/session'
-import type { PatternDetail } from '../../model/types'
+import type { Contact, Glossary, PatternDetail } from '../../model/types'
 import { session } from '../../state/session'
 
+/** Контакт целиком: в ответе сервера у него есть и динамика, и пластичность. */
+function contact(part: Partial<Contact> & { id: string }): Contact {
+  return {
+    pre: { instance: 'IN', section: 'soma', fraction: 0.5 },
+    post: { instance: 'E', section: 'soma', fraction: 0.5 },
+    receptor: 'ampa',
+    inhibitory: false,
+    reversal: 0,
+    tauDecay: 2,
+    weight: 1,
+    delay: 1,
+    dynamics: { enabled: false, u: 0.5, tauRec: 0, tauFacil: 0 },
+    plasticity: {
+      enabled: false,
+      rule: 'none',
+      aPlus: 0.01,
+      aMinus: 0.012,
+      tauPlus: 20,
+      tauMinus: 20,
+      wMax: 5,
+      wMin: 0,
+      tauEligibility: 500,
+      modulator: null,
+    },
+    ...part,
+  }
+}
+
+/** Расшифровка подписей: та же, что отдаёт `GET /api/glossary`. */
+const GLOSSARY: Glossary = {
+  schema: 1,
+  receptors: [
+    { id: 'ampa', note: 'Быстрое возбуждение.', reversal: 0, tauDecay: 2, inhibitory: false },
+    {
+      id: 'gaba_a',
+      note: 'Быстрое торможение.',
+      reversal: -70,
+      tauDecay: 6,
+      inhibitory: true,
+    },
+  ],
+  cell: {},
+  contact: { receptor: 'Чем контакт действует на цель.' },
+  port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
+  recorded: [
+    { id: 'v', name: 'мембранный потенциал', unit: 'мВ' },
+    { id: 'g_exc', name: 'возбуждающая проводимость', unit: 'нСм' },
+  ],
+}
+
+/**
+ * `ffi` -- тот же, что лежит в библиотеке: три клетки, тормозный контакт `c3`
+ * и пуассоновский драйв в `IN.soma`. Числа настоящие, потому что проверяется
+ * именно то, что человек прочтёт на витрине.
+ */
 const PATTERN: PatternDetail = {
   id: 'ffi',
   name: 'Feed-forward inhibition',
@@ -27,9 +82,43 @@ const PATTERN: PatternDetail = {
   status: 'ready',
   statusName: 'Готов',
   ports: [],
-  counts: { neurons: 1, contacts: 0, ports: 0 },
-  scheme: { neurons: [{ id: 'IN', inhibitory: false }], edges: [] },
-  demo: null,
+  counts: { neurons: 3, contacts: 3, ports: 0 },
+  scheme: {
+    neurons: [
+      { id: 'IN', inhibitory: false },
+      { id: 'E', inhibitory: false },
+      { id: 'I', inhibitory: true },
+    ],
+    edges: [
+      { id: 'c1', from: 'IN', to: 'E', kind: 'exc' },
+      { id: 'c2', from: 'IN', to: 'I', kind: 'exc' },
+      { id: 'c3', from: 'I', to: 'E', kind: 'inh' },
+    ],
+  },
+  demo: {
+    stimuli: [
+      {
+        id: 'drive',
+        target: { instance: 'IN', section: 'soma', fraction: 0.5 },
+        kind: 'poisson',
+        receptor: 'ampa',
+        amplitude: 1.5,
+        rate: 250,
+        times: [],
+        start: 20,
+        stop: 380,
+      },
+    ],
+    recordings: [
+      {
+        id: 'r4',
+        target: { instance: 'E', section: 'soma', fraction: 0.5 },
+        var: 'g_exc',
+        key: 'E.soma:g_exc',
+      },
+    ],
+    run: { dt: 0.1, duration: 400, level: 'L1', seed: 7 },
+  },
   problems: [],
   createdAt: '',
   updatedAt: '',
@@ -38,11 +127,74 @@ const PATTERN: PatternDetail = {
     source: '',
     run: { dt: 0.1, duration: 400, level: 'L1', seed: 7 },
     cellTypes: {},
-    neurons: [{ id: 'IN', cellType: 'relay', tags: [], inhibitory: false }],
-    contacts: [],
+    neurons: [
+      { id: 'IN', cellType: 'relay', tags: [], inhibitory: false },
+      { id: 'E', cellType: 'pyr_l5', tags: [], inhibitory: false },
+      { id: 'I', cellType: 'pv', tags: [], inhibitory: true },
+    ],
+    contacts: [
+      contact({
+        id: 'c1',
+        post: { instance: 'E', section: 'dend.apical[1]', fraction: 0.6 },
+        weight: 3,
+      }),
+      contact({
+        id: 'c2',
+        post: { instance: 'I', section: 'soma', fraction: 0.5 },
+        weight: 1.5,
+      }),
+      contact({
+        id: 'c3',
+        pre: { instance: 'I', section: 'soma', fraction: 0.5 },
+        receptor: 'gaba_a',
+        inhibitory: true,
+        reversal: -70,
+        tauDecay: 6,
+        weight: 0.9,
+        delay: 1.4,
+      }),
+    ],
     modulators: [],
     stimuli: [],
     recordings: [],
+  },
+}
+
+/**
+ * `short_term_depression`: драйв -- пачка из восьми спайков, а контакт с
+ * кратковременной динамикой. Ни того, ни другого по схеме не видно.
+ */
+const BURST: PatternDetail = {
+  ...PATTERN,
+  id: 'short_term_depression',
+  name: 'Short-term depression',
+  demo: {
+    stimuli: [
+      {
+        id: 'burst',
+        target: { instance: 'IN', section: 'soma', fraction: 0.5 },
+        kind: 'spikes',
+        receptor: 'ampa',
+        amplitude: 3,
+        rate: 0,
+        times: [50, 70, 90, 110, 130, 150, 170, 190],
+        start: 0,
+        stop: 300,
+      },
+    ],
+    recordings: [],
+    run: { dt: 0.1, duration: 300, level: 'L1', seed: 1 },
+  },
+  body: {
+    ...PATTERN.body,
+    contacts: [
+      contact({
+        id: 'c1',
+        post: { instance: 'DEP', section: 'soma', fraction: 0.5 },
+        weight: 1.2,
+        dynamics: { enabled: true, u: 0.6, tauRec: 400, tauFacil: 0 },
+      }),
+    ],
   },
 }
 
@@ -63,6 +215,8 @@ const ANONYMOUS: SessionInfo = {
 /** Что записали в хранилище: путь и метод каждого запроса. */
 let calls: Array<[string, string]>
 let deleteReply: { body: unknown; status: number }
+/** Какой паттерн отдаёт сервер: `ffi` или пачка. */
+let served: PatternDetail
 
 function serve(): void {
   calls = []
@@ -75,7 +229,8 @@ function serve(): void {
       if (method === 'DELETE' && path.startsWith('/api/patterns/')) {
         return json(deleteReply.body, deleteReply.status)
       }
-      if (path.startsWith('/api/patterns/')) return json(PATTERN)
+      if (path.startsWith('/api/glossary')) return json(GLOSSARY)
+      if (path.startsWith('/api/patterns/')) return json(served)
       // Симуляция карточки: пустая сессия на паузе -- её тут не проверяют.
       if (path.startsWith('/api/sim')) {
         return json({
@@ -125,6 +280,35 @@ function button(label: string): HTMLButtonElement | undefined {
   ) as HTMLButtonElement | undefined
 }
 
+/** Строка связи по её адресу: «I ⊣ E.soma». */
+function linkRow(text: string): HTMLButtonElement {
+  const found = [...host.querySelectorAll('button.row')].find((node) =>
+    node.querySelector('.row-path')?.textContent?.includes(text),
+  )
+  if (!found) throw new Error(`нет строки связи «${text}»`)
+  return found as HTMLButtonElement
+}
+
+/** Панель выбранного: инспектор клетки или связи -- она в колонке одна. */
+function panel(): string {
+  return host.querySelector('.insp')?.textContent ?? ''
+}
+
+/** Текст панели с таким заголовком: «Драйв», «Записи», «Связи». */
+function section(title: string): string {
+  const found = [...host.querySelectorAll('.panel')].find(
+    (node) => node.querySelector('.panel-title')?.textContent === title,
+  )
+  if (!found) throw new Error(`нет панели «${title}»`)
+  return found.textContent ?? ''
+}
+
+async function press(node: Element): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+}
+
 async function click(label: string): Promise<void> {
   const found = button(label)
   if (!found) throw new Error(`нет кнопки «${label}»`)
@@ -135,6 +319,7 @@ async function click(label: string): Promise<void> {
 
 beforeEach(() => {
   deleteReply = { body: { deleted: 'ffi' }, status: 200 }
+  served = PATTERN
   serve()
 })
 
@@ -212,5 +397,117 @@ describe('чего на карточке больше нет', () => {
 
     expect(button('Fork')).toBeUndefined()
     expect(button('В песочницу')).toBeUndefined()
+  })
+})
+
+describe('связь выбирается и показана целиком', () => {
+  it('щелчок по строке связи показывает рецептор, вес и задержку', async () => {
+    // Раньше строка была `div`: три числа в ней стояли, рецептора не было
+    // вовсе, а щёлкнуть по ней было нельзя -- при том, что строка клетки
+    // рядом, в той же колонке, выбиралась.
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    await press(linkRow('I ⊣ E.soma'))
+
+    const said = panel()
+    expect(said).toContain('gaba_a')
+    expect(said).toContain('0.9 нСм')
+    expect(said).toContain('1.4 мс')
+    expect(said).toContain('I.soma ⊣ E.soma')
+  })
+
+  it('щелчок по связи на схеме выделяет ту же строку', async () => {
+    // Одно выделение на экран: схема и список показывают выбранным одно и то
+    // же, иначе «выбрано» значило бы разное в двух местах одной карточки.
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    // Тормозная связь на схеме -- та же `c3`, что и в строке: ELK в jsdom не
+    // грузится, рисуется встроенная расстановка, и связи на месте.
+    const edge = host.querySelector('.scheme-link.is-inh')
+    expect(edge).not.toBeNull()
+    await press(edge!)
+
+    expect(linkRow('I ⊣ E.soma').classList.contains('is-on')).toBe(true)
+    expect(host.querySelector('.scheme-link.is-inh')?.classList.contains('is-on')).toBe(
+      true,
+    )
+    expect(panel()).toContain('gaba_a')
+  })
+
+  it('адрес показан с участком и долей, если это не середина сомы', async () => {
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    await press(linkRow('dend.apical[1]@0.6'))
+
+    expect(panel()).toContain('IN.soma → E.dend.apical[1]@0.6')
+  })
+
+  it('рецептор объясняется строкой из общего словаря', async () => {
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    const hint = linkRow('I ⊣ E.soma').querySelector('[title]')?.getAttribute('title')
+    expect(hint).toContain('Быстрое торможение')
+    // Числа -- из полей ответа, а не пересказаны словами.
+    expect(hint).toContain('-70 мВ')
+  })
+
+  it('связь и клетка не бывают выбраны сразу вдвоём', async () => {
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    await press(linkRow('I ⊣ E.soma'))
+    expect(panel()).toContain('Связь')
+    expect(panel()).not.toContain('Клетка')
+  })
+
+  it('динамика контакта названа там, где она есть', async () => {
+    // Без неё `short_term_depression` на витрине неотличим от обычной цепочки:
+    // адрес, вес и задержка у них совпадают.
+    served = BURST
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    await press(linkRow('IN → DEP.soma'))
+
+    expect(panel()).toContain('спайк тратит 60% запаса')
+    expect(panel()).toContain('восстановление 400 мс')
+  })
+})
+
+describe('драйв и записи видны', () => {
+  it('шум рассказан числами и окном, а не полями JSON', async () => {
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    const said = section('Драйв')
+    expect(said).toContain('IN.soma')
+    expect(said).toContain('пуассоновский шум 250 Гц, вес 1.5 нСм')
+    expect(said).toContain('с 20 по 380 мс')
+  })
+
+  it('спайковый драйв -- список моментов, а не шум', async () => {
+    served = BURST
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    const said = section('Драйв')
+    expect(said).toContain('список спайков, вес 3 нСм')
+    expect(said).toContain('8 моментов: 50, 70, 90, 110, 130, 150, 170, 190 мс')
+    expect(said).not.toContain('Гц')
+    // Окно во весь прогон -- не окно: `stop` у такого стимула обрезан по
+    // длительности, и «по 300 мс» выдало бы обрезку за решение автора.
+    expect(said).not.toContain('по 300 мс')
+  })
+
+  it('запись названа словом из словаря, а не ключом трассы', async () => {
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    expect(section('Записи')).toContain('возбуждающая проводимость, нСм')
+    expect(section('Записи')).toContain('E.soma')
   })
 })
