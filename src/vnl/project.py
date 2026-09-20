@@ -40,6 +40,7 @@ from .patterns import (
     SandboxNeuron,
     SandboxRecording,
     SandboxStimulus,
+    cell_type_at,
     extract_pattern,
     suggest_ports,
     touches,
@@ -228,9 +229,31 @@ class Project:
         link_id: str | None = None,
         **params: Any,
     ) -> Link:
+        """Связь между двумя точками холста.
+
+        Рецептор, если его не назвали, берётся по медиатору источника (#540):
+        `gaba` -> `gaba_a`, `glutamate` -> `ampa`, `acetylcholine` ->
+        `nicotinic`. Раньше умолчание было одно на всех -- `ampa` из
+        `Link`, -- и связь от тормозной клетки молча выходила быстрой
+        возбуждающей: человек рисовал контакт от красной квадратной клетки и
+        получал ровно обратное тому, что видел.
+
+        Считается здесь, а не в интерфейсе: соответствие «медиатор ->
+        рецептор» -- предметное знание (`ir.TRANSMITTER_RECEPTORS`), и его
+        вторая копия в браузере разошлась бы с первой незаметно. Заодно то же
+        умолчание достаётся CLI и Claude через MCP -- они тоже зовут `connect`.
+
+        Умолчание, а не запрет: названный рецептор проходит как есть, а про
+        спор рецептора с медиатором скажет предупреждение сборки.
+        """
         chosen = link_id or self._free_link_id()
         if any(link.id == chosen for link in self.sandbox.links):
             raise PatternError(f"связь {chosen!r} уже есть")
+        if "receptor" not in params:
+            source_type = cell_type_at(self.sandbox, source)
+            params["receptor"] = ir.default_receptor(
+                source_type.transmitter if source_type else None
+            )
         self._remember(f"связь {chosen}")
         link = Link(id=chosen, source=source, target=target, **params)
         self.sandbox.links.append(link)

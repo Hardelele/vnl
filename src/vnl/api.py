@@ -19,7 +19,7 @@ from typing import Any, Sequence
 
 from . import ir
 from .catalog import STATUS_NAMES, Query, facets, search
-from .patterns import LEVEL_NAMES
+from .patterns import LEVEL_NAMES, PORT_NOTES
 from .sim import SimResult
 
 # Версия формата. Фронтенд проверяет её и отказывается читать чужое.
@@ -463,6 +463,50 @@ def cell_payload(cell: Any) -> dict[str, Any]:
         "source": cell.source,
         "pointModel": _point_model(cell_type.point_model),
         "morphology": _morphology(cell_type.morphology),
+    }
+
+
+def glossary_payload() -> dict[str, Any]:
+    """Расшифровка подписей песочницы: рецепторы, мембрана, контакт, порты.
+
+    Одним ответом, потому что вопрос один: «что значит то, что написано на
+    экране». Три запроса вместо одного заставили бы панель свойств знать, какая
+    часть её подписей объясняется откуда, -- а для человека это одно и то же.
+
+    Тексты сюда не пишутся: каждый лежит рядом со своим предметом
+    (`ir.RECEPTORS`, `ir.POINT_NOTES`, `ir.CONTACT_NOTES`,
+    `patterns.PORT_NOTES`), и здесь они только собираются в ответ. Второе место,
+    где написано, что такое `gaba_a`, разошлось бы с первым незаметно: подсказка
+    ни на один прогон не влияет и на тестах прогона не всплыла бы.
+
+    Каталога клеток здесь нет намеренно: у клетки объяснение уже есть -- `note`
+    в `/api/cells`, -- и повторять его вторым ответом значило бы завести о
+    пирамиде две правды.
+
+    Имена полей мембраны -- те же, что в `pointModel` (`POINT_FIELDS`): ключ,
+    по которому интерфейс берёт число, и ключ, по которому он берёт подсказку,
+    обязаны совпадать, иначе подпись однажды объяснит соседнее поле.
+    """
+    field_names = {field: name for name, field in POINT_FIELDS.items()}
+    return {
+        "schema": SCHEMA_VERSION,
+        "receptors": [
+            {
+                "id": name,
+                "note": receptor.note,
+                "reversal": receptor.reversal,
+                "tauDecay": receptor.tau_decay,
+                "inhibitory": ir.is_inhibitory_receptor(name),
+            }
+            for name, receptor in ir.RECEPTORS.items()
+        ],
+        "cell": {
+            field_names[field]: note
+            for field, note in ir.POINT_NOTES.items()
+            if field in field_names
+        },
+        "contact": dict(ir.CONTACT_NOTES),
+        "port": dict(PORT_NOTES),
     }
 
 

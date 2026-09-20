@@ -92,7 +92,8 @@ def _syn_mech_params(model: ir.Model) -> dict:
     used |= {stim.receptor for stim in model.stimuli if stim.kind != "current"}
     out: dict = {}
     for receptor in sorted(used):
-        reversal, tau_decay = ir.RECEPTORS[receptor]
+        kind = ir.RECEPTORS[receptor]
+        reversal, tau_decay = kind.reversal, kind.tau_decay
         out[receptor] = {
             "mod": "Exp2Syn",
             "tau1": max(0.1, tau_decay / 10.0),

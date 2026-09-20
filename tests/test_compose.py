@@ -275,3 +275,71 @@ def test_empty_sandbox_says_it_once(ffi):
     считать», и «нечем спайкать».
     """
     assert compose(Sandbox(id="s0", name="Пусто")).warnings == []
+
+
+# --- рецептор спорит с медиатором источника (#540) -------------------------
+
+
+def pair(receptor: str) -> Sandbox:
+    """Тормозная клетка и пирамида, связанные названным рецептором."""
+    sandbox = Sandbox(id="s540", name="Спор")
+    sandbox.cell_types["sst"] = ir.CellType(
+        id="sst", tags=("inhibitory",), transmitter="gaba"
+    )
+    sandbox.cell_types["pyr"] = ir.CellType(
+        id="pyr", tags=("excitatory",), transmitter="glutamate"
+    )
+    sandbox.neurons["SST"] = SandboxNeuron(id="SST", cell_type="sst")
+    sandbox.neurons["PYR"] = SandboxNeuron(id="PYR", cell_type="pyr")
+    sandbox.links.append(
+        Link("l3", Endpoint("SST"), Endpoint("PYR"), receptor=receptor)
+    )
+    sandbox.stimuli.append(SandboxStimulus(id="drive", target=Endpoint("SST")))
+    return sandbox
+
+
+def test_an_excitatory_receptor_on_an_inhibitory_source_is_named_aloud():
+    """Не отказ, а предупреждение: нарочные сочетания бывают (#540).
+
+    Сказать надо и какая связь, и что именно не сходится, -- иначе из строки
+    непонятно, что чинить.
+    """
+    built = compose(pair("ampa"))
+
+    assert built.ok, built.problems
+    assert built.warnings == [
+        "связь l3: источник SST тормозный, а рецептор ampa возбуждающий"
+    ]
+
+
+def test_an_inhibitory_receptor_on_an_inhibitory_source_is_silent():
+    assert compose(pair("gaba_a")).warnings == []
+    assert compose(pair("gaba_b")).warnings == []
+
+
+def test_a_source_without_a_transmitter_is_not_judged():
+    """Про клетку ничего не сказано -- значит, и спорить не с чем."""
+    sandbox = pair("gaba_a")
+    sandbox.cell_types["sst"] = ir.CellType(id="sst")
+    sandbox.links[0].receptor = "ampa"
+
+    assert compose(sandbox).warnings == []
+
+
+def test_a_contact_inside_a_block_disagrees_the_same_way(ffi):
+    """Контакт блока правится теми же полями (#531) -- и спорит так же.
+
+    Второго понятия «связь» для внутренностей блока не заводится: спрашивается
+    собранная модель, где контакт блока уже сведён со своим типом клетки.
+    """
+    sandbox = chain(ffi)
+    inner = next(
+        contact
+        for contact in sandbox.instances[0].snapshot.body.contacts
+        if contact.receptor == "gaba_a"
+    )
+    inner.receptor = "ampa"
+
+    notes = compose(sandbox).warnings
+
+    assert notes == ["связь a/c3: источник a/I тормозный, а рецептор ampa возбуждающий"]

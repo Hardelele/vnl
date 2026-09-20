@@ -16,6 +16,7 @@ import { useSyncExternalStore } from 'react'
 
 import { OfflineError, isDenied } from '../model/catalog'
 import { loadCells } from '../model/cells'
+import { NO_GLOSSARY, loadGlossary } from '../model/glossary'
 import {
   addBlock,
   addNeuron,
@@ -44,7 +45,7 @@ import {
   type SandboxRow,
   type SandboxState,
 } from '../model/sandbox'
-import type { CellKind, PointModel, RecordedVar, RunSpec } from '../model/types'
+import type { CellKind, Glossary, PointModel, RecordedVar, RunSpec } from '../model/types'
 import { createStore } from './store'
 
 /**
@@ -80,6 +81,14 @@ export interface SandboxView {
    * библиотеки: клетка -- не паттерн, и фильтры каталога к ней не применимы.
    */
   cells: CellKind[]
+  /**
+   * Расшифровка подписей: рецепторы, мембрана, контакт, порты (#541).
+   *
+   * Рядом с палитрой, а не в состоянии библиотеки, по той же причине: её
+   * спрашивает панель свойств песочницы. Пустая до ответа сервера -- экран
+   * обязан работать и без подсказок, они объясняют, а не управляют.
+   */
+  glossary: Glossary
   selected: Selection | null
   pending: Pending | null
   /**
@@ -113,6 +122,7 @@ const EMPTY: SandboxView = {
   list: [],
   project: null,
   cells: [],
+  glossary: NO_GLOSSARY,
   selected: null,
   pending: null,
   opened: [],
@@ -129,6 +139,7 @@ export interface SandboxPorts {
   open: typeof openSandbox
   addBlock: typeof addBlock
   cells: typeof loadCells
+  glossary: typeof loadGlossary
   addNeuron: typeof addNeuron
   connect: typeof connect
   params: typeof setLinkParams
@@ -154,6 +165,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   open: openSandbox,
   addBlock,
   cells: loadCells,
+  glossary: loadGlossary,
   addNeuron,
   connect,
   params: setLinkParams,
@@ -272,6 +284,23 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
         store.setState({ cells: await io.cells(), error: null, offline: false, denied: false })
       } catch (reason) {
         fail(reason)
+      }
+    },
+
+    /**
+     * Расшифровка подписей. Спрашивается один раз на открытие экрана: это
+     * реестр, а не состояние проекта, -- он не меняется ни от правки схемы,
+     * ни от того, что в хранилище положили свою клетку.
+     *
+     * Отказ здесь не занимает экран сообщением: без подсказок песочница
+     * работает ровно так же, как работала до #541, и объявлять её сломанной
+     * из-за пропавшей справки было бы неверно.
+     */
+    async refreshGlossary(): Promise<void> {
+      try {
+        store.setState({ glossary: await io.glossary() })
+      } catch {
+        store.setState({ glossary: NO_GLOSSARY })
       }
     },
 

@@ -403,7 +403,7 @@ class Simulator:
         for cell in self.cells.values():
             cell.spiked = False
             for receptor, value in list(cell.conductance.items()):
-                tau = ir.RECEPTORS[receptor][1]
+                tau = ir.RECEPTORS[receptor].tau_decay
                 cell.conductance[receptor] = _decay(value, dt, tau)
             point = cell.model
             adex = point.kind == "adex"
@@ -421,7 +421,7 @@ class Simulator:
                     self._advance_w(cell, cell.v, dt)
                 continue
             synaptic = sum(
-                value * (ir.RECEPTORS[receptor][0] - cell.v)
+                value * (ir.RECEPTORS[receptor].reversal - cell.v)
                 for receptor, value in cell.conductance.items()
             )
             # МОм * нА = мВ: сопротивление и ток уже в тех единицах, в

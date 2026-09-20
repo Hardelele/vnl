@@ -379,3 +379,41 @@ describe('заряд клетки на холсте', () => {
     expect(host.querySelectorAll('.cv-in-level')).toHaveLength(0)
   })
 })
+
+describe('клетка на холсте объясняется подсказкой (#541)', () => {
+  /** Каталог -- тот же, что приходит с `/api/cells`: `note` уже написан. */
+  const PALETTE = [
+    {
+      id: 'I',
+      name: 'Интернейрон SST',
+      note: 'Медленное торможение, обычно по дендритам.',
+      tags: ['inhibitory'],
+      transmitter: 'gaba',
+      inhibitory: true,
+      builtin: true,
+      source: null,
+      pointModel: POINT,
+      morphology: { name: 'point', isPoint: true, sections: [] },
+    },
+  ]
+
+  it('наведение на клетку говорит, что она делает', async () => {
+    await mount({ palette: PALETTE })
+
+    const cell = [...host.querySelectorAll('.cv-cell')].find((node) =>
+      node.querySelector('title')?.textContent?.includes('SST'),
+    )
+    expect(cell?.querySelector('title')?.textContent).toContain(
+      'Медленное торможение',
+    )
+  })
+
+  it('без каталога клетка называет хотя бы себя и свой тип', async () => {
+    // Подсказка объясняет, а не управляет: до ответа сервера холст рисуется
+    // так же, как рисовался.
+    await mount()
+
+    const cell = host.querySelector('.cv-cell title')
+    expect(cell?.textContent).toContain('E')
+  })
+})

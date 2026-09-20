@@ -52,6 +52,8 @@ export function SandboxScreen() {
 
   const list = useSandbox((state) => state.list)
   const palette = useSandbox((state) => state.cells)
+  /** Расшифровка подписей: рецепторы, мембрана, контакт, порты (#541). */
+  const glossary = useSandbox((state) => state.glossary)
   const project = useSandbox((state) => state.project)
   const selected = useSandbox((state) => state.selected)
   const pending = useSandbox((state) => state.pending)
@@ -88,6 +90,9 @@ export function SandboxScreen() {
     }
     void control.refreshList()
     void control.refreshCells()
+    // Реестр, а не состояние проекта: спрашивается один раз на открытие
+    // экрана и не перечитывается ни на правке схемы, ни на смене вкладки.
+    void control.refreshGlossary()
     void catalogController.refresh()
   }, [control, allowed])
 
@@ -362,10 +367,14 @@ export function SandboxScreen() {
                       />
                     </svg>
                   </span>
-                  <span className="sb-row-text">
-                    <span className="sb-row-name" title={cell.note || cell.name}>
-                      {cell.name}
-                    </span>
+                  {/* Подсказка на всей строке, а не только на имени: медиатор
+                      и фигура -- такой же шифр, как `sst`, и объяснять надо то,
+                      на что человек смотрит целиком (#541). */}
+                  <span
+                    className="sb-row-text"
+                    title={cell.note ? `${cell.name}. ${cell.note}` : cell.name}
+                  >
+                    <span className="sb-row-name">{cell.name}</span>
                     <span className="mono sb-level">
                       {cell.transmitter ?? cell.id}
                       {cell.builtin ? '' : ' · своя'}
@@ -482,6 +491,7 @@ export function SandboxScreen() {
             neurons={project.neurons}
             links={project.links}
             cells={cells}
+            palette={palette}
             selected={selected}
             pending={pending}
             opened={opened}
@@ -504,6 +514,8 @@ export function SandboxScreen() {
             cells={cells}
             spikes={spikes}
             elapsed={time}
+            glossary={glossary}
+            palette={palette}
           />
           <RunFields run={project.run} />
         </aside>
