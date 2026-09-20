@@ -61,3 +61,14 @@ record D.soma.spikes
 record B.soma.v
 
 run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    A.spikes = 8
+    B.spikes = 8
+    C.spikes = 8
+    D.spikes = 8
+    B.first_spike = 24.4ms
+    C.first_spike = 24.4ms
+    D.first_spike = 24.4ms
+}

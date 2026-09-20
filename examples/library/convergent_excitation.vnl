@@ -60,3 +60,13 @@ record X.soma.v
 record X.soma.g_exc
 
 run { dt = 0.1ms  duration = 260ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    X.spikes = 2
+    X.soma.g_exc.max = 1.14nS  start=50ms  stop=100ms
+    X.soma.v.max     = -55.7mV start=50ms  stop=100ms
+    X.soma.g_exc.max = 2.28nS  start=150ms stop=200ms
+    X.soma.v.max     = -50.2mV start=150ms stop=200ms
+    X.soma.g_exc.max = 3.42nS  start=200ms stop=260ms
+}

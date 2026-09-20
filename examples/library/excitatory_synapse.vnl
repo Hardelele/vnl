@@ -42,3 +42,12 @@ record E.soma.v
 record E.soma.g_exc
 
 run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    IN.spikes = 8
+    E.spikes  = 8
+    E.soma.g_exc.max = 2.09nS
+    E.soma.v.max     = -50.13mV
+    sweep "c1.weight=0.4,0.8,1.4,2.2" E.spikes = 0, 0, 0, 8
+}

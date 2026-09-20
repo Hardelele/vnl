@@ -45,3 +45,10 @@ record P3.soma.spikes
 record P1.soma.g_inh
 
 run { dt = 0.1ms  duration = 400ms  level = L1  seed = 13 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    P1.spikes = 6
+    P2.spikes = 35
+    P3.spikes = 5
+}

@@ -37,3 +37,10 @@ record E.soma.g_exc
 record E.soma.g_inh
 
 run { dt = 0.1ms  duration = 400ms  level = L1  seed = 7 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    IN.spikes = 37
+    E.spikes  = 16
+    sweep "c3.weight=0,1.2,2.5,5" E.spikes = 37, 19, 16, 14
+}

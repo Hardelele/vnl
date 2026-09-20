@@ -106,3 +106,22 @@ record ES.soma.g_shunt
 record EH.soma.g_inh
 
 run { dt = 0.1ms  duration = 400ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    E0.soma.v.mean = 5.00mV  base=-65mV start=180ms stop=200ms
+    EH.soma.v.mean = 2.06mV  base=-65mV start=180ms stop=200ms
+    ES.soma.v.mean = 2.06mV  base=-65mV start=180ms stop=200ms
+    E0.soma.v.mean = 39.99mV base=-65mV start=380ms stop=400ms
+    EH.soma.v.mean = 26.77mV base=-65mV start=380ms stop=400ms
+    ES.soma.v.mean = 16.48mV base=-65mV start=380ms stop=400ms
+    ES.soma.g_shunt.max = 2.09nS
+    EH.soma.g_inh.max   = 0.61nS
+    ES.soma.v.max  = -65.00mV start=0ms  stop=100ms
+    # Установившийся провал EH до всякого драйва, той же меркой, какой сняты
+    # отклики выше: среднее за последние 20 мс окна. Мгновенный минимум здесь
+    # не годится -- торможение тоническое, и между импульсами поезда мембрана
+    # качается на сотых долях милливольта (-66.50 в провале).
+    EH.soma.v.mean = -66.47mV start=80ms stop=100ms
+    sweep "c1.reversal=-70,-67,-65,-62" ES.soma.v.mean = 13.54, 15.30, 16.48, 18.24  base=-65mV start=380ms stop=400ms
+}

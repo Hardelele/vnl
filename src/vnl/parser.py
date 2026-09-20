@@ -12,7 +12,13 @@ from typing import Any
 
 from . import ir, protocols
 from .morphology import Morphology, Section
-from .units import looks_like_quantity, parse_quantity
+from .units import (
+    UnitError,
+    looks_like_quantity,
+    parse_quantity,
+    unit_factor,
+    written_precision,
+)
 
 _TOKEN = re.compile(
     r"""
@@ -267,6 +273,48 @@ def _build_plasticity(spec: Any) -> ir.Plasticity:
     return plast
 
 
+def _pending_expectation(
+    path: str,
+    literals: list[str],
+    params: dict[str, Any],
+    sweep: str,
+    line: int,
+) -> "PendingExpectation":
+    """Собрать заявленное число из написанного: значения, единица, допуск."""
+    values: list[float] = []
+    for literal in literals:
+        try:
+            values.append(parse_quantity(literal)[0])
+        except UnitError as exc:
+            raise ParseError(f"строка {line}: {exc}") from exc
+    suffix = re.sub(r"^[-+0-9.eE]+", "", literals[0])
+    try:
+        factor = unit_factor(suffix)
+        # У ряда допуск по самому грубо записанному числу: ряд -- одно
+        # утверждение, и спрашивать с «0.0, 11.5, 24.5» десятые, а с
+        # «13.54, 15.30» сотые внутри одной строки значило бы, что строгость
+        # проверки зависит от того, сколько нулей человек дописал.
+        tolerance = max(written_precision(literal) for literal in literals)
+    except UnitError as exc:
+        raise ParseError(f"строка {line}: {exc}") from exc
+    if "tol" in params:
+        try:
+            tolerance = abs(parse_quantity(str(params.pop("tol")))[0])
+        except UnitError as exc:
+            raise ParseError(f"строка {line}: допуск -- {exc}") from exc
+    return PendingExpectation(
+        path=path,
+        literals=tuple(literals),
+        values=tuple(values),
+        tolerance=tolerance,
+        unit=suffix,
+        factor=factor,
+        sweep=sweep,
+        params=params,
+        line=line,
+    )
+
+
 # Промежуточные записи: адреса ещё не разрешены в Site -- это делает resolve.
 
 
@@ -336,6 +384,27 @@ class PendingRecording:
 
 
 @dataclass
+class PendingExpectation:
+    """`expect { E.spikes = 6 }` -- заявленное число, как написано (#501).
+
+    Путь не разобран на адрес и величину: где кончается адрес, знает резолвер
+    (`E.soma.g_exc` и `E.g_exc` -- одна и та же трасса, а секция по умолчанию
+    -- его дело). Парсер записывает написанное и считает допуск по числу
+    разрядов: это про запись, а не про схему, и знать модель для этого не надо.
+    """
+
+    path: str
+    literals: tuple[str, ...]
+    values: tuple[float, ...]
+    tolerance: float
+    unit: str
+    factor: float
+    sweep: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    line: int = 0
+
+
+@dataclass
 class ParsedModel:
     """Результат разбора: IR без разрешённых адресов."""
 
@@ -349,6 +418,7 @@ class ParsedModel:
     sensors: list[PendingSensor]
     motors: list[PendingMotor]
     recordings: list[PendingRecording]
+    expectations: list[PendingExpectation]
     run: ir.RunSpec
 
 
@@ -366,6 +436,7 @@ class Parser:
         self.sensors: list[PendingSensor] = []
         self.motors: list[PendingMotor] = []
         self.recordings: list[PendingRecording] = []
+        self.expectations: list[PendingExpectation] = []
         self.run = ir.RunSpec()
 
     def parse(self) -> ParsedModel:
@@ -380,6 +451,7 @@ class Parser:
             "sensor": self._stmt_sensor,
             "motor": self._stmt_motor,
             "record": self._stmt_record,
+            "expect": self._stmt_expect,
             "run": self._stmt_run,
         }
         while True:
@@ -408,6 +480,7 @@ class Parser:
             sensors=self.sensors,
             motors=self.motors,
             recordings=self.recordings,
+            expectations=self.expectations,
             run=self.run,
         )
 
@@ -642,6 +715,55 @@ class Parser:
                 var=var,
             )
         )
+
+    def _stmt_expect(self) -> None:
+        """`expect { ... }` -- блок заявленных чисел прогона (#501).
+
+        Строка блока: путь, `=`, число (или ряд чисел у развёртки) и, если
+        надо, уточнения тем же видом `ключ=значение`, каким пишется всё
+        остальное в языке:
+
+            expect {
+                E.spikes = 6
+                PYR.spikes = 12  start=200ms stop=400ms
+                NEAR.first_spike = 24.4ms
+                E.soma.g_exc.max = 2.09nS
+                DEP.soma.g.peak = 0.685nS  index=1
+                sweep "c3.weight=0,0.3,0.9" E.spikes = 13, 11, 6
+            }
+
+        Почему блок, а не отдельный оператор на строку (`expect E.spikes = 6`).
+        Чисел у паттерна с десяток, и россыпью они смешались бы с записями и
+        стимулами; блоком видно, где кончается схема и начинается утверждение о
+        ней. Почему не отдельный файл ожиданий -- сказано в `ir.Expectation`.
+        """
+        cur = self.cur
+        cur.take("lbrace")
+        while True:
+            cur.skip_separators()
+            if cur.accept("rbrace"):
+                return
+            if cur.now.kind == "eof":
+                raise ParseError(f"строка {cur.now.line}: незакрытый expect")
+            line = cur.now.line
+            sweep = ""
+            if cur.now.kind == "name" and cur.now.text == "sweep":
+                cur.take("name")
+                sweep = cur.take("string").text.strip('"')
+            path = cur.take("name").text
+            cur.take("eq")
+            literals = [cur.take("quantity").text]
+            while cur.now.kind == "comma":
+                save = cur.i
+                cur.take("comma")
+                if cur.now.kind != "quantity":
+                    cur.i = save  # запятая перед уточнениями -- не число
+                    break
+                literals.append(cur.take("quantity").text)
+            params = _parse_flat_params(cur)
+            self.expectations.append(
+                _pending_expectation(path, literals, params, sweep, line)
+            )
 
     def _stmt_run(self) -> None:
         params = _parse_block(self.cur)

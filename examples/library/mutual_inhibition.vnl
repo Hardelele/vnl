@@ -33,3 +33,10 @@ record A.soma.g_inh
 record B.soma.g_inh
 
 run { dt = 0.1ms  duration = 400ms  level = L1  seed = 11 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    A.spikes = 42
+    B.spikes = 7
+    B.soma.g_inh.max = 14.7nS
+}

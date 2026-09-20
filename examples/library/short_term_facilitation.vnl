@@ -52,3 +52,12 @@ record FAC.soma.v
 record REF.soma.v
 
 run { dt = 0.1ms  duration = 300ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    FAC.soma.g.peak = 0.137nS index=1
+    FAC.soma.g.peak = 0.286nS index=4
+    FAC.soma.g.peak = 0.28nS  index=8
+    REF.soma.g.peak = 1.14nS  index=1
+    REF.soma.g.peak = 1.14nS  index=8
+}
