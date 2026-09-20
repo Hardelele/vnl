@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 #: Сколько импульсов позволено одному шаблону. Ограничение житейское, как и
 #: `SAMPLE_LIMIT` у прогона: `tetanus freq=1000Hz duration=60s` -- это опечатка,
@@ -732,6 +732,170 @@ def cautions(model: Any) -> list[str]:
             "2001). Фиксированное ядро W(Δt) этого не воспроизводит ни при "
             "каких a_plus: честный диапазон -- 10-20 Гц."
         )
+    return out
+
+
+#: Сколько событий на шаг бернуллиев розыгрыш описывает без оговорок. Выше
+#: этого числа род `poisson` перестаёт быть пуассоновским процессом: шаг несёт
+#: не больше одного события, и совпадения внутри шага он выразить не может.
+#: 0.1 -- это 1000 Гц при dt = 0.1 мс; фоновый драйв 250 Гц (0.025) сюда не
+#: попадает, а «1000 синапсов по 5 Гц одним стимулом» попадает сразу.
+POISSON_SAFE_LOAD = 0.1
+
+#: Сколько времён показывать в диагностике поимённо. Дальше -- счётом: поезд
+#: на сто импульсов, съеденный окном целиком, не должен печатать сто чисел.
+_SHOW_TIMES = 6
+
+
+def _moments(count: int) -> str:
+    return _plural(count, "время", "времени", "времён")
+
+
+def _times_text(times: Sequence[float]) -> str:
+    shown = ", ".join(f"{time:g}" for time in times[:_SHOW_TIMES])
+    rest = len(times) - _SHOW_TIMES
+    return f"{shown} и ещё {rest}" if rest > 0 else shown
+
+
+def _split_step(rate: float, dt: float) -> tuple[float, float, float]:
+    """Нагрузка на шаг, потолок рода и доля событий, теряющих совпадения."""
+    load = rate * dt / 1000.0
+    ceiling = 1000.0 / dt
+    # Доля событий, которые пуассоновский процесс положил бы вторыми и далее в
+    # тот же шаг: (λ − (1 − e^−λ)) / λ. Суммарное число событий при этом не
+    # страдает -- розыгрыш `random() < λ` даёт ровно λ событий на шаг в
+    # среднем, -- страдает их совместность.
+    coincident = 0.0 if load <= 0 else (load - (1.0 - math.exp(-load))) / load
+    return load, ceiling, coincident
+
+
+def delivery_problems(model: Any) -> list[tuple[str, str, str]]:
+    """Что из написанного драйва не дойдёт до клетки. (severity, стимул, текст)
+
+    Три вещи, и все три до этой задачи происходили молча (#512).
+
+    Первая -- времена вне окна и за концом прогона. `times = 600` при прогоне
+    в 500 мс -- это «схема не спайкает» и полчаса поисков глазами; чаще всего
+    так теряется тестовый импульс восстановления, который в протоколе стоит
+    через полсекунды после поезда.
+
+    Вторая -- слипание: два написанных момента внутри одного шага приходят
+    одним двойным импульсом. Терять один из них нельзя (это молча половина
+    заданного драйва, см. #568), но и молчать о двойной амплитуде на шаг
+    нечестно.
+
+    Третья -- потолок `poisson`. Розыгрыш `random() < rate·dt/1000` кладёт не
+    больше одного события на шаг, и при `rate·dt/1000 >= 1` он срабатывает
+    всегда: сколько ни проси выше 1/dt, стимул выдаст ровно 1/dt. Это отказ, а
+    не предупреждение -- число в схеме и число в прогоне разошлись бы в разы.
+
+    Считается по модели целиком, а не по одному стимулу: окно и потолок
+    меряются шагом и длительностью прогона, а они живут в `run`.
+    """
+    dt = float(model.run.dt)
+    duration = float(model.run.duration)
+    out: list[tuple[str, str, str]] = []
+
+    for stim in model.stimuli:
+        if stim.kind == "poisson":
+            load, ceiling, coincident = _split_step(float(stim.rate), dt)
+            if load >= 1.0:
+                # Совет обязан выводить из-под предупреждения, а не ставить на
+                # его границу: шаг ровно на POISSON_SAFE_LOAD прошёл бы отказ и
+                # тут же получил предупреждение, то есть совет был бы неверен.
+                # Отсюда половина порога и там, и там.
+                safe_dt = 1000.0 * POISSON_SAFE_LOAD / 2.0 / float(stim.rate)
+                parts = math.ceil(load / (POISSON_SAFE_LOAD / 2.0))
+                out.append((
+                    "error",
+                    stim.id,
+                    f"rate = {float(stim.rate):g} Гц при dt = {dt:g} мс -- это "
+                    f"{load:g} события на шаг, а розыгрыш кладёт не больше "
+                    f"одного: выше потолка {ceiling:g} Гц стимул выдал бы "
+                    f"{ceiling:g} Гц, сколько ни проси. Нужен шаг "
+                    f"{safe_dt:g} мс или меньше, либо {parts} стимулов по "
+                    f"{float(stim.rate) / parts:g} Гц вместо одного.",
+                ))
+            elif load >= POISSON_SAFE_LOAD:
+                out.append((
+                    "warning",
+                    stim.id,
+                    f"rate = {float(stim.rate):g} Гц при dt = {dt:g} мс -- это "
+                    f"{load:g} события на шаг. Суммарное число событий "
+                    f"сохраняется, но шаг несёт не больше одного, и около "
+                    f"{coincident * 100:.0f}% событий, которые пуассоновский "
+                    f"процесс положил бы совпадениями внутри шага, придут "
+                    f"порознь; потолок рода -- {ceiling:g} Гц. Лечится меньшим "
+                    f"dt или несколькими стимулами вместо одного.",
+                ))
+            continue
+
+        if stim.kind not in EVENT_KINDS:
+            continue
+        try:
+            times = spike_times(stim)
+        except ProtocolError:
+            continue  # про неразвернувшийся шаблон уже сказал `problems`
+        if not times:
+            continue
+
+        start, stop = float(stim.start), float(stim.stop)
+        outside = [time for time in times if not start <= time < stop]
+        if outside:
+            window = (
+                f"с {start:g} мс"
+                if stop == float("inf")
+                else f"{start:g}..{stop:g} мс"
+            )
+            out.append((
+                "warning",
+                stim.id,
+                f"подано будет {_moments(len(times) - len(outside))} из "
+                f"{len(times)}: вне окна {window} осталось "
+                f"{_times_text(outside)}. Окно отсекает написанные моменты, а "
+                f"не сдвигает их: у times моменты абсолютные, и start для них "
+                f"-- граница, а не начало расписания.",
+            ))
+
+        inside = [time for time in times if start <= time < stop]
+        late = [time for time in inside if time >= duration]
+        early = [time for time in inside if time < 0.0]
+        if late:
+            out.append((
+                "warning",
+                stim.id,
+                f"{_moments(len(late))} за концом прогона {duration:g} мс: "
+                f"{_times_text(late)} -- прогон "
+                f"{'до него' if len(late) == 1 else 'до них'} не доживёт",
+            ))
+        if early:
+            out.append((
+                "warning",
+                stim.id,
+                f"{_moments(len(early))} раньше начала прогона: "
+                f"{_times_text(early)}",
+            ))
+
+        steps: dict[int, list[float]] = {}
+        for time in inside:
+            if 0.0 <= time < duration:
+                steps.setdefault(round(time / dt), []).append(time)
+        stuck = [group for group in steps.values() if len(group) > 1]
+        if stuck:
+            where = (
+                f"{_times_text(stuck[0])} мс"
+                if len(stuck) == 1
+                else f"{_plural(len(stuck), 'шаг', 'шага', 'шагов')}, "
+                f"например {_times_text(stuck[0])} мс"
+            )
+            out.append((
+                "warning",
+                stim.id,
+                f"в один шаг {dt:g} мс попадает больше одного импульса "
+                f"({where}): они сложатся в один импульс двойной амплитуды. "
+                f"Развести моменты или уменьшить dt.",
+            ))
+
     return out
 
 

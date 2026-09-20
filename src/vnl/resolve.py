@@ -753,6 +753,17 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
     for caution in protocols.cautions(model):
         resolver.warn("протокол", caution)
 
+    # Что из написанного драйва не дойдёт до клетки (#512). Здесь, а не в
+    # `resolver.stimulus`: окно и потолок меряются шагом и длительностью
+    # прогона, а `run` к моменту разбора стимула ещё не обязан быть разобран --
+    # порядок операторов в файле свободный.
+    for severity, stim_id, message in protocols.delivery_problems(model):
+        where = f"стимул {stim_id}"
+        if severity == "error":
+            resolver.error(where, message)
+        else:
+            resolver.warn(where, message)
+
     for sensor in model.sensors.values():
         if not sensor.targets:
             # Не отказ: сенсор объявляют раньше, чем подключают, и схема в
