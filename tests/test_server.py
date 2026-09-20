@@ -754,6 +754,96 @@ def test_a_sandbox_without_drive_warns_but_is_not_refused(base):
     assert driven["problems"] == []
 
 
+def sandbox_with_border(base) -> str:
+    """Проект из приёмки: клетка, сенсор на входе, мотор на выходе.
+
+    Собирается теми же маршрутами, которыми его соберёт интерфейс: подключение
+    сенсора -- обычная связь, у которой источник сам сенсор.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Кнопка"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr", "id": "MN"})
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/sensors", {"id": "key", "to": 100})
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {"source": {"instance": "key"}, "target": {"instance": "MN"}, "weight": 2.0},
+    )
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/motors",
+        {"id": "out", "source": {"instance": "MN"}, "window": 50},
+    )
+    return sandbox
+
+
+def test_the_border_comes_with_the_rest_of_the_project(base):
+    """Список сенсоров и моторов приходит с сервера вместе с состоянием.
+
+    Выдумывать его в браузере нельзя: панель кнопок -- ещё одно представление
+    того же проекта, и свой список разошёлся бы с тем, что считает сервер.
+    """
+    sandbox = sandbox_with_border(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+
+    assert [sensor["id"] for sensor in project["sensors"]] == ["key"]
+    assert project["sensors"][0]["story"] == "частота, 100 Гц при 1"
+    assert project["motors"][0]["unit"] == "Гц"
+    assert project["problems"] == [], "схема с границей собирается"
+
+
+def test_a_button_press_reaches_the_network_and_comes_back_in_one_answer(base):
+    """Приёмка #561: подали величину -- клетка разрядилась, мотор ответил.
+
+    Одним ответом: интерфейсу нужно нарисовать кнопку нажатой и лампочку
+    горящей в тот же кадр, в котором он рисует заливку клетки.
+    """
+    sandbox = sandbox_with_border(base)
+    status, sim = ask(base, "POST", "/api/sim", {"sandbox": sandbox})
+    assert status == 201
+    assert sim["sensors"] == {"key": 0.0}, "без подачи сенсор молчит"
+    assert sim["input"] == []
+
+    sim_id = sim["id"]
+    status, pushed = ask(base, "POST", f"/api/sim/{sim_id}/sensors", {"key": 1})
+    assert status == 200
+    assert pushed["sensors"] == {"key": 1.0}
+    assert pushed["input"] == [{"time": 0.0, "sensor": "key", "value": 1.0}]
+
+    # Время двигаем сами: ждать настоящих секунд значило бы мерить машину.
+    for _ in range(60):
+        ask(base, "POST", f"/api/sim/{sim_id}/step", {"delta": 1.0})
+    _, later = ask(base, "GET", f"/api/sim/{sim_id}")
+    assert later["motors"]["out"] > 0.0
+    assert later["cells"]["MN"]["charge"] != 0.0
+
+    _, released = ask(base, "POST", f"/api/sim/{sim_id}/sensors", {"key": 0})
+    assert released["sensors"] == {"key": 0.0}
+    assert len(released["input"]) == 2
+
+
+def test_a_value_out_of_range_is_refused_by_the_route(base):
+    sandbox = sandbox_with_border(base)
+    _, sim = ask(base, "POST", "/api/sim", {"sandbox": sandbox})
+    status, payload = ask(base, "POST", f"/api/sim/{sim['id']}/sensors", {"key": 7})
+    assert status == 400
+    assert "вне" in payload["error"]
+
+
+def test_pressing_a_button_does_not_age_the_run(base):
+    """Отпечаток сети от подачи не меняется: это вход, а не схема."""
+    sandbox = sandbox_with_border(base)
+    _, before = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    _, sim = ask(base, "POST", "/api/sim", {"sandbox": sandbox})
+    ask(base, "POST", f"/api/sim/{sim['id']}/sensors", {"key": 1})
+
+    _, after = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    assert after["fingerprint"] == before["fingerprint"]
+    assert after["dirty"] == before["dirty"]
+
+
 def test_a_sandbox_runs_with_the_same_time_control(base):
     sandbox = sandbox_with_two_blocks(base)
     _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
@@ -1554,6 +1644,11 @@ def test_the_whole_list_of_what_answers_without_login_fits_on_one_screen(tmp_pat
         ("POST", r"^/api/sim/([^/]+)/reset$"),
         ("POST", r"^/api/sim/([^/]+)/seek$"),
         ("POST", r"^/api/sim/([^/]+)/step$"),
+        # Подача величины сенсору -- такое же управление сессией, как перемотка
+        # и шаг: она меняет не схему, а то, что с ней происходит (#561).
+        # Нажать кнопку на витрине паттерна можно без учётной записи ровно
+        # потому, что сама схема при этом не меняется -- отпечаток сети тот же.
+        ("POST", r"^/api/sim/([^/]+)/sensors$"),
         ("DELETE", r"^/api/sim/([^/]+)$"),
     }
 

@@ -36,7 +36,7 @@ from typing import Any, Literal
 
 from . import ir
 from .api import TIME_DIGITS, TRACE_DIGITS
-from .sim.lif import Simulator, Snapshot
+from .sim.lif import SenseEvent, Simulator, Snapshot
 
 State = Literal["paused", "running", "finished"]
 
@@ -91,12 +91,19 @@ class Session:
         self._closed = False
         self._thread: threading.Thread | None = None
 
+        #: Поток входа: всё, что подали снаружи, с модельным временем подачи.
+        #: Живёт у сессии, а не у симулятора, ровно по одной причине -- «Сброс»
+        #: строит симулятор заново, а запись опыта переживать сброс обязана
+        #: (см. `reset`). Симулятор получает этот самый список, а не копию:
+        #: копия означала бы две правды о том, что было подано.
+        self._input: list[SenseEvent] = []
+
         self._build()
 
     # --- устройство -------------------------------------------------------
 
     def _build(self) -> None:
-        self.simulator = Simulator(self.model)
+        self.simulator = Simulator(self.model, sense=self._input)
         self.state: State = "paused"
         # Снимок нулевого шага: «Сброс» -- это возврат к нему, а не новый объект.
         self._marks: list[_Mark] = [_Mark(0.0, self.simulator.snapshot())]
@@ -139,11 +146,39 @@ class Session:
             self._gate.notify_all()
 
     def reset(self) -> None:
-        """Начать сначала -- отдельное действие, а не побочный эффект запуска."""
+        """Начать сначала -- отдельное действие, а не побочный эффект запуска.
+
+        Поток входа при этом остаётся, и это решение, а не недосмотр. «Сброс»
+        возвращает время к нулю, чтобы посчитать ту же схему заново, -- и зерно
+        генератора он не выбрасывает: случайный драйв после сброса идёт теми же
+        моментами. Поток входа -- такая же запись опыта: сотрите её, и то, ради
+        чего всё затевалось, -- повторить опыт с кнопками -- станет невозможно
+        ровно тогда, когда это нужнее всего (посмотреть ещё раз то же самое).
+        Поэтому после сброса запись переигрывается с начала сама.
+
+        Разобранная альтернатива -- стирать: чистый лист после сброса выглядит
+        понятнее, но забирает единственную дорогу к повтору и ничего не даёт
+        взамен. Чистый лист и так есть: нажатие кнопки стирает записанное после
+        своего момента (`Simulator.sense_at`), так что сброс плюс новое
+        нажатие на нуле -- это и есть «начать с чистого входа».
+        """
         with self._gate:
             self.state = "paused"
             self._build()
             self._gate.notify_all()
+
+    def sense(self, sensor_id: str, value: float) -> SenseEvent:
+        """Подать величину сенсору -- на текущем модельном времени сессии.
+
+        Момент берётся у сессии, а не у часов: для прогона «сейчас» -- это
+        ближайший непосчитанный шаг, и записанное с ним нажатие переигрывается
+        при любом откате. Поэтому кнопка, нажатая на 137-й миллисекунде,
+        остаётся нажатой на 137-й и после десяти перемоток.
+        """
+        with self._gate:
+            event = self.simulator.sense_at(self.elapsed, sensor_id, value)
+            self._gate.notify_all()
+            return event
 
     def seek(self, time: float) -> None:
         """Встать на выбранный момент: движок откатывается, а не курсор едет.
@@ -280,7 +315,7 @@ class Session:
             # его буфер относится к стёртому будущему.
             rewound = since > samples
             start = 0 if rewound else since
-            return {
+            payload = {
                 "id": self.id,
                 "source": self.source,
                 "state": self.state,
@@ -326,6 +361,48 @@ class Session:
                 },
                 "degradation": list(result.degradation),
             }
+            if self.model.sensors or self.model.motors:
+                payload.update(self._border())
+            return payload
+
+    def _border(self) -> dict[str, Any]:
+        """Граница с миром в ответе сессии -- тем же куском, что клетки и трассы.
+
+        Одним ответом, а не вторым запросом: интерфейсу нужно нарисовать кнопку
+        нажатой и лампочку горящей в тот же кадр, в котором он рисует заливку
+        клетки, а два опроса разъехались бы во времени -- и кнопка отставала бы
+        от растра на кадр.
+
+        Полей нет вовсе, если в схеме нет ни сенсора, ни мотора. Это не
+        экономия байтов: сессия без границы обязана отвечать ровно тем же, чем
+        отвечала раньше, иначе «ничего не поменялось» пришлось бы доказывать.
+
+        Три поля отвечают на три разных вопроса. `sensors` -- какая величина
+        держится на текущем моменте (после перемотки на 50 мс кнопка, нажатая
+        на 100-й, обязана погаснуть, а нажатая только что -- загореться сразу,
+        не дожидаясь следующего шага). `motors` -- что сеть отдаёт сейчас.
+        `input` -- вся запись поданного целиком: по ней опыт сохраняют и
+        повторяют, и приращением её слать незачем -- нажатий за прогон
+        единицы, а не тысячи отсчётов.
+        """
+        return {
+            "sensors": {
+                name: round(value, TRACE_DIGITS)
+                for name, value in self.simulator.held(self.elapsed).items()
+            },
+            "motors": {
+                name: round(value, TRACE_DIGITS)
+                for name, value in self.simulator.motors().items()
+            },
+            "input": [
+                {
+                    "time": round(event.time, TIME_DIGITS),
+                    "sensor": event.sensor,
+                    "value": event.value,
+                }
+                for event in self._input
+            ],
+        }
 
 
 class Pool:

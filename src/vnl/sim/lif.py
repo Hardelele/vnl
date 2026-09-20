@@ -516,6 +516,26 @@ class Simulator:
                 for synapse in self.sensor_synapses[sensor.id]:
                     self._schedule(synapse, synapse.weight)
 
+    def held(self, now: float | None = None) -> dict[str, float]:
+        """Какая величина держится на этот момент -- по записи, а не по шагу.
+
+        Отличается от `sensor_value` на один шаг, и разница не придирка.
+        `sensor_value` -- то, что уже применено к посчитанному шагу; величина,
+        поданная «сейчас», применится на следующем, и спроси мы её -- кнопка
+        отвечала бы человеку прошлым: нажал, а в ответе ноль.
+
+        Считается по той же записи и по тому же правилу, по которому её
+        применяет прогон: последнее значение, поданное не позже момента.
+        Поэтому после перемотки на 50 мс здесь честный ноль -- значения,
+        поданного на 100-й, на 50-й ещё не было.
+        """
+        moment = self.step * self.dt if now is None else float(now)
+        values = {name: 0.0 for name in self.model.sensors}
+        for event in self.sense_log:
+            if event.time <= moment and event.sensor in values:
+                values[event.sensor] = event.value
+        return values
+
     def motors(self) -> dict[str, float]:
         """Величины моторов на текущий момент -- по растру, а не по состоянию.
 

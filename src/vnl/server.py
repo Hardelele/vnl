@@ -343,6 +343,26 @@ class Api:
         session.step(delta)
         return session.update()
 
+    def sim_sense(self, sim_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Подать величины сенсорам: `{"key": 1}`.
+
+        Словарём «сенсор -> величина», а не одним значением на запрос: кнопку
+        жмут и отпускают по одной, а вот две кнопки, нажатые разом, обязаны
+        лечь на один и тот же момент модельного времени. Двумя запросами это
+        не выходит: между ними время успевает уйти вперёд, и опыт, который
+        человек считает одновременным, в записи одновременным не будет.
+
+        Ответ -- полное состояние сессии, как и у всякой операции над ней: то,
+        что нажатие изменило (величина сенсора, величина мотора, запись
+        поданного), приходит тем же куском, которым рисуется кадр.
+        """
+        session = self.pool.get(sim_id)
+        if not isinstance(body, dict) or not body:
+            raise PatternError('нечего подавать: нужно {"key": 1}')
+        for name, value in body.items():
+            session.sense(str(name), value)
+        return session.update()
+
     def close_sim(self, sim_id: str) -> dict[str, Any]:
         self.pool.close(sim_id)
         return {"closed": sim_id}
@@ -959,6 +979,18 @@ def routes(service: Api) -> list[Route]:
             "POST",
             re.compile(r"^/api/sim/([^/]+)/step$"),
             service.sim_step,
+            wants="body",
+            anonymous=service.sim_is_of_pattern,
+        ),
+        # Подача величины -- такое же управление сессией, как перемотка и шаг:
+        # она меняет не схему, а то, что с ней происходит. Поэтому и право
+        # входа то же самое: нажать кнопку на витрине паттерна можно без
+        # учётной записи ровно потому, что сама схема при этом не меняется и
+        # отпечаток сети остаётся прежним.
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/sensors$"),
+            service.sim_sense,
             wants="body",
             anonymous=service.sim_is_of_pattern,
         ),

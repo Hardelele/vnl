@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from vnl import protocols
 from vnl.live import Pool, Session, SessionError
 from vnl.resolve import load
 from vnl.sim.lif import simulate
@@ -479,3 +480,168 @@ def test_inhibition_reads_as_a_charge_below_rest():
 
     # (-69.2 + 65) / (-50 + 65) = -0.28: доля не обрезана нулём и видна.
     assert lowest == pytest.approx(-0.28, abs=0.02)
+
+
+# --- живой вход: сенсор и мотор в сессии (#561) ------------------------------
+#
+# Опорное свойство одно: поток входа -- часть состояния сессии, а не внешняя
+# переменная. Из него следуют все проверки ниже, включая ту, ради которой всё
+# затевалось: опыт с кнопками обязан повторяться.
+
+
+@pytest.fixture
+def border():
+    """Сессия со схемой приёмки: сенсор `key`, клетка `MN`, мотор `out`."""
+    item = Session("s-border", model("sensor_motor"), source="песочница")
+    yield item
+    item.close()
+
+
+def pressed(session, hold=(100.0, 200.0)):
+    """Нажать на 100-й миллисекунде и отпустить на 200-й, досчитав до конца."""
+    start, stop = hold
+    session.advance_ms(start)
+    session.sense("key", 1)
+    session.advance_ms(stop - start)
+    session.sense("key", 0)
+    session.advance_ms(session.duration)
+    return session.update()
+
+
+def test_a_session_without_a_border_answers_exactly_as_before(session):
+    """Сессия без сенсоров -- без лишних полей: иначе «ничего не поменялось»
+    пришлось бы доказывать."""
+    payload = session.update()
+    assert "sensors" not in payload
+    assert "motors" not in payload
+    assert "input" not in payload
+
+
+def test_a_pressed_sensor_makes_the_cell_fire_inside_the_window(border):
+    """Приёмка: разряды есть между 100 и 200 мс и нет вне этого окна."""
+    payload = pressed(border)
+    spikes = border.simulator.result.spikes["MN"]
+
+    assert spikes, "клетка обязана разрядиться, пока кнопку держат"
+    assert all(100.0 < time < 205.0 for time in spikes), spikes
+    assert payload["sensors"] == {"key": 0.0}, "кнопку отпустили"
+    assert payload["input"] == [
+        {"time": 100.0, "sensor": "key", "value": 1.0},
+        {"time": 200.0, "sensor": "key", "value": 0.0},
+    ]
+
+
+def test_the_motor_speaks_in_the_same_answer_as_the_cells(border):
+    """Величина мотора приходит тем же куском, что клетки, трассы и спайки."""
+    border.advance_ms(100)
+    border.sense("key", 1)
+    border.advance_ms(100)
+
+    payload = border.update()
+    assert payload["motors"]["out"] > 0.0
+    assert set(payload) >= {"cells", "traces", "spikes", "sensors", "motors"}
+
+
+def test_a_press_is_visible_in_its_own_answer(border):
+    """Нажал -- и в ответе на это нажатие величина уже единица.
+
+    Величина, поданная «сейчас», применится на следующем шаге, и отвечай
+    сессия применённым значением, кнопка сообщала бы человеку прошлое: нажал,
+    а в ответе ноль. Поэтому отдаётся то, что держится на текущем моменте --
+    по той же записи и по тому же правилу, по которому её применяет прогон.
+    """
+    border.advance_ms(100)
+    payload = border.update()
+    assert payload["sensors"] == {"key": 0.0}
+
+    border.sense("key", 1)
+    assert border.update()["sensors"] == {"key": 1.0}
+    assert border.simulator.result.spikes["MN"] == [], "время ещё не шло"
+
+
+def test_rewinding_and_recounting_repeats_the_picture_spike_for_spike(border):
+    """Приёмка: перемотали на 150 мс, досчитали -- картина та же.
+
+    Ровно та же, а не похожая: поток входа переигрывается из записи, как
+    переигрывается случайный драйв по состоянию генератора.
+    """
+    pressed(border)
+    whole = dict(border.simulator.result.spikes)
+    traces = {key: list(values) for key, values in border.simulator.result.traces.items()}
+
+    border.seek(150.0)
+    border.advance_ms(border.duration)
+
+    assert border.simulator.result.spikes == whole
+    assert border.simulator.result.traces == traces
+
+
+def test_after_a_rewind_the_network_does_not_know_the_future_value(border):
+    """Приёмка: перемотали на 50 мс -- значения, поданного на 100-й, нет.
+
+    И запись при этом цела: перемотка стирает прежние трассы, но не опыт.
+    """
+    pressed(border)
+
+    border.seek(50.0)
+    payload = border.update()
+
+    assert payload["sensors"] == {"key": 0.0}
+    assert payload["motors"] == {"out": 0.0}
+    assert border.simulator.result.spikes["MN"] == []
+    assert len(payload["input"]) == 2, "запись пережила перемотку -- её переиграют"
+
+
+def test_a_step_by_a_millisecond_still_works_with_a_live_input(border):
+    """Шаг по миллисекунде (#537) от подачи не ломается."""
+    border.advance_ms(100)
+    border.sense("key", 1)
+    for _ in range(40):
+        border.step(1.0)
+
+    assert border.elapsed == pytest.approx(140.0, abs=border.dt)
+    assert border.update()["motors"]["out"] > 0.0
+
+
+def test_reset_keeps_the_record_and_plays_it_again(border):
+    """«Сброс» не стирает опыт: запись переигрывается с начала.
+
+    Зерно генератора сброс тоже не выбрасывает -- поток входа ведёт себя так
+    же. Иначе повторить опыт с кнопками стало бы нельзя ровно тогда, когда это
+    нужнее всего.
+    """
+    first = pressed(border)
+    border.reset()
+
+    assert border.update()["input"] == first["input"], "запись цела"
+    assert border.update()["sensors"] == {"key": 0.0}, "величина с нуля"
+
+    border.advance_ms(border.duration)
+    again = border.update()
+    assert again["spikes"] == first["spikes"]
+
+
+def test_a_new_press_wipes_the_future_that_was_recorded(border):
+    """Взялись за кнопку -- прежнее будущее перестало быть будущим.
+
+    Это и есть дорога к чистому листу: сброс плюс нажатие на нуле, а не
+    отдельная кнопка «забыть вход».
+    """
+    pressed(border)
+    border.seek(150.0)
+    border.sense("key", 0.5)
+
+    record = border.update()["input"]
+    assert [event["time"] for event in record] == [100.0, 150.0]
+    assert record[-1]["value"] == 0.5
+
+
+def test_a_value_for_an_unknown_sensor_is_refused(border):
+    with pytest.raises(protocols.SenseError):
+        border.sense("педаль", 1)
+
+
+def test_the_value_of_a_sensor_is_a_share_not_a_frequency(border):
+    """Вне 0…1 -- отказ, а не зажим: чужая шкала не должна проехать молча."""
+    with pytest.raises(protocols.SenseError):
+        border.sense("key", 100)
