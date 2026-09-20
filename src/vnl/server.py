@@ -461,6 +461,19 @@ class Api:
     def sandbox(self, sandbox_id: str) -> dict[str, Any]:
         return api.sandbox_payload(self._project(sandbox_id))
 
+    def sandbox_params(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Имя проекта (#563). Идентификатор при этом остаётся прежним.
+
+        Тем же путём, что и чтение проекта, а не своим `/rename`: имя --
+        свойство песочницы, а не действие над ней, и правится оно так же, как
+        правятся параметры прогона или подпись блока.
+        """
+        if body.get("name") is None:
+            raise PatternError('нечего менять: ожидалось {"name": "Опыт 3"}')
+        project = self._project(sandbox_id)
+        project.rename_project(str(body["name"]))
+        return api.sandbox_payload(project)
+
     def add_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """Вставить паттерн блоком. В проект кладётся снимок, а не ссылка.
 
@@ -488,29 +501,85 @@ class Api:
         return api.sandbox_payload(project)
 
     def add_neuron(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Положить на холст отдельную клетку из каталога типов.
+        """Положить на холст отдельную клетку.
 
-        Тип берётся из каталога, а не из тела запроса: параметры мембраны
-        правятся потом в панели свойств, и принимать их здесь значило бы
-        завести второй способ описать клетку, который рано или поздно разойдётся
-        с первым.
+        Тип берётся из одного из двух мест, и какое именно -- говорит тело
+        запроса: `cell` -- каталог (`vnl/cells.py` плюс свои), `type` -- типы
+        самого проекта (#564). Два поля, а не одно с поиском «сперва там,
+        потом тут», нарочно: это два разных источника, и одноимённый тип в них
+        бывает разным -- разобранный блок кладёт в проект `relay_2`, когда его
+        `relay` не совпал с проектным. Поиск по очереди молча выбирал бы за
+        человека, какой из двух он имел в виду.
+
+        Параметры мембраны в теле не принимаются ни в том, ни в другом случае:
+        правятся они потом, панелью свойств, и второй способ описать клетку
+        рано или поздно разошёлся бы с первым.
+
+        Тип проекта кладётся тем же вызовом и тем же объектом, а не его
+        копией: `Sandbox.add_neuron` ставит его через `setdefault`, то есть
+        существующий остаётся на месте, а клетка ссылается на него по имени.
+        Копия означала бы, что правка порога у одной клетки `target` не
+        задевает две соседние.
         """
         cell_id = str(body.get("cell") or "")
-        if not cell_id:
+        type_id = str(body.get("type") or "")
+        if cell_id and type_id:
             raise PatternError(
-                'не сказано, какую клетку класть: {"cell": "pyr"}'
+                "сказано сразу два источника типа: cell -- каталог, "
+                "type -- типы этого проекта; нужен один"
             )
-        try:
-            chosen = cells.catalog(self.store.cells()).get(cell_id)
-        except KeyError as exc:
-            raise PatternError(str(exc).strip("\"'")) from exc
         project = self._project(sandbox_id)
+        if type_id:
+            known = project.sandbox.cell_types
+            if type_id not in known:
+                names = ", ".join(known) or "типов нет"
+                raise PatternError(
+                    f"в проекте нет типа клетки {type_id!r} ({names})"
+                )
+            cell_type = known[type_id]
+        elif cell_id:
+            try:
+                cell_type = cells.catalog(self.store.cells()).get(cell_id).type
+            except KeyError as exc:
+                raise PatternError(str(exc).strip("\"'")) from exc
+        else:
+            raise PatternError(
+                'не сказано, какую клетку класть: {"cell": "pyr"} из каталога '
+                'или {"type": "target"} из типов этого проекта'
+            )
         position = body.get("position") or [0.0, 0.0]
         project.add_neuron(
             str(body["id"]) if body.get("id") else None,
-            chosen.type,
+            cell_type,
             position=(float(position[0]), float(position[1])),
         )
+        return api.sandbox_payload(project)
+
+    def neuron_params(
+        self, sandbox_id: str, neuron_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Имя отдельной клетки (#563).
+
+        Поле зовётся `id`, а не `label`, нарочно: у клетки правится адрес, а
+        не подпись рядом с ним. Тот же запрос к блоку (`/blocks/<id>`) меняет
+        `label` и ничего в сети не трогает -- разные поля в разных телах и
+        говорят, что это две разные операции, а не одна с двумя дорогами.
+        """
+        if body.get("id") is None:
+            raise PatternError('нечего менять: ожидалось {"id": "вход"}')
+        project = self._project(sandbox_id)
+        project.rename_neuron(neuron_id, str(body["id"]))
+        return api.sandbox_payload(project)
+
+    def duplicate_object(self, sandbox_id: str, object_id: str) -> dict[str, Any]:
+        """Ещё один такой же объект холста -- клетка или блок (#563).
+
+        Путь говорит «объект» по той же причине, что и у мембраны: копируют и
+        блок, и клетку, а маршрут, врущий о том, что принимает, однажды
+        заставит завести второй такой же.
+        """
+        project = self._project(sandbox_id)
+        project.duplicate(object_id)
         return api.sandbox_payload(project)
 
     def connect(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -1011,6 +1080,14 @@ def routes(service: Api) -> list[Route]:
             ok=201,
         ),
         Route("GET", re.compile(r"^/api/sandboxes/([^/]+)$"), service.sandbox),
+        # Имя проекта правится там же, где проект читается: это его свойство,
+        # а не отдельное действие над ним (#563).
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)$"),
+            service.sandbox_params,
+            wants="body",
+        ),
         Route(
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/blocks$"),
@@ -1030,6 +1107,15 @@ def routes(service: Api) -> list[Route]:
             service.add_neuron,
             wants="body",
             ok=201,
+        ),
+        # Имя клетки -- её адрес, и правится оно как адрес: у блока по тому же
+        # месту меняется `label`, и разные поля в теле говорят, что это две
+        # разные операции (#563).
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/neurons/([^/]+)$"),
+            service.neuron_params,
+            wants="body",
         ),
         # Путь говорит «объект», а не «блок»: мембрану правят и у блока, и у
         # отдельной клетки, а маршрут, врущий о том, что принимает, однажды
@@ -1146,6 +1232,14 @@ def routes(service: Api) -> list[Route]:
             re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/ungroup$"),
             service.ungroup,
             wants="body",
+        ),
+        # Дублирование -- POST рядом с разбором: оба не меняют названный
+        # объект, а добавляют к нему в проект что-то ещё (#563).
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/duplicate$"),
+            service.duplicate_object,
+            ok=201,
         ),
         Route(
             "DELETE",

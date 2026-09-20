@@ -102,6 +102,27 @@ export interface SandboxNeuron {
   pointModel: PointModel | null
 }
 
+/**
+ * Тип клетки самого проекта (#564).
+ *
+ * Не строка каталога: у каталожной клетки есть человеческое имя и объяснение
+ * (`CellKind`), а у типа, попавшего в проект из разобранного паттерна, только
+ * идентификатор -- `target`, `pyr_l5`. Поэтому в палитре они и стоят разными
+ * списками: свести их в один значило бы либо выдумать `target` имя, либо
+ * выбросить имена у половины строк.
+ *
+ * Поля те же, что у `SandboxCell` (клетки блока), потому что вещь та же:
+ * `neurons` говорит, кого задевает правка порога, -- параметры мембраны в IR
+ * висят на типе, а не на нейроне.
+ */
+export interface SandboxCellType {
+  type: string
+  neurons: string[]
+  inhibitory: boolean
+  transmitter: string | null
+  pointModel: PointModel
+}
+
 export interface SandboxLink {
   id: string
   source: Endpoint
@@ -199,6 +220,14 @@ export interface SandboxState {
   name: string
   blocks: SandboxBlock[]
   neurons: SandboxNeuron[]
+  /**
+   * Типы клеток, которые уже есть в этом проекте (#564).
+   *
+   * Часть состояния проекта, а не отдельный запрос: разбор блока пополняет
+   * их, и отдельный маршрут пришлось бы перечитывать после каждого разбора --
+   * палитра то знала бы про `target`, то нет.
+   */
+  cellTypes: SandboxCellType[]
   links: SandboxLink[]
   stimuli: SandboxDrive[]
   /**
@@ -313,6 +342,25 @@ export function addNeuron(
   return send<SandboxState>(`${at(id)}/neurons`, 'POST', { cell, position })
 }
 
+/**
+ * Положить клетку типа, который уже есть в этом проекте (#564).
+ *
+ * Тот же маршрут, другое поле: `cell` -- каталог, `type` -- типы проекта. Два
+ * поля, а не одно с поиском «сперва там, потом тут», потому что это два
+ * разных источника, и одноимённый тип в них бывает разным -- разбор блока
+ * кладёт в проект `relay_2`, когда его `relay` не совпал с проектным.
+ *
+ * Тип берётся существующий, а не его копия: параметры мембраны висят на типе,
+ * и копия означала бы, что правка порога задевает не всех клеток `target`.
+ */
+export function addNeuronOfType(
+  id: string,
+  type: string,
+  position: [number, number],
+): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/neurons`, 'POST', { type, position })
+}
+
 export function connect(
   id: string,
   source: EndpointRef,
@@ -360,6 +408,60 @@ export function setContactParams(
     `${at(id)}/objects/${encodeURIComponent(object)}/contacts/${encodeURIComponent(contact)}`,
     'PATCH',
     params,
+  )
+}
+
+/**
+ * Имя отдельной клетки -- её же адрес (#563).
+ *
+ * Не `renameBlock` с другим путём: у блока правится подпись, которой в
+ * собранной сети нет вовсе, а здесь -- имя нейрона, за которое держатся связи,
+ * стимулы и записи и которым подписан столбец растра. Поэтому и поле зовётся
+ * `id`, а не `label`: по телу запроса видно, что это другая операция.
+ *
+ * Перепись ссылок целиком на сервере (`patterns.rename_neuron`): считать
+ * здесь, какие связи задеты, значило бы завести в браузере вторую копию
+ * правила «что на эту клетку смотрит», а забытое место всплыло бы потерянным
+ * стимулом.
+ */
+export function renameNeuron(
+  id: string,
+  neuron: string,
+  name: string,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/neurons/${encodeURIComponent(neuron)}`,
+    'PATCH',
+    { id: name },
+  )
+}
+
+/**
+ * Имя проекта. Идентификатор при этом прежний -- за него держатся файл в
+ * хранилище и открытая сессия симуляции.
+ *
+ * Тем же путём, что и чтение проекта: имя -- свойство песочницы, а не действие
+ * над ней.
+ */
+export function renameProject(id: string, name: string): Promise<SandboxState> {
+  return send<SandboxState>(at(id), 'PATCH', { name })
+}
+
+/**
+ * Ещё один такой же объект холста: клетка или блок (#563).
+ *
+ * Один вызов на оба рода -- человек просит «дублировать выбранное», а что
+ * именно выбрано, в этот момент не формулирует. Копия ложится рядом, без
+ * связей и без драйва: связь без второго конца бессмысленна, а копия драйва
+ * означала бы удвоенный вход в схему, которую ещё собирают.
+ */
+export function duplicateObject(
+  id: string,
+  object: string,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/objects/${encodeURIComponent(object)}/duplicate`,
+    'POST',
   )
 }
 

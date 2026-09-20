@@ -21,16 +21,20 @@ import { NO_GLOSSARY, loadGlossary } from '../model/glossary'
 import {
   addBlock,
   addNeuron,
+  addNeuronOfType,
   addRecording,
   addStimulus,
   arrangeObjects,
   connect,
   createSandbox,
+  duplicateObject,
   listSandboxes,
   moveObject,
   openSandbox,
   removeObject,
   renameBlock,
+  renameNeuron,
+  renameProject,
   save,
   saveAsPattern,
   setCellParams,
@@ -191,10 +195,14 @@ export interface SandboxPorts {
   cells: typeof loadCells
   glossary: typeof loadGlossary
   addNeuron: typeof addNeuron
+  addNeuronOfType: typeof addNeuronOfType
   connect: typeof connect
   params: typeof setLinkParams
   contact: typeof setContactParams
   rename: typeof renameBlock
+  renameNeuron: typeof renameNeuron
+  renameProject: typeof renameProject
+  duplicate: typeof duplicateObject
   cell: typeof setCellParams
   move: typeof moveObject
   stimulate: typeof addStimulus
@@ -218,10 +226,14 @@ const DEFAULT_PORTS: SandboxPorts = {
   cells: loadCells,
   glossary: loadGlossary,
   addNeuron,
+  addNeuronOfType,
   connect,
   params: setLinkParams,
   contact: setContactParams,
   rename: renameBlock,
+  renameNeuron,
+  renameProject,
+  duplicate: duplicateObject,
   cell: setCellParams,
   move: moveObject,
   stimulate: addStimulus,
@@ -462,6 +474,19 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     },
 
     /**
+     * Положить клетку типа, который уже есть в этом проекте (#564).
+     *
+     * Отдельное действие, а не `insertCell` с флажком: это другой источник
+     * типа, а не другой способ спросить каталог. Тип берётся существующий --
+     * правка порога у новой клетки задевает всех клеток этого типа в проекте,
+     * как и было до того, как её положили.
+     */
+    insertCellOfType(type: string): Promise<void> {
+      const { project, view } = store.getState()
+      return act((id) => io.addNeuronOfType(id, type, free(project, view)))
+    },
+
+    /**
      * Щелчок по концу связи: первый запоминает источник, второй создаёт связь.
      *
      * Один автомат на порт блока и на точку клетки. Разводить их на два
@@ -571,6 +596,65 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     rename(block: string, label: string): Promise<void> {
       if (!label.trim()) return Promise.resolve()
       return act((id) => io.rename(id, block, label))
+    },
+
+    /**
+     * Имя клетки (#563). Оно же её адрес, поэтому ссылки чинит сервер.
+     *
+     * Выделение остаётся на клетке и переезжает на новое имя: человек
+     * переименовал то, на что смотрит, и потерять панель свойств из-за этого
+     * он не должен. Пустое имя не отправляется -- сервер его всё равно не
+     * примет, а отказ ради пустого поля читался бы как поломка.
+     */
+    renameNeuron(neuron: string, name: string): Promise<void> {
+      const chosen = name.trim()
+      if (!chosen || chosen === neuron) return Promise.resolve()
+      return act((id) => io.renameNeuron(id, neuron, chosen), {
+        selected: { kind: 'neuron', id: chosen },
+      })
+    },
+
+    /**
+     * Имя проекта. Список проектов перечитывать незачем: он читается из
+     * хранилища, а несохранённое имя туда ещё не доехало -- открытый проект
+     * зовётся своим именем сам (`rows` в экране песочницы).
+     */
+    renameProject(name: string): Promise<void> {
+      const chosen = name.trim()
+      if (!chosen) return Promise.resolve()
+      return act((id) => io.renameProject(id, chosen))
+    },
+
+    /**
+     * Дублировать объект холста (#563).
+     *
+     * Выделение переходит на копию: её и двигают дальше, а оставлять его на
+     * оригинале значило бы, что следующее «дублировать» делает третью копию
+     * того же, а не продолжает начатое. Имя копии известно только из ответа,
+     * поэтому берётся из него, а не угадывается здесь.
+     */
+    async duplicate(object: string): Promise<void> {
+      const before = new Set(
+        (store.getState().project?.neurons ?? [])
+          .map((one) => one.id)
+          .concat((store.getState().project?.blocks ?? []).map((one) => one.id)),
+      )
+      await act((id) => io.duplicate(id, object))
+      const after = store.getState().project
+      if (!after) return
+      const fresh = [...after.neurons, ...after.blocks].find(
+        (one) => !before.has(one.id),
+      )
+      if (fresh) {
+        store.setState({
+          selected: {
+            kind: after.neurons.some((one) => one.id === fresh.id)
+              ? 'neuron'
+              : 'block',
+            id: fresh.id,
+          },
+        })
+      }
     },
 
     setCell: (object: string, type: string, params: Partial<PointModel>) =>

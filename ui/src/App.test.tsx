@@ -97,6 +97,22 @@ async function mount(): Promise<HTMLElement> {
   return host
 }
 
+/** Щелчок по вкладке левой панели песочницы: «Клетки», «Библиотека», «Объекты».
+ *
+ * Отдельно от `click`: подпись «Библиотека» есть и на вкладке оболочки сверху,
+ * и на вкладке панели слева, и поиск по тексту нашёл бы первую -- то есть увёл
+ * бы с экрана песочницы вместо того, чтобы открыть в ней список паттернов.
+ */
+async function pickTab(label: string): Promise<void> {
+  const target = [...host.querySelectorAll('.lib-tab')].find(
+    (button) => button.textContent?.trim() === label,
+  ) as HTMLButtonElement | undefined
+  if (!target) throw new Error(`в панели нет вкладки «${label}»`)
+  await act(async () => {
+    target.click()
+  })
+}
+
 /** Щелчок мышью по элементу с такой подписью. */
 async function click(label: string): Promise<void> {
   const target = [...host.querySelectorAll('button')].find(
@@ -435,6 +451,7 @@ describe('дорога с карточки в песочницу (#526)', () => 
       name: 'Проба',
       blocks: [],
       neurons: [],
+      cellTypes: [],
       links: [],
       stimuli: [],
       sensors: [],
@@ -594,6 +611,88 @@ describe('дорога с карточки в песочницу (#526)', () => 
     ) as HTMLElement
     expect(drive.textContent).toContain('пуассоновский, в среднем 250 Гц')
     expect(drive.title).toContain('Случайные моменты')
+  })
+
+  it('из песочницы карточка открывается щелчком по строке библиотеки (#566)', async () => {
+    // Обратная дорога уже была, а этой не было: строка панели не вела никуда,
+    // и посмотреть, что за паттерн вставляешь, было нельзя.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+    await pickTab('Библиотека')
+
+    const lib = host.querySelector('button.sb-lib-open') as HTMLButtonElement
+    expect(lib).not.toBe(null)
+    await act(async () => {
+      lib.click()
+    })
+
+    // Карточка открыта, и первая крошка ведёт туда, откуда пришли, а не в
+    // каталог: человек пришёл из проекта и хочет вернуться в проект.
+    expect(host.querySelector('.pat-name')?.textContent).toBe(DETAIL.name)
+    expect(host.querySelector('.pat-back')?.textContent).toBe('Песочница')
+  })
+
+  it('возврат приводит в тот же проект с теми же несохранёнными правками', async () => {
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+    // Правка: пусть проект станет несохранённым -- ровно то, что нельзя
+    // потерять по дороге на карточку.
+    await act(async () => {
+      sandboxController.store.setState({ project: FILLED })
+    })
+    await pickTab('Библиотека')
+    const lib = host.querySelector('button.sb-lib-open') as HTMLButtonElement
+    await act(async () => {
+      lib.click()
+    })
+    // Возврат -- именно крошкой карточки, а не вкладкой сверху: вкладка
+    // уводит «в песочницу вообще», а крошка обязана вернуть туда, откуда
+    // пришли.
+    const back = host.querySelector('.pat-back') as HTMLButtonElement
+    expect(back.textContent).toBe('Песочница')
+    await act(async () => {
+      back.click()
+    })
+
+    // Проект тот же и по-прежнему не сохранён: он живёт в состоянии
+    // песочницы и в открытом `Project` на сервере, а уход с экрана его не
+    // трогает -- и перечитывать его на возврате никто не пробует.
+    expect(sandboxController.store.getState().project).toBe(FILLED)
+    expect(host.textContent).toContain('не сохранено')
+    // Возврат приводит на ту же вкладку, из которой ушли.
+    expect(host.querySelector('.lib-tab.is-on')?.textContent).toBe('Библиотека')
+  })
+
+  it('«+» в панели вставляет блок и с экрана не уводит', async () => {
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+    await pickTab('Библиотека')
+
+    const plus = host.querySelector('.sb-lib-plus') as HTMLButtonElement
+    await act(async () => {
+      plus.click()
+    })
+
+    const insert = asked.find((call) => call.path.endsWith('/blocks'))
+    // Вставка одним нажатием осталась главным действием панели, и витрину она
+    // по-прежнему не тащит.
+    expect(insert?.body).toMatchObject({ pattern: 'ffi', demo: false })
+    expect(host.querySelector('.pat-name')).toBe(null)
   })
 
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {

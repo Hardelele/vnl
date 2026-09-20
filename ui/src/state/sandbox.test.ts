@@ -47,6 +47,7 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
       },
     ],
     neurons: [],
+    cellTypes: [],
     links: [],
     stimuli: [
       {
@@ -623,5 +624,101 @@ describe('паттерн с карточки (#526)', () => {
     await control.insert('ffi')
 
     expect(addBlock).toHaveBeenCalledWith('s1', 'ffi', expect.anything(), false)
+  })
+})
+
+describe('имя, копия и удаление выбранного (#563)', () => {
+  /** Клетка на холсте -- то, у чего есть имя-адрес и что дублируют. */
+  const cell = (id: string) => ({
+    id,
+    cellType: 'relay',
+    position: [0, 0] as [number, number],
+    inhibitory: false,
+    pointModel: POINT,
+  })
+
+  it('переименовывает клетку и оставляет выделение на ней', async () => {
+    // Имя клетки -- её адрес, и после правки выделение обязано переехать на
+    // новое: человек переименовал то, на что смотрит, и панель свойств из-под
+    // него исчезать не должна.
+    const renameNeuron = vi
+      .fn()
+      .mockResolvedValue(project({ neurons: [cell('вход')], dirty: true }))
+    const control = await opened({
+      open: vi.fn().mockResolvedValue(project({ neurons: [cell('relay')] })),
+      renameNeuron,
+    })
+    control.select({ kind: 'neuron', id: 'relay' })
+
+    await control.renameNeuron('relay', 'вход')
+
+    expect(renameNeuron).toHaveBeenCalledWith('s1', 'relay', 'вход')
+    expect(control.store.getState().selected).toEqual({ kind: 'neuron', id: 'вход' })
+  })
+
+  it('пустое и то же самое имя до сервера не доводит', async () => {
+    const renameNeuron = vi.fn()
+    const control = await opened({ renameNeuron })
+
+    await control.renameNeuron('relay', '  ')
+    await control.renameNeuron('relay', 'relay')
+
+    expect(renameNeuron).not.toHaveBeenCalled()
+  })
+
+  it('переименовывает проект и берёт ответ сервера целиком', async () => {
+    const renameProject = vi.fn().mockResolvedValue(project({ name: 'Опыт 3' }))
+    const control = await opened({ renameProject })
+
+    await control.renameProject('  Опыт 3  ')
+
+    expect(renameProject).toHaveBeenCalledWith('s1', 'Опыт 3')
+    expect(control.store.getState().project?.name).toBe('Опыт 3')
+  })
+
+  it('дублирует объект и выделяет копию, а не оригинал', async () => {
+    // Иначе следующее «дублировать» делало бы третью копию того же самого
+    // вместо того, чтобы продолжать начатое. Имя копии раздаёт сервер, и
+    // берётся оно из ответа, а не угадывается здесь.
+    const duplicate = vi
+      .fn()
+      .mockResolvedValue(project({ neurons: [cell('relay'), cell('relay2')] }))
+    const control = await opened({
+      open: vi.fn().mockResolvedValue(project({ neurons: [cell('relay')] })),
+      duplicate,
+    })
+
+    await control.duplicate('relay')
+
+    expect(duplicate).toHaveBeenCalledWith('s1', 'relay')
+    expect(control.store.getState().selected).toEqual({ kind: 'neuron', id: 'relay2' })
+  })
+})
+
+describe('типы клеток самого проекта (#564)', () => {
+  it('кладутся своим полем, а не через каталог', async () => {
+    // Каталог и типы проекта -- разные источники, и одноимённый тип в них
+    // бывает разным: разбор блока кладёт в проект `relay_2`, когда его
+    // `relay` не совпал с проектным.
+    const addNeuronOfType = vi.fn().mockResolvedValue(project({ dirty: true }))
+    const addNeuron = vi.fn()
+    const control = await opened({ addNeuronOfType, addNeuron })
+
+    await control.insertCellOfType('target')
+
+    expect(addNeuronOfType).toHaveBeenCalledWith('s1', 'target', expect.anything())
+    expect(addNeuron).not.toHaveBeenCalled()
+    expect(control.store.getState().project?.dirty).toBe(true)
+  })
+
+  it('каталожная клетка по-прежнему кладётся своей дорогой', async () => {
+    const addNeuron = vi.fn().mockResolvedValue(project())
+    const addNeuronOfType = vi.fn()
+    const control = await opened({ addNeuron, addNeuronOfType })
+
+    await control.insertCell('pyr')
+
+    expect(addNeuron).toHaveBeenCalledWith('s1', 'pyr', expect.anything())
+    expect(addNeuronOfType).not.toHaveBeenCalled()
   })
 })

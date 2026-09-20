@@ -46,12 +46,18 @@ const FFI: Pattern = {
 let root: Root | null = null
 let host: HTMLElement
 
-async function mount(pattern: Pattern, onInsert = vi.fn()): Promise<HTMLElement> {
+async function mount(
+  pattern: Pattern,
+  onInsert = vi.fn(),
+  onOpen?: (id: string) => void,
+): Promise<HTMLElement> {
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
   await act(async () => {
-    root!.render(<LibraryRow pattern={pattern} onInsert={onInsert} />)
+    root!.render(
+      <LibraryRow pattern={pattern} onInsert={onInsert} onOpen={onOpen} />,
+    )
   })
   return host
 }
@@ -114,9 +120,45 @@ describe('строка библиотеки', () => {
     expect(insert).toHaveBeenCalledWith('ffi')
   })
 
+  it('без дороги на карточку строка остаётся строкой, а не ссылкой', async () => {
+    // Погашенная или обманчивая ссылка хуже её отсутствия: обещать переход,
+    // которого нет, нельзя.
+    const view = await mount(FFI)
+    expect(view.querySelector('button.sb-lib-open')).toBe(null)
+    expect(view.querySelector('.sb-lib-open.is-flat')).not.toBe(null)
+  })
+
   it('подпись превью говорит про состав, а не повторяет имя рядом', async () => {
     const view = await mount(FFI)
     const label = view.querySelector('.thumbnail')?.getAttribute('aria-label')
     expect(label).toBe('схема: 3 кл., 3 св.')
+  })
+})
+
+describe('два намерения в одной строке (#566)', () => {
+  it('щелчок по строке открывает карточку, а «+» вставляет и не уводит', async () => {
+    const insert = vi.fn()
+    const open = vi.fn()
+    const view = await mount(FFI, insert, open)
+
+    // Открывает вся площадь строки, а не одно имя: цель в полторы строки
+    // текста -- это промах мышью, а на касании промах ещё и незаметный.
+    const row = view.querySelector('button.sb-lib-open') as HTMLButtonElement
+    act(() => (view.querySelector('.sb-preview') as HTMLElement).click())
+    expect(open).toHaveBeenCalledWith('ffi')
+    expect(insert).not.toHaveBeenCalled()
+
+    open.mockClear()
+    act(() => (view.querySelector('.sb-plus') as HTMLButtonElement).click())
+    expect(insert).toHaveBeenCalledWith('ffi')
+    expect(open).not.toHaveBeenCalled()
+
+    // Разницу видно до щелчка: у обеих дорог своя подсказка, и «+» вынесена
+    // из строки отдельной кнопкой, а не спрятана в неё.
+    expect(row.getAttribute('title')).toContain('Открыть карточку')
+    expect(
+      (view.querySelector('.sb-plus') as HTMLElement).getAttribute('title'),
+    ).toContain('Вставить')
+    expect(row.contains(view.querySelector('.sb-plus'))).toBe(false)
   })
 })

@@ -426,6 +426,55 @@
 .sb-lib {
   flex-direction: column;
   align-items: stretch;
+  /* «+» лежит поверх строки, а не в её потоке: строка целиком стала ссылкой
+     на карточку (#566), и вложить кнопку в кнопку нельзя. */
+  position: relative;
+  padding: 0;
+}
+
+/* Открывающая половина строки: превью и имя. Занимает всю строку, потому что
+   цель в полторы строки текста -- это промах мышью, а на касании промах ещё и
+   незаметный. Отступ справа снизу -- место под «+», чтобы длинное имя не
+   заезжало под кнопку. */
+.sb-lib-open {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 7px var(--space-3);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sb-lib-open:hover {
+  background: var(--subtle);
+}
+
+/* Та же разметка там, где открывать нечего: строка не ссылка и под курсором
+   не подсвечивается -- обещать переход, которого нет, хуже, чем не обещать. */
+.sb-lib-open.is-flat {
+  cursor: default;
+}
+
+.sb-lib-open.is-flat:hover {
+  background: none;
+}
+
+/* «+» поверх строки: рамка и подложка -- чтобы кнопка читалась кнопкой, а не
+   частью строки-ссылки. Без них два намерения в одной строке различались бы
+   только после щелчка. */
+.sb-lib-plus {
+  position: absolute;
+  right: var(--space-3);
+  bottom: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
 }
 
 /* Превью схемы. Пропорции ровно те же, что у поля миниатюры (240x120):
@@ -444,12 +493,6 @@
   border-radius: 6px;
   background: var(--subtle);
   overflow: hidden;
-}
-
-.sb-lib-line {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 /* Имя паттерна переносится и не обрезается: обрезанные «Кратковременная
@@ -603,6 +646,44 @@
 .sb-dot.is-inh {
   border-radius: 2px;
   background: var(--inh);
+}
+
+/* Строка внутреннего узла блока: сама ведёт соединение, а кнопка справа
+   вешает на узел драйв (#565). Двух действий в одной строке не было, пока
+   драйв жил только на портах; теперь их два, и щелчок по строке обязан
+   остаться одним -- соединением, за которым сюда приходят чаще.
+
+   Отступы с самой строки сняты и отданы кнопке: иначе полоса подсветки при
+   наведении обрывалась бы, не дойдя до края панели, и строка читалась бы
+   короче, чем есть. */
+.sb-inner {
+  padding: 0;
+  gap: 0;
+}
+
+.sb-inner-pick {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 8px var(--space-4);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sb-inner-pick:hover {
+  background: var(--subtle);
+}
+
+.sb-inner .sb-plus {
+  flex: none;
+  margin: 0 var(--space-3) 0 var(--space-2);
 }
 
 .sb-note {

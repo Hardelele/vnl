@@ -1749,3 +1749,263 @@ def test_a_builtin_cell_carries_its_own_explanation(base):
 
     assert "дендрит" in notes["sst"].lower()
     assert all(notes[cell] for cell in ("pyr", "pv", "sst", "vip", "relay"))
+
+
+# --- имя, копия и удаление выбранного (#563) -------------------------------
+
+
+def test_a_cell_is_renamed_together_with_everything_pointing_at_it(base):
+    """Приёмка #563: имя клетки меняется, связь, стимул и запись остаются.
+
+    Полный ответ на операцию -- тот же, что и у всех остальных: холст, дерево
+    объектов и свойства читают один и тот же объект.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Имена"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "relay"})
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pv"})
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {"source": {"instance": "relay"}, "target": {"instance": "pv"}},
+    )
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": "relay"}},
+    )
+    _, before = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/recordings",
+        {"target": {"instance": "relay"}},
+    )
+
+    status, renamed = ask(
+        base, "PATCH", f"/api/sandboxes/{sandbox}/neurons/relay", {"id": "вход"}
+    )
+
+    assert status == 200
+    assert [cell["id"] for cell in renamed["neurons"]] == ["вход", "pv"]
+    assert renamed["links"][0]["source"]["instance"] == "вход"
+    assert renamed["stimuli"][0]["target"]["instance"] == "вход"
+    assert renamed["recordings"][0]["target"]["instance"] == "вход"
+    assert renamed["problems"] == []
+    assert renamed["canUndo"] is True
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert [cell["id"] for cell in undone["neurons"]] == ["relay", "pv"]
+    assert undone["links"] == before["links"]
+
+
+def test_a_taken_name_is_refused_with_a_readable_reason(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Имена"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "relay"})
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pv"})
+
+    status, answer = ask(
+        base, "PATCH", f"/api/sandboxes/{sandbox}/neurons/relay", {"id": "pv"}
+    )
+
+    assert status == 400
+    assert "занято" in answer["error"]
+
+
+def test_a_project_is_renamed_and_the_listing_shows_it(base):
+    """Приёмка #563: новое имя видно в списке проектов -- после сохранения."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Проба"})
+    sandbox = project["id"]
+    before = project["fingerprint"]
+
+    status, renamed = ask(base, "PATCH", f"/api/sandboxes/{sandbox}", {"name": "Опыт 3"})
+
+    assert status == 200
+    assert renamed["name"] == "Опыт 3"
+    assert renamed["id"] == sandbox, "идентификатор -- адрес, он не меняется"
+    assert renamed["fingerprint"] == before, "имя проекта сетью не является"
+    assert renamed["dirty"] is True
+
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/save")
+    _, listing = ask(base, "GET", "/api/sandboxes")
+    assert [row["name"] for row in listing["sandboxes"] if row["id"] == sandbox] == [
+        "Опыт 3"
+    ]
+
+
+def test_an_empty_project_name_is_refused(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Проба"})
+
+    status, answer = ask(base, "PATCH", f"/api/sandboxes/{project['id']}", {"name": " "})
+
+    assert status == 400
+    assert "имя" in answer["error"]
+
+
+def test_a_cell_is_duplicated_with_its_membrane_and_without_its_links(base):
+    """Приёмка #563: вторая такая же клетка со своим именем."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Копии"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "relay"})
+    ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/objects/relay/cells/relay",
+        {"vThreshold": -44.0},
+    )
+    _, before = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": "relay"}},
+    )
+
+    status, copied = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/objects/relay/duplicate"
+    )
+
+    assert status == 201
+    assert [cell["id"] for cell in copied["neurons"]] == ["relay", "relay2"]
+    twin = next(cell for cell in copied["neurons"] if cell["id"] == "relay2")
+    assert twin["pointModel"]["vThreshold"] == -44.0
+    assert twin["cellType"] == "relay"
+    assert copied["links"] == [], "связи копия не получает"
+    assert len(copied["stimuli"]) == len(before["stimuli"]), "драйв тоже не копируется"
+    assert copied["fingerprint"] != before["fingerprint"], "сеть стала другой"
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert [cell["id"] for cell in undone["neurons"]] == ["relay"]
+
+
+def test_a_block_is_duplicated_by_the_same_route(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+
+    status, copied = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/duplicate"
+    )
+
+    assert status == 201
+    assert len(copied["blocks"]) == 3
+    assert len({block["id"] for block in copied["blocks"]}) == 3
+
+
+def test_removing_a_drive_by_its_own_name_works(base):
+    """Кнопка «Убрать стимул» молча не делала ничего -- `touches` про цель."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Драйв"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "relay"})
+    _, with_drive = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": "relay"}},
+    )
+    drive = with_drive["stimuli"][0]["id"]
+
+    _, after = ask(base, "DELETE", f"/api/sandboxes/{sandbox}/objects/{drive}")
+
+    assert after["stimuli"] == []
+    assert [cell["id"] for cell in after["neurons"]] == ["relay"], "цель осталась"
+
+
+# --- типы клеток самого проекта (#564) -------------------------------------
+
+
+def test_the_payload_lists_the_cell_types_of_the_project(base):
+    """Приёмка #564: разобранный блок оставляет в проекте свои типы, и они видны.
+
+    До этого они жили только внутри `pointModel` конкретной клетки: списком их
+    никто не показывал, а значит третью такую клетку положить было нечем.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+
+    _, broken = ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup")
+
+    types = {item["type"]: item for item in broken["cellTypes"]}
+    assert {"relay", "pyr_l5", "pv"} <= set(types)
+    assert types["pv"]["inhibitory"] is True
+    assert types["pyr_l5"]["pointModel"]["vThreshold"] == -50.0
+    # Видно, кого задевает правка порога, -- как и у клеток блока.
+    assert types["pyr_l5"]["neurons"], "тип назвал свои клетки"
+
+
+def test_a_project_type_is_put_on_the_canvas_by_the_same_route(base):
+    """Приёмка #564: третья клетка того же типа -- и тип берётся существующий.
+
+    Не копия: параметры мембраны висят на типе, и правка порога обязана
+    задевать всех клеток этого типа в проекте, как и было.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    _, broken = ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup")
+    was = len([cell for cell in broken["neurons"] if cell["cellType"] == "pyr_l5"])
+
+    status, added = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"type": "pyr_l5"}
+    )
+
+    assert status == 201
+    fresh = [cell for cell in added["neurons"] if cell["cellType"] == "pyr_l5"]
+    assert len(fresh) == was + 1
+
+    _, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/objects/{fresh[-1]['id']}/cells/pyr_l5",
+        {"vThreshold": -43.0},
+    )
+    touched = [
+        cell for cell in changed["neurons"] if cell["cellType"] == "pyr_l5"
+    ]
+    assert all(cell["pointModel"]["vThreshold"] == -43.0 for cell in touched), (
+        "тип один на всех своих клеток -- правка задевает всех"
+    )
+
+
+def test_a_type_the_project_does_not_have_is_refused_by_name(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Типы"})
+    sandbox = project["id"]
+
+    status, answer = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"type": "target"}
+    )
+
+    assert status == 400
+    assert "target" in answer["error"]
+
+
+def test_two_sources_of_a_cell_type_at_once_are_refused(base):
+    """Каталог и типы проекта -- разные источники, и выбирать за человека нельзя."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Типы"})
+    sandbox = project["id"]
+
+    status, answer = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/neurons",
+        {"cell": "relay", "type": "relay"},
+    )
+
+    assert status == 400
+    assert "один" in answer["error"]
+
+
+def test_a_catalog_cell_is_still_put_by_its_own_field(base):
+    """Каталог и его подсказки остаются как были (#541)."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Типы"})
+    sandbox = project["id"]
+
+    status, added = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "sst"}
+    )
+
+    assert status == 201
+    assert [cell["cellType"] for cell in added["neurons"]] == ["sst"]
+    assert [item["type"] for item in added["cellTypes"]] == ["sst"]
