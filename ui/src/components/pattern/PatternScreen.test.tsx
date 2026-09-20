@@ -18,6 +18,7 @@ import { PatternScreen } from './PatternScreen'
 import type { SessionInfo } from '../../model/session'
 import type { Contact, Glossary, PatternDetail } from '../../model/types'
 import { session, whenLeaving } from '../../state/session'
+import { simController } from '../../state/sim'
 
 /** Контакт целиком: в ответе сервера у него есть и динамика, и пластичность. */
 function contact(part: Partial<Contact> & { id: string }): Contact {
@@ -260,6 +261,9 @@ let deleteReply: { body: unknown; status: number }
 /** Какой паттерн отдаёт сервер: `ffi` или пачка. */
 let served: PatternDetail
 
+/** Длина прогона, которую называет сессия симуляции: карточка открывает её сама. */
+let simDuration = 400
+
 function serve(): void {
   calls = []
   vi.stubGlobal(
@@ -279,7 +283,7 @@ function serve(): void {
           id: 'sim1',
           state: 'paused',
           time: 0,
-          duration: 400,
+          duration: simDuration,
           dt: 0.1,
           from: 0,
           samples: 0,
@@ -373,6 +377,7 @@ async function click(label: string): Promise<void> {
 beforeEach(() => {
   deleteReply = { body: { deleted: 'ffi' }, status: 200 }
   served = PATTERN
+  simDuration = 400
   went = []
   whenLeaving((url) => went.push(url))
   serve()
@@ -611,5 +616,51 @@ describe('драйв и записи видны', () => {
 
     expect(section('Записи')).toContain('возбуждающая проводимость, нСм')
     expect(section('Записи')).toContain('E.soma')
+  })
+})
+
+describe('место активности сети (#552)', () => {
+  it('стоит своей панелью, а не внутри карточки схемы', async () => {
+    await mount()
+
+    const activity = host.querySelector('.pat-activity')
+    expect(activity).not.toBe(null)
+    // Заголовок теперь свой: раньше его давал `panel-head` соседа по рамке.
+    expect(activity?.querySelector('.panel-title')?.textContent).toBe(
+      'Активность сети',
+    )
+    expect(activity?.querySelector('.tl')).not.toBe(null)
+    // В карточке схемы таймлайна больше нет -- ширину он там получал по
+    // колонке схемы, и растр читался вдвое хуже, чем та же сеть в песочнице.
+    expect(host.querySelector('.pat-scheme .tl')).toBe(null)
+  })
+
+  it('стоит под схемой в той же колонке, а не под обеими', async () => {
+    await mount()
+
+    // Одна ячейка сетки на схему и активность: порознь они попали бы в разные
+    // ряды, и высоту первого задавала бы правая колонка со списками -- растр
+    // уезжал бы на полтысячи пикселей вниз от схемы, а смотрят их вместе.
+    const main = host.querySelector('.pat-main')
+    expect(main?.querySelector('.pat-scheme')).not.toBe(null)
+    expect(main?.querySelector('.pat-activity')).not.toBe(null)
+    expect(main?.querySelector('.pat-side')).toBe(null)
+  })
+
+  it('шкала показывает весь прогон, а не круглый тик до него', async () => {
+    // Приёмка #552 на витрине `ffi`: прогон 340 мс, круглый шаг 50.
+    served = {
+      ...PATTERN,
+      demo: { ...PATTERN.demo!, run: { ...PATTERN.demo!.run, duration: 340 } },
+    }
+    simDuration = 340
+    serve()
+    // Сессия симуляции общая на модуль: соседний тест мог оставить в ней свой
+    // прогон, а карточка открывает свою при появлении на экране.
+    simController.store.setState({ duration: 0 })
+    await mount()
+
+    const marks = [...host.querySelectorAll('.tl-mark')].map((m) => m.textContent)
+    expect(marks.at(-1)).toBe('340')
   })
 })

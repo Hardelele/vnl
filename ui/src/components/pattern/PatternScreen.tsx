@@ -302,49 +302,82 @@ export function PatternScreen({
       ) : null}
 
       <div className="pat-body">
-        <section className="panel pat-scheme">
-          <div className="panel-head">
-            <span className="panel-title">Схема</span>
-            <span className="mono panel-note">
-              {engine === 'elk' ? 'раскладка ELK' : 'раскладка встроенная'}
-            </span>
-          </div>
-          <div className="pat-canvas">
-            <LiveScheme
-              scheme={pattern.scheme}
-              cells={cells}
-              onEngine={remember}
+        {/* Левая колонка -- одна ячейка сетки на схему и активность вместе, а
+            не две соседние (#552). Порознь они попадали бы в разные ряды, а
+            высоту ряда задаёт самая высокая ячейка -- правая колонка со
+            списками: между схемой и растром вставало бы полтысячи пустых
+            пикселей, и вместе они на экран уже не помещались. Обёртка делает
+            левую колонку столбиком, который о высоте соседа ничего не знает. */}
+        <div className="pat-main">
+          <section className="panel pat-scheme">
+            <div className="panel-head">
+              <span className="panel-title">Схема</span>
+              <span className="mono panel-note">
+                {engine === 'elk' ? 'раскладка ELK' : 'раскладка встроенная'}
+              </span>
+            </div>
+            <div className="pat-canvas">
+              <LiveScheme
+                scheme={pattern.scheme}
+                cells={cells}
+                onEngine={remember}
+                selected={neuron}
+                onPick={pickNeuron}
+                selectedLink={contact?.id ?? null}
+                onPickLink={pickLink}
+              />
+            </div>
+          </section>
+
+          {/* Активность сети -- своей панелью под схемой, в той же колонке (#552).
+
+              Раньше она стояла внутри карточки схемы и получала ширину левой
+              колонки: 670 пикселей на окне 1600, из которых 176 отдано колонке
+              имён, -- 494 на сами дорожки. На такой ширине растр перестаёт быть
+              растром: разряды соседних клеток сливаются в одну полосу, а прогон,
+              ради которого карточку и открыли, читается вдвое хуже, чем та же
+              сеть в песочнице. Ширину дала не эта перестановка, а колонка: она
+              стала широкой, а списки справа -- уже (360 вместо 448).
+
+              Разобранная альтернатива -- вынести активность вниз во всю ширину
+              карточки, под обе колонки. Ширины она даёт столько же (1136 против
+              1120 на окне 1600), но растр уезжает под правую колонку: та вчетверо
+              выше схемы, и между ними встаёт 535 пикселей пустоты -- померено. На
+              экран вместе они уже не помещаются, а смотрят их вместе.
+
+              Вторая альтернатива -- та же тянущаяся граница, что в песочнице, и
+              пусть человек решает сам. Отвергнута по причине из самой задачи:
+              `ActivityPanel` писалась под оконный каркас песочницы (высота в
+              окно, страница не скроллится), а карточка осталась обычной
+              страницей (#504), и та же граница на скроллящейся странице вела бы
+              себя иначе при том же виде.
+
+              Свой заголовок появился ровно потому, что активность стала панелью:
+              внутри карточки схемы его давал `panel-head` соседа по рамке, а
+              теперь рамка своя. Строка про жесты та же, что в песочнице. */}
+          <section className="panel pat-activity">
+            <div className="panel-head">
+              <span className="panel-title">Активность сети</span>
+              <span className="mono panel-note" title={TIMELINE_HINT}>
+                {TIMELINE_HINT}
+              </span>
+            </div>
+            <Timeline
+              duration={duration || (pattern.demo?.run.duration ?? 1)}
+              time={time}
+              dt={dt}
+              order={pattern.body.neurons.map((item) => item.id)}
+              spikes={spikes}
+              traces={traces}
+              inhibitory={Object.fromEntries(
+                pattern.body.neurons.map((item) => [item.id, item.inhibitory]),
+              )}
+              onSeek={(moment) => void act(() => control.seek(moment))}
               selected={neuron}
-              onPick={pickNeuron}
-              selectedLink={contact?.id ?? null}
-              onPickLink={pickLink}
+              onSelect={pickNeuron}
             />
-          </div>
-          {/* Заголовок таймлайна даёт панель, а не он сам: на этом экране он
-              стоит внутри карточки схемы, и второй заголовок был бы вторым
-              заголовком в одной рамке. Жесты названы здесь же -- строка та же,
-              что в песочнице (#504). */}
-          <div className="panel-head">
-            <span className="panel-title">Активность сети</span>
-            <span className="mono panel-note" title={TIMELINE_HINT}>
-              {TIMELINE_HINT}
-            </span>
-          </div>
-          <Timeline
-            duration={duration || (pattern.demo?.run.duration ?? 1)}
-            time={time}
-            dt={dt}
-            order={pattern.body.neurons.map((item) => item.id)}
-            spikes={spikes}
-            traces={traces}
-            inhibitory={Object.fromEntries(
-              pattern.body.neurons.map((item) => [item.id, item.inhibitory]),
-            )}
-            onSeek={(moment) => void act(() => control.seek(moment))}
-            selected={neuron}
-            onSelect={pickNeuron}
-          />
-        </section>
+          </section>
+        </div>
 
         <section className="pat-side">
           {neuron ? (
