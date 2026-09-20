@@ -11,6 +11,7 @@
  * ровно столько, сколько параметров у модели: они будут только прибывать.
  */
 
+import { CELLS, LINKS, counted } from '../../lib/plural'
 import { NO_GLOSSARY, receptorNote } from '../../model/glossary'
 import type { CellState } from '../../model/sim'
 import type {
@@ -399,6 +400,16 @@ function BlockProps({
         <button
           type="button"
           className="btn-secondary"
+          // Последствие названо здесь той же фразой, что и у плашки на холсте
+          // (#549): дорог к разбору две, а сказано о нём должно быть одно и то
+          // же -- иначе одна из дорог окажется «той, что без предупреждения».
+          title={`${block.label} перестанет быть блоком: на холсте останутся ${counted(
+            block.counts.neurons,
+            CELLS,
+          )} и ${counted(
+            block.counts.contacts,
+            LINKS,
+          )} как обычные объекты проекта. Отменяется одним шагом.`}
           onClick={() => void control.ungroup(block.id)}
         >
           Разобрать на клетки

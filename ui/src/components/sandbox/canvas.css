@@ -1,12 +1,23 @@
-/* Холст песочницы. */
-
+/* Холст песочницы.
+ *
+ * `.canvas` -- сама область, `.cv-svg` -- окно в координаты схемы внутри неё.
+ * Область отдельной коробкой затем, что поверх окна лежит приближение числом:
+ * положить его внутрь SVG значило бы считать ему место в единицах схемы,
+ * которые от приближения меняются (#545). */
 .canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border-radius: 12px;
+}
+
+.cv-svg {
   display: block;
   width: 100%;
   height: 100%;
-  background: var(--panel);
-  border-radius: 12px;
   touch-action: none;
+  cursor: grab;
 }
 
 /* Рамка блока -- только прямой потомок: внутри раскрытого блока лежат свои
@@ -44,20 +55,62 @@
   stroke: var(--accent);
 }
 
-/* Переключатель «показать, что внутри». Блок считается насквозь и так, это
-   только показ -- поэтому знак скромный и стоит в углу подписи. */
-.cv-open circle {
+/* Плашка «показать, что внутри» / «свернуть».
+ *
+ * Плашка, а не кружок с плюсом, как было: кружок на холсте уже означает порт,
+ * и знак раскрытия читался как «добавить порт» (#549). У плашки есть подпись,
+ * и спорить с портом ей нечем.
+ *
+ * Заливка тусклая, обводки в покое нет. Плашка обязана читаться как плашка --
+ * иначе счётчик снова станет справкой, ради которой всё и затевалось, -- но
+ * рамка вровень с коробкой поставила бы показ в один ряд со схемой. Заливки
+ * хватает, чтобы понять «сюда нажимают»; рамка приходит под курсором. */
+.cv-open-pad {
+  fill: var(--subtle);
+  stroke: transparent;
+  stroke-width: 1;
+  cursor: pointer;
+}
+
+.cv-open:hover .cv-open-pad {
+  fill: var(--selected);
+  stroke: var(--line-strong);
+}
+
+.cv-open:hover .cv-sub {
+  fill: var(--ink);
+}
+
+/* Счётчик без переключателя -- просто справка: ни шеврона, ни отклика на
+   курсор. Врать про нажимаемость хуже, чем молчать. */
+.cv-open.is-mute .cv-open-pad {
+  display: none;
+}
+
+/* Действие над выбранным блоком -- «разобрать на клетки». Это уже правка
+   проекта, а не показ, поэтому плашка видна сразу, а не под курсором: у неё
+   есть последствие, о котором надо предупредить заранее. */
+.cv-act rect {
   fill: var(--panel);
   stroke: var(--line-strong);
   stroke-width: 1.2;
   cursor: pointer;
 }
 
-.cv-open-sign {
+.cv-act text {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 9px;
   fill: var(--muted);
   pointer-events: none;
+}
+
+.cv-act:hover rect {
+  fill: var(--selected);
+  stroke: var(--accent);
+}
+
+.cv-act:hover text {
+  fill: var(--ink);
 }
 
 /* Клетка внутри раскрытого блока. Обозначения те же, что у клетки на холсте и
@@ -71,6 +124,13 @@
 
 .cv-in-cell.is-inh rect {
   stroke: var(--inh);
+}
+
+/* Отклик на курсор: внутренний узел -- такой же конец связи, как порт, но
+   пока по нему не проведёшь, об этом знает только подсказка. Утолщённая
+   обводка говорит «сюда можно целиться» до щелчка, а не после (#549). */
+.cv-in-cell:hover rect {
+  stroke-width: 2.6;
 }
 
 .cv-in-cell.is-spiking rect {
@@ -262,6 +322,12 @@
   stroke: var(--mod);
 }
 
+/* Тот же отклик, что у внутреннего узла: и порт, и узел -- концы связи, и
+   отзываться на курсор они обязаны одинаково, хотя нарисованы по-разному. */
+.cv-port:hover circle {
+  stroke-width: 2.6;
+}
+
 /* Порт, от которого тянется связь: ждёт второго щелчка. */
 .cv-port.is-waiting circle {
   fill: var(--accent);
@@ -311,4 +377,42 @@
   font-family: var(--font-sans);
   font-size: 13px;
   fill: var(--faint);
+  /* Надпись не ловит мышь: пустое место холста тянется, и приглашение
+     «положите клетку» не должно быть единственным местом, за которое не
+     потянуть. */
+  pointer-events: none;
+}
+
+/* Приближение числом и «вписать» -- в углу области, поверх схемы.
+ *
+ * Строка не ловит мышь целиком, только сама кнопка: под ней лежит холст, и
+ * прозрачная полоса поперёк угла отбирала бы у него и прокрутку, и тягу. */
+.cv-tools {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  pointer-events: none;
+}
+
+.cv-fit {
+  pointer-events: auto;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cv-fit:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.cv-fit:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
