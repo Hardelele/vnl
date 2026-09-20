@@ -63,6 +63,16 @@ const GLOSSARY: Glossary = {
   cell: {},
   contact: { receptor: 'Чем контакт действует на цель.' },
   port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
+  drives: [
+    {
+      id: 'poisson',
+      name: 'пуассоновский',
+      note: 'Случайные моменты со средней частотой.',
+      receptor: true,
+      template: false,
+      params: [],
+    },
+  ],
   recorded: [
     { id: 'v', name: 'мембранный потенциал', unit: 'мВ' },
     { id: 'g_exc', name: 'возбуждающая проводимость', unit: 'нСм' },
@@ -105,6 +115,7 @@ const PATTERN: PatternDetail = {
         amplitude: 1.5,
         rate: 250,
         times: [],
+        protocol: 'пуассоновский, в среднем 250 Гц',
         start: 20,
         stop: 380,
       },
@@ -178,6 +189,7 @@ const BURST: PatternDetail = {
         amplitude: 3,
         rate: 0,
         times: [50, 70, 90, 110, 130, 150, 170, 190],
+        protocol: 'список, 8 импульсов',
         start: 0,
         stop: 300,
       },
@@ -531,7 +543,9 @@ describe('драйв и записи видны', () => {
 
     const said = section('Драйв')
     expect(said).toContain('IN.soma')
-    expect(said).toContain('пуассоновский шум 250 Гц, вес 1.5 нСм')
+    // Слова протокола приходят с сервера: он один знает, что у пуассоновского
+    // драйва частота средняя, а не метрономная (#553).
+    expect(said).toContain('пуассоновский, в среднем 250 Гц, вес 1.5 нСм')
     expect(said).toContain('с 20 по 380 мс')
   })
 
@@ -541,7 +555,7 @@ describe('драйв и записи видны', () => {
     await mount()
 
     const said = section('Драйв')
-    expect(said).toContain('список спайков, вес 3 нСм')
+    expect(said).toContain('список, 8 импульсов, вес 3 нСм')
     expect(said).toContain('8 моментов: 50, 70, 90, 110, 130, 150, 170, 190 мс')
     expect(said).not.toContain('Гц')
     // Окно во весь прогон -- не окно: `stop` у такого стимула обрезан по

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import ir
+from . import ir, protocols
 from .morphology import MorphologyError
 from .parser import ParsedModel, PendingContact, PendingRecording, PendingStimulus
 
@@ -182,19 +182,23 @@ class _Resolver:
         target = self.site(pending.target_address, where, default_kind="soma")
         if target is None:
             return None
-        if pending.kind not in ("current", "poisson", "spikes"):
-            self.error(where, f"неизвестный вид стимула {pending.kind!r}")
+        if pending.kind not in protocols.KINDS:
+            self.error(
+                where,
+                f"неизвестный вид стимула {pending.kind!r}; "
+                f"есть {', '.join(protocols.KINDS)}",
+            )
             return None
         if pending.kind == "poisson" and pending.rate <= 0:
             self.error(where, "для poisson нужна положительная rate")
         if pending.kind == "spikes" and not pending.times:
             self.error(where, 'для spikes нужен times = "10 20 30"')
-        if pending.kind in ("poisson", "spikes") and pending.amplitude <= 0:
+        if pending.kind != "current" and pending.amplitude <= 0:
             self.error(where, "нужен положительный weight входного контакта")
         if pending.receptor not in ir.RECEPTORS:
             self.error(where, f"неизвестный рецептор {pending.receptor!r}")
             return None
-        return ir.Stimulus(
+        stimulus = ir.Stimulus(
             id=pending.id,
             target=target,
             kind=pending.kind,
@@ -204,7 +208,15 @@ class _Resolver:
             start=pending.start,
             stop=pending.stop,
             receptor=pending.receptor,
+            **pending.shape,  # type: ignore[arg-type]
         )
+        # Шаблон проверяется тем же разворачиванием, каким он поедет в солвер:
+        # «8 импульсов на 0 Гц» ловится здесь, до прогона, и называет параметр,
+        # а не падает где-то внутри интегрирования. Отдельного списка правил
+        # для шаблона нет -- правило одно, и оно в `protocols`.
+        for problem in protocols.problems(stimulus):
+            self.error(where, problem)
+        return stimulus
 
     def recording(self, pending: PendingRecording) -> ir.Recording | None:
         where = f"запись {pending.id}"
@@ -359,6 +371,12 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
         if contact.id in seen:
             resolver.error(f"контакт {contact.id}", "повторяющийся идентификатор")
         seen.add(contact.id)
+
+    # Протоколы, на которых движку верить нельзя: не отказ, но и не молчание
+    # (#508). Условие живёт в `protocols` -- там же, где сам протокол, -- и
+    # оттуда же его берёт песочница через `compose`.
+    for caution in protocols.cautions(model):
+        resolver.warn("протокол", caution)
 
     if not model.instances:
         resolver.warn("модель", "в модели нет ни одного нейрона")

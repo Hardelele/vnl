@@ -19,11 +19,11 @@ import copy
 import hashlib
 import json
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator
 
-from . import ir
+from . import ir, protocols
 from .compose import Composition, compose
 from .patterns import (
     CatalogLevel,
@@ -57,9 +57,11 @@ HISTORY_LIMIT = 50
 #: превращает песочницу в зависший браузер вместо сообщения об ошибке.
 SAMPLE_LIMIT = 1_000_000
 
-#: Род стимула. Список явный: `sim/lif.py` понимает ровно эти три, и опечатка
-#: иначе дала бы молчащий стимул вместо отказа.
-STIMULUS_KINDS = ("current", "poisson", "spikes")
+#: Род стимула. Реестр один на проект (`protocols.DRIVE_KINDS`): он же решает,
+#: какими числами задан протокол, он же разворачивает шаблон в список времён и
+#: он же объясняет род человеку. Свой список здесь был бы вторым -- и разошёлся
+#: бы с солвером на первом же новом протоколе.
+STIMULUS_KINDS = protocols.KINDS
 
 #: Параметры мембраны, у которых ноль или минус не значат ничего: на них
 #: делят. Проверяются здесь, а не в симуляторе, чтобы отказ пришёл в панель
@@ -386,10 +388,25 @@ class Project:
         if stop <= start:
             raise PatternError("стимул кончается раньше, чем начинается")
 
+        # Правка примеряется на копии и только потом ложится в проект: шаблон
+        # протокола проверяется тем же разворачиванием, каким он поедет в
+        # солвер, а отказ обязан оставить проект таким, каким он был. Иначе
+        # «поезд на 0 Гц» успел бы попасть и в историю отмены, и в файл.
+        candidate = replace(stimulus, **params)
+        # Смена рода досыпает канонические числа нового протокола -- но только
+        # туда, где ничего не набрано. Стирать набранное значило бы наказывать
+        # за любопытство: заглянул в другой род и потерял свои 50 Гц.
+        for key, value in protocols.defaults(candidate.kind).items():
+            if key not in params and not getattr(candidate, key):
+                setattr(candidate, key, value)
+        problems = protocols.problems(candidate)
+        if problems:
+            raise PatternError("; ".join(problems))
+
         self._remember(f"стимул {stimulus_id}")
         stimulus = self._stimulus(stimulus_id)
-        for key, value in params.items():
-            setattr(stimulus, key, value)
+        for slot in fields(SandboxStimulus):
+            setattr(stimulus, slot.name, getattr(candidate, slot.name))
         return stimulus
 
     def set_recording(self, recording_id: str, var: str) -> SandboxRecording:

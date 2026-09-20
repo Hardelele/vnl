@@ -340,7 +340,14 @@ class Link:
 
 @dataclass
 class SandboxStimulus:
-    """Стимул проекта. Целью может быть и порт блока, и отдельный нейрон."""
+    """Стимул проекта. Целью может быть и порт блока, и отдельный нейрон.
+
+    Поля те же, что у `ir.Stimulus`, и по той же причине, что у связи с
+    контактом: стимул песочницы и стимул собранной сети -- одна вещь с двумя
+    адресами. Числа шаблонов протоколов (`n` … `recovery`) лежат здесь ровно
+    так же плоско; что из них осмысленно при каком роде, знает реестр
+    `protocols.DRIVE_KINDS`.
+    """
 
     id: str
     target: Endpoint
@@ -351,6 +358,15 @@ class SandboxStimulus:
     times: tuple[float, ...] = ()
     start: float = 0.0
     stop: float = float("inf")
+    n: int = 0
+    freq: float = 0.0
+    isi: float = 0.0
+    duration: float = 0.0
+    bursts: int = 0
+    burst_period: float = 0.0
+    repeats: int = 1
+    period: float = 0.0
+    recovery: float = 0.0
 
 
 @dataclass

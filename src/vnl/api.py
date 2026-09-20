@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from typing import Any, Sequence
 
-from . import ir
+from . import ir, protocols
 from .catalog import STATUS_NAMES, Query, facets, search
 from .patterns import LEVEL_NAMES, PORT_NOTES
 from .sim import SimResult
@@ -145,6 +145,34 @@ def _contact(contact: ir.Contact) -> dict[str, Any]:
     }
 
 
+def _shape(stim: Any) -> dict[str, Any]:
+    """Числа шаблона протокола и то, во что они разворачиваются.
+
+    `times` -- всегда развёрнутый список, а не то, что записано в поле: шаблон
+    обязан уметь напечатать себя списком времён, и печатает он его здесь
+    (#508). У `spikes` это тот же список, что набран руками, -- в том и смысл,
+    что разницы между написанным и развёрнутым нет.
+
+    Рядом едет `protocol` -- тот же протокол словами. Числа и слова вместе,
+    потому что вопросов два: «что это за эксперимент» и «в какие именно
+    моменты придут импульсы», и ответ на второй пятьюдесятью числами не
+    заменяет ответа на первый.
+    """
+    return {
+        "times": [round(time, TIME_DIGITS) for time in protocols.spike_times(stim)],
+        "protocol": protocols.describe(stim),
+        "n": stim.n,
+        "freq": stim.freq,
+        "isi": stim.isi,
+        "duration": stim.duration,
+        "bursts": stim.bursts,
+        "burst_period": stim.burst_period,
+        "repeats": stim.repeats,
+        "period": stim.period,
+        "recovery": stim.recovery,
+    }
+
+
 def _stimulus(stim: ir.Stimulus, duration: float) -> dict[str, Any]:
     return {
         "id": stim.id,
@@ -153,11 +181,11 @@ def _stimulus(stim: ir.Stimulus, duration: float) -> dict[str, Any]:
         "receptor": stim.receptor,
         "amplitude": stim.amplitude,
         "rate": stim.rate,
-        "times": list(stim.times),
         "start": stim.start,
         # Бесконечность в JSON не выразить, поэтому обрезаем по прогону:
         # стимул всё равно не действует дольше, чем он длится.
         "stop": min(stim.stop, duration),
+        **_shape(stim),
     }
 
 
@@ -507,6 +535,38 @@ def glossary_payload() -> dict[str, Any]:
         },
         "contact": dict(ir.CONTACT_NOTES),
         "port": dict(PORT_NOTES),
+        # Роды драйва одним списком с полями каждого (#553). Список именно
+        # отсюда, а не из браузера: он же решает, какие числа у протокола
+        # осмысленны, и разворачивает их в моменты импульсов. Вторая его копия
+        # в интерфейсе -- та же болезнь, что была со списком рецепторов: новый
+        # протокол появлялся бы в симуляторе и не появлялся в поле выбора.
+        #
+        # Поля едут вместе с родом, а не подписями в панели, по той же
+        # причине: что у `tbs` есть «пачек» и «между пачками», а у `train` --
+        # «тест восстановления», знает реестр, и браузеру остаётся нарисовать
+        # то, что пришло.
+        "drives": [
+            {
+                "id": drive.id,
+                "name": drive.name,
+                "note": drive.note,
+                "receptor": drive.receptor,
+                "template": drive.expand is not None,
+                "params": [
+                    {
+                        "name": param.name,
+                        "label": param.label,
+                        "unit": param.unit,
+                        "default": param.default,
+                        "step": param.step,
+                        "form": param.form,
+                        "note": param.note,
+                    }
+                    for param in drive.params
+                ],
+            }
+            for drive in protocols.DRIVE_KINDS.values()
+        ],
         # Что означает `g_exc` -- такая же расшифровка подписи, как «что такое
         # gaba_a», и приходит она отсюда же (#546). Реестр с именами и
         # единицами уже есть в `ir.RECORDED`: по нему подписывают оси графика и
@@ -672,9 +732,9 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 "receptor": stim.receptor,
                 "rate": stim.rate,
                 "amplitude": stim.amplitude,
-                "times": list(stim.times),
                 "start": stim.start,
                 "stop": min(stim.stop, sandbox.run.duration),
+                **_shape(stim),
             }
             for stim in sandbox.stimuli
         ],

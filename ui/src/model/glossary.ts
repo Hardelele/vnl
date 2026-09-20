@@ -13,7 +13,13 @@
  */
 
 import { request } from './catalog'
-import type { Glossary, Receptor, RecordedVar } from './types'
+import type {
+  DriveKindInfo,
+  DriveParam,
+  Glossary,
+  Receptor,
+  RecordedVar,
+} from './types'
 
 /** Пустая расшифровка: экран обязан работать и до ответа сервера. */
 export const NO_GLOSSARY: Glossary = {
@@ -23,6 +29,7 @@ export const NO_GLOSSARY: Glossary = {
   contact: {},
   port: {},
   recorded: [],
+  drives: [],
 }
 
 export async function loadGlossary(): Promise<Glossary> {
@@ -62,4 +69,26 @@ export function recordedName(glossary: Glossary, id: RecordedVar): string {
   const variable = glossary.recorded.find((item) => item.id === id)
   if (!variable) return id
   return variable.unit ? `${variable.name}, ${variable.unit}` : variable.name
+}
+
+/**
+ * Род драйва по имени -- ради его объяснения и его полей.
+ *
+ * Пока ответа сервера нет, рода нет и здесь: выдумывать за него поля нельзя --
+ * панель нарисовала бы «Частоту» там, где у протокола её не бывает. Что
+ * показывать в этом случае, решает сама панель; у неё есть то, что в проекте.
+ */
+export function driveKind(glossary: Glossary, id: string): DriveKindInfo | undefined {
+  return glossary.drives.find((item) => item.id === id)
+}
+
+/**
+ * Подпись поля протокола: «Частота, Гц».
+ *
+ * Единица приклеивается здесь, а не пишется в реестре вместе с подписью, по
+ * той же причине, что и у рецептора: подпись и единица -- разные вещи, и
+ * поле без единицы (число импульсов) не должно получать запятую в никуда.
+ */
+export function driveParamLabel(param: DriveParam): string {
+  return param.unit ? `${param.label}, ${param.unit}` : param.label
 }

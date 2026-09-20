@@ -18,8 +18,8 @@
  * трёхсотмиллисекундном прогоне -- это не окно, а повтор длительности.
  */
 
-import { MOMENTS, counted } from '../../lib/plural'
 import { siteText } from '../../lib/site'
+import { momentWords } from '../../lib/times'
 import { receptorHint, recordedName } from '../../model/glossary'
 import type { DemoRun, Glossary, Stimulus } from '../../model/types'
 
@@ -122,24 +122,29 @@ function DriveRow({
 /**
  * Чем бьют -- одной строкой.
  *
- * У каждого рода стимула своё число: шум задаётся частотой, ток -- амплитудой,
- * список спайков -- временами. Показать все три значило бы сказать про
- * пуассоновский драйв «моментов: 0», хотя моментов у него не бывает вовсе.
+ * Протокол словами приходит с сервера (`protocols.describe`): у каждого рода
+ * своё число -- шум задаётся средней частотой, ток амплитудой, поезд числом
+ * импульсов и частотой, -- и знает об этом реестр родов, а не карточка. Своя
+ * сборка этой строки была второй правдой о драйве и уже расходилась: карточка
+ * звала пуассоновский шум просто «шумом N Гц», умалчивая, что частота средняя
+ * (#508, #553).
+ *
+ * Вес приписывается здесь: он есть у всех родов, кроме тока, и в словах
+ * протокола ему делать нечего -- протокол это про моменты, а не про силу.
  */
 function driveWords(stim: Stimulus): string {
-  if (stim.kind === 'poisson') {
-    return `пуассоновский шум ${stim.rate} Гц, вес ${stim.amplitude} нСм`
-  }
-  if (stim.kind === 'current') return `постоянный ток ${stim.amplitude} нА`
-  return `список спайков, вес ${stim.amplitude} нСм`
+  if (stim.kind === 'current') return stim.protocol
+  return `${stim.protocol}, вес ${stim.amplitude} нСм`
 }
 
 /** Моменты спайков и окно -- вторая строка: длинные, а читают их после рода. */
 function details(stim: Stimulus, duration: number): string {
   const said: string[] = []
-  if (stim.kind === 'spikes' && stim.times.length) {
-    said.push(`${counted(stim.times.length, MOMENTS)}: ${stim.times.join(', ')} мс`)
-  }
+  // Моменты -- у всех родов, где они есть: и у списка, набранного руками, и у
+  // шаблона протокола, который сервер развернул в такой же список (#508).
+  // У пуассоновского драйва их нет заранее вовсе, и строка не появляется.
+  const moments = momentWords(stim.times)
+  if (moments) said.push(moments)
   const window = windowWords(stim, duration)
   if (window) said.push(window)
   return said.join(' · ')

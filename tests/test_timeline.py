@@ -47,7 +47,10 @@ def test_tracks_mark_when_each_stimulus_was_running():
     model, result = built("disinhibition")
     html = render(model, result)
     assert html.count('class="na-stim"') == len(model.stimuli)
-    assert "gate: poisson" in html
+    # Протокол назван словами, а не машинным именем рода: «poisson» в подписи
+    # ничего не объясняло, а «в среднем 300 Гц» объясняет и род, и число (#508).
+    assert "gate: пуассоновский, в среднем 300 Гц" in html
+    assert "reward: список, 4 импульса" in html
 
 
 def test_counts_and_rate_live_in_the_label():
