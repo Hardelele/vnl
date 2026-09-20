@@ -12,7 +12,14 @@ from dataclasses import dataclass
 
 from . import ir, protocols
 from .morphology import MorphologyError
-from .parser import ParsedModel, PendingContact, PendingRecording, PendingStimulus
+from .parser import (
+    ParsedModel,
+    PendingContact,
+    PendingMotor,
+    PendingRecording,
+    PendingSensor,
+    PendingStimulus,
+)
 
 _VARS = frozenset(ir.RECORDED)
 
@@ -218,6 +225,129 @@ class _Resolver:
             self.error(where, problem)
         return stimulus
 
+    # --- граница с миром ------------------------------------------------
+
+    def _numbers(
+        self, where: str, kind_defaults: dict, params: dict, what: str
+    ) -> dict | None:
+        """Числа рода: написанные поверх канонических, с отказом на опечатку.
+
+        Молча проглоченное `windwo = 50ms` означало бы мотор с окном по
+        умолчанию и человека, который до конца опыта уверен в обратном.
+        Канонические числа берутся из реестра родов -- второго места, где
+        написано «окно по умолчанию 50 мс», в проекте быть не должно.
+        """
+        unknown = sorted(key for key in params if key not in kind_defaults)
+        if unknown:
+            known = ", ".join(kind_defaults) or "их нет вовсе"
+            self.error(
+                where,
+                f"у {what} нет параметров: {', '.join(unknown)} (есть: {known})",
+            )
+            return None
+        return {
+            name: float(params.get(name, canonical))
+            for name, canonical in kind_defaults.items()
+        }
+
+    def sensor(self, pending: PendingSensor) -> ir.Sensor | None:
+        where = f"сенсор {pending.id}"
+        if pending.kind not in protocols.SENSOR_KINDS:
+            self.error(
+                where,
+                f"неизвестный род сенсора {pending.kind!r}; "
+                f"есть {', '.join(protocols.SENSOR_KIND_IDS)}",
+            )
+            return None
+        numbers = self._numbers(
+            where,
+            protocols.sensor_defaults(pending.kind),
+            pending.params,
+            "сенсора",
+        )
+        if numbers is None:
+            return None
+        sensor = ir.Sensor(id=pending.id, kind=pending.kind, **numbers)
+        for problem in protocols.sensor_problems(sensor):
+            self.error(where, problem)
+        return sensor
+
+    def motor(self, pending: PendingMotor) -> ir.Motor | None:
+        where = f"мотор {pending.id}"
+        if pending.kind not in protocols.MOTOR_KINDS:
+            self.error(
+                where,
+                f"неизвестный род мотора {pending.kind!r}; "
+                f"есть {', '.join(protocols.MOTOR_KIND_IDS)}",
+            )
+            return None
+        source = self.site(pending.source_address, where, default_kind="soma")
+        if source is None:
+            return None
+        numbers = self._numbers(
+            where, protocols.motor_defaults(pending.kind), pending.params, "мотора"
+        )
+        if numbers is None:
+            return None
+        motor = ir.Motor(
+            id=pending.id, source=source, kind=pending.kind, **numbers
+        )
+        for problem in protocols.motor_problems(motor):
+            self.error(where, problem)
+        return motor
+
+    def sensor_link(
+        self, pending: PendingContact, sensor_id: str
+    ) -> ir.SensorLink | None:
+        """`key -> MN.soma { weight = 2nS }` -- подключение сенсора к точке.
+
+        Разбирается тем же оператором, что и связь между клетками, и проверки
+        здесь те же: рецептор из списка, вес неотрицателен, задержка не меньше
+        шага. Расходиться им нельзя -- для человека это одна и та же стрелка.
+        """
+        where = f"сенсор {sensor_id}"
+        _, _, rest = pending.pre_address.partition(".")
+        if rest:
+            self.error(
+                where,
+                f"у сенсора нет участков: {pending.pre_address!r} -- "
+                "подключается он целиком",
+            )
+            return None
+        post = self.site(pending.post_address, where, default_kind="soma")
+        if post is None:
+            return None
+        if pending.receptor not in ir.RECEPTORS:
+            known = ", ".join(sorted(ir.RECEPTORS))
+            self.error(
+                where, f"неизвестный рецептор {pending.receptor!r} (есть: {known})"
+            )
+            return None
+        if pending.weight < 0:
+            self.error(where, "вес не бывает отрицательным: знак задаёт рецептор")
+        if pending.delay < self.parsed.run.dt:
+            self.error(
+                where,
+                f"задержка {pending.delay} мс меньше шага интегрирования "
+                f"{self.parsed.run.dt} мс",
+            )
+        if pending.dynamics.enabled or pending.plasticity.enabled:
+            # Не отказ: запись законная, и однажды сенсорный вход научится и
+            # истощаться, и учиться. Но молчать нельзя -- сейчас эти числа не
+            # читает никто, и человек ждал бы от прогона совсем другого.
+            self.warn(
+                where,
+                "кратковременная динамика и пластичность на входе сенсора не "
+                "считаются: у сенсора нет пресинаптической клетки, а правило "
+                "STDP считает порядок её спайков",
+            )
+        return ir.SensorLink(
+            target=post,
+            receptor=pending.receptor,
+            weight=pending.weight,
+            delay=pending.delay,
+        )
+
     def recording(self, pending: PendingRecording) -> ir.Recording | None:
         where = f"запись {pending.id}"
         target = self.site(pending.target_address, where, default_kind="soma")
@@ -321,15 +451,73 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
                 f"неизвестный тип клетки {instance.cell_type!r} (есть: {known})",
             )
 
+    # Граница с миром разбирается до контактов: стрелка `key -> MN.soma`
+    # выглядит как связь, и понять, что слева сенсор, можно только зная список
+    # сенсоров целиком. Порядок объявлений в файле при этом свободный -- сенсор
+    # разрешено объявить и после подключения.
+    sensors: dict[str, ir.Sensor] = {}
+    for pending_sensor in parsed.sensors:
+        where = f"сенсор {pending_sensor.id}"
+        if pending_sensor.id in sensors:
+            resolver.error(where, "повторяющийся идентификатор")
+            continue
+        if pending_sensor.id in parsed.instances:
+            resolver.error(
+                where,
+                "имя занято нейроном: в схеме они живут в одном пространстве "
+                "имён, иначе стрелка не сказала бы, откуда идёт сигнал",
+            )
+            continue
+        sensor = resolver.sensor(pending_sensor)
+        if sensor is not None:
+            sensors[sensor.id] = sensor
+
+    motors: dict[str, ir.Motor] = {}
+    for pending_motor in parsed.motors:
+        where = f"мотор {pending_motor.id}"
+        if pending_motor.id in motors:
+            resolver.error(where, "повторяющийся идентификатор")
+            continue
+        if pending_motor.id in parsed.instances or pending_motor.id in sensors:
+            resolver.error(where, "имя занято нейроном или сенсором")
+            continue
+        motor = resolver.motor(pending_motor)
+        if motor is not None:
+            motors[motor.id] = motor
+
+    contacts: list[ir.Contact] = []
+    for pending_contact in parsed.contacts:
+        head = pending_contact.pre_address.partition(".")[0]
+        if head in sensors:
+            link = resolver.sensor_link(pending_contact, head)
+            if link is not None:
+                sensors[head].targets.append(link)
+            continue
+        if head in motors or pending_contact.post_address.partition(".")[0] in motors:
+            resolver.error(
+                f"контакт {pending_contact.id}",
+                "мотор не соединяется стрелкой: он смотрит на клетку "
+                "(from = ...) и отдаёт величину наружу",
+            )
+            continue
+        if pending_contact.post_address.partition(".")[0] in sensors:
+            resolver.error(
+                f"контакт {pending_contact.id}",
+                "в сенсор ничего не входит: он дверь снаружи внутрь, а не "
+                "клетка",
+            )
+            continue
+        contact = resolver.contact(pending_contact)
+        if contact is not None:
+            contacts.append(contact)
+
     model = ir.Model(
         name=parsed.name,
         cell_types=parsed.cell_types,
         instances=parsed.instances,
-        contacts=[
-            contact
-            for contact in (resolver.contact(p) for p in parsed.contacts)
-            if contact is not None
-        ],
+        contacts=contacts,
+        sensors=sensors,
+        motors=motors,
         modulators=resolver.modulators(),
         stimuli=[
             stim
@@ -378,9 +566,22 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
     for caution in protocols.cautions(model):
         resolver.warn("протокол", caution)
 
+    for sensor in model.sensors.values():
+        if not sensor.targets:
+            # Не отказ: сенсор объявляют раньше, чем подключают, и схема в
+            # работе -- нормальное состояние. Но молчать нельзя: величина в
+            # такой сенсор входит и не доходит никуда.
+            resolver.warn(
+                f"сенсор {sensor.id}",
+                "ни к чему не подключён: величина войдёт и никуда не пойдёт; "
+                f"нужна стрелка вида {sensor.id} -> <нейрон>.soma",
+            )
+
     if not model.instances:
         resolver.warn("модель", "в модели нет ни одного нейрона")
-    if not model.recordings:
+    if not model.recordings and not model.motors:
+        # Мотор -- тоже ответ прогона, только не графиком, а числом: схема с
+        # мотором и без записей возвращает величину, и звать её пустой нечестно.
         resolver.warn("модель", "нет ни одной записи: прогон ничего не вернёт")
 
     if strict and any(d.severity == "error" for d in resolver.diagnostics):

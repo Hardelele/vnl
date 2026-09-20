@@ -160,6 +160,39 @@ export interface SandboxRecording {
   var: RecordedVar
 }
 
+/**
+ * Сенсор проекта: дверь снаружи внутрь (#560).
+ *
+ * Подключений здесь нет: сенсор соединяется с клеткой обычной связью
+ * (`SandboxLink`), у которой источник -- он сам. Второй список тех же стрелок
+ * означал бы, что связь от сенсора -- не связь.
+ *
+ * Величины тоже нет: она не часть проекта, а вход прогона, и приходит в ответе
+ * сессии. Поэтому нажатие кнопки не делает проект несохранённым и не старит
+ * прогон -- отпечаток сети от него не меняется.
+ */
+export interface SandboxSensor {
+  id: string
+  kind: string
+  /** Род словами вместе с числами. Считает сервер. */
+  story: string
+  /** Гц при величине 1 -- у рода `rate`. */
+  to: number
+  position: [number, number]
+}
+
+/** Мотор проекта: смотрит на точку клетки и отдаёт наружу число. */
+export interface SandboxMotor {
+  id: string
+  kind: string
+  story: string
+  /** Единица величины: её называет сервер, а не подпись в браузере. */
+  unit: string
+  window: number
+  source: Endpoint
+  position: [number, number]
+}
+
 export interface SandboxState {
   schema: number
   id: string
@@ -168,6 +201,13 @@ export interface SandboxState {
   neurons: SandboxNeuron[]
   links: SandboxLink[]
   stimuli: SandboxDrive[]
+  /**
+   * Граница с миром: список дверей собранной схемы (#560). Приходит вместе с
+   * остальным состоянием, а не отдельным запросом -- панель кнопок это ещё
+   * одно представление того же проекта, и выдумывать список в браузере нельзя.
+   */
+  sensors: SandboxSensor[]
+  motors: SandboxMotor[]
   recordings: SandboxRecording[]
   run: RunSpec
   /** Есть ли несохранённые изменения. Факт, а не подпись из макета. */
@@ -421,6 +461,50 @@ export function addStimulus(id: string, target: EndpointRef): Promise<SandboxSta
 
 export function addRecording(id: string, target: EndpointRef): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/recordings`, 'POST', { target })
+}
+
+/**
+ * Завести сенсор. Подключают его потом обычной связью -- `connect` от него к
+ * клетке: для человека это та же стрелка, и второго способа её провести нет.
+ */
+export function addSensor(
+  id: string,
+  params: { id?: string; kind?: string; to?: number; position?: [number, number] } = {},
+): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/sensors`, 'POST', params)
+}
+
+/** Завести мотор: он смотрит на точку клетки, как запись. */
+export function addMotor(
+  id: string,
+  source: EndpointRef,
+  params: { id?: string; kind?: string; window?: number; position?: [number, number] } = {},
+): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/motors`, 'POST', { source, ...params })
+}
+
+export function setSensorParams(
+  id: string,
+  sensor: string,
+  params: { kind?: string; to?: number },
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/sensors/${encodeURIComponent(sensor)}`,
+    'PATCH',
+    params,
+  )
+}
+
+export function setMotorParams(
+  id: string,
+  motor: string,
+  params: { kind?: string; window?: number; source?: EndpointRef },
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/motors/${encodeURIComponent(motor)}`,
+    'PATCH',
+    params,
+  )
 }
 
 /**

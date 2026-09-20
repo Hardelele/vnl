@@ -71,6 +71,8 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
         recovery: 0,
       },
     ],
+    sensors: [],
+    motors: [],
     recordings: [
       {
         id: 'r1',

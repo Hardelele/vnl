@@ -62,6 +62,8 @@ function minimalRun(): Run {
       ],
       modulators: [],
       stimuli: [],
+      sensors: [],
+      motors: [],
       recordings: [],
     },
     result: {
@@ -69,6 +71,7 @@ function minimalRun(): Run {
       samples: 3,
       traces: { 'B.soma:v': [-65, -60, -55] },
       spikes: { A: [1, 2], B: [] },
+      motors: {},
       degradation: [],
     },
     diagnostics: [],

@@ -407,6 +407,12 @@ class Api:
             fraction=float(data.get("fraction", 0.5)),
         )
 
+    @staticmethod
+    def _position(body: dict[str, Any]) -> tuple[float, float]:
+        """Место объекта на холсте из тела запроса. Нет места -- начало."""
+        position = body.get("position") or [0.0, 0.0]
+        return float(position[0]), float(position[1])
+
     def sandboxes(self) -> dict[str, Any]:
         return {
             "schema": api.SCHEMA_VERSION,
@@ -686,6 +692,83 @@ class Api:
             )
         project = self._project(sandbox_id)
         project.set_stimulus(stimulus_id, **params)
+        return api.sandbox_payload(project)
+
+    # --- граница с миром ---------------------------------------------------
+    #
+    # Числа родов здесь не перечислены и перечислены не будут -- по той же
+    # причине, по которой их нет у драйва: какие поля есть у рода, знает реестр
+    # (`protocols`), и он же прислал их интерфейсу в `/api/glossary`. Список
+    # имён в обработчике был бы вторым местом с тем же знанием, и новый род
+    # доезжал бы до панели, но не доезжал до проекта.
+
+    @staticmethod
+    def _kind_numbers(body: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+        return {
+            name: float(body[name])
+            for name in defaults
+            if body.get(name) is not None
+        }
+
+    def add_sensor(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Завести сенсор. Подключают его потом обычной связью от него к клетке."""
+        project = self._project(sandbox_id)
+        kind = str(body.get("kind") or "rate")
+        project.add_sensor(
+            sensor_id=str(body["id"]) if body.get("id") else None,
+            kind=kind,
+            position=self._position(body),
+            **self._kind_numbers(body, protocols.sensor_defaults(kind)),
+        )
+        return api.sandbox_payload(project)
+
+    def sensor_params(
+        self, sandbox_id: str, sensor_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        sensor = project._sensor(sensor_id)
+        kind = str(body.get("kind") or sensor.kind)
+        params: dict[str, Any] = self._kind_numbers(
+            body, protocols.sensor_defaults(kind)
+        )
+        if body.get("kind"):
+            params["kind"] = kind
+        if not params:
+            known = ", ".join(protocols.sensor_defaults(kind)) or "их нет"
+            raise PatternError(f"нечего менять: ожидались kind или {known}")
+        project.set_sensor(sensor_id, **params)
+        return api.sandbox_payload(project)
+
+    def add_motor(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Завести мотор: он смотрит на точку клетки и отдаёт величину наружу."""
+        project = self._project(sandbox_id)
+        kind = str(body.get("kind") or "rate")
+        project.add_motor(
+            source=self._endpoint(body.get("source"), "цель мотора"),
+            motor_id=str(body["id"]) if body.get("id") else None,
+            kind=kind,
+            position=self._position(body),
+            **self._kind_numbers(body, protocols.motor_defaults(kind)),
+        )
+        return api.sandbox_payload(project)
+
+    def motor_params(
+        self, sandbox_id: str, motor_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        project = self._project(sandbox_id)
+        motor = project._motor(motor_id)
+        kind = str(body.get("kind") or motor.kind)
+        params: dict[str, Any] = self._kind_numbers(
+            body, protocols.motor_defaults(kind)
+        )
+        if body.get("kind"):
+            params["kind"] = kind
+        if body.get("source") is not None:
+            params["source"] = self._endpoint(body.get("source"), "цель мотора")
+        if not params:
+            known = ", ".join(protocols.motor_defaults(kind)) or "их нет"
+            raise PatternError(f"нечего менять: ожидались kind, source или {known}")
+        project.set_motor(motor_id, **params)
         return api.sandbox_payload(project)
 
     def recording_params(
@@ -973,6 +1056,35 @@ def routes(service: Api) -> list[Route]:
             "PATCH",
             re.compile(r"^/api/sandboxes/([^/]+)/stimuli/([^/]+)$"),
             service.stimulus_params,
+            wants="body",
+        ),
+        # Граница с миром живёт рядом с драйвом и записями -- и в ответе, и в
+        # таблице: для человека это тот же вопрос «чем гоню и что смотрю»,
+        # только источник у одного снаружи, а у другого внутри.
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/sensors$"),
+            service.add_sensor,
+            wants="body",
+            ok=201,
+        ),
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/sensors/([^/]+)$"),
+            service.sensor_params,
+            wants="body",
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/motors$"),
+            service.add_motor,
+            wants="body",
+            ok=201,
+        ),
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/motors/([^/]+)$"),
+            service.motor_params,
             wants="body",
         ),
         Route(

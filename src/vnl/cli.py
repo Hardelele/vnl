@@ -44,6 +44,90 @@ def _raster(model: Model, spikes: dict[str, list[float]], width: int = 78) -> st
     return "\n".join(lines)
 
 
+def _sense_log(model: Model, specs: list[str] | None) -> list:
+    """`--sensor key=1` и `--sensor key=1@100,0@200` -> поток входа.
+
+    Это и есть «привязка при запуске»: объявление в `.vnl` говорит, что здесь
+    граница, а ключ говорит, что к ней подключено на этот раз. Одна и та же
+    схема так считается и с кнопкой, и с записью, и молча -- сенсор без
+    привязки молчит.
+
+    Запись, а не одно значение, нарочно: воспроизводимость опыта с кнопками
+    держится ровно на ней, и проверить, что живое нажатие и запись дают один
+    прогон, можно только тогда, когда запись умеет то же самое.
+
+    Момент пишется через `@` и в миллисекундах модельного времени: настоящие
+    секунды к прогону отношения не имеют. Без `@` -- с самого начала.
+    """
+    from .protocols import SenseError, check_value
+    from .sim import SenseEvent
+
+    events: list[SenseEvent] = []
+    for spec in specs or []:
+        name, _, tail = spec.partition("=")
+        name = name.strip()
+        if not name or not tail:
+            raise ValidationError(
+                [
+                    Diagnostic(
+                        "error",
+                        spec,
+                        "подача пишется как сенсор=величина или "
+                        "сенсор=величина@мс,величина@мс",
+                    )
+                ]
+            )
+        if name not in model.sensors:
+            known = ", ".join(model.sensors) or "их нет вовсе"
+            raise ValidationError(
+                [Diagnostic("error", spec, f"в схеме нет сенсора {name!r} (есть: {known})")]
+            )
+        for piece in tail.split(","):
+            value, _, moment = piece.partition("@")
+            try:
+                events.append(
+                    SenseEvent(
+                        time=float(moment) if moment else 0.0,
+                        sensor=name,
+                        value=check_value(value.strip()),
+                    )
+                )
+            except (SenseError, ValueError) as exc:
+                raise ValidationError(
+                    [Diagnostic("error", spec, str(exc))]
+                ) from exc
+    # По времени: поток входа читается по порядку, и «1 на 200, 0 на 100»,
+    # написанное задом наперёд, -- это всё тот же опыт, а не отказ.
+    events.sort(key=lambda event: event.time)
+    return events
+
+
+def _print_border(model: Model, result, sense: list) -> None:
+    """Сказать про границу с миром вслух -- и когда она сработала, и когда нет.
+
+    Молчание здесь было бы худшим ответом: схема с сенсором, которому ничего
+    не подали, считается ровно как схема без сенсора, и по растру отличить
+    одно от другого нельзя.
+    """
+    from . import protocols
+
+    for sensor in model.sensors.values():
+        given = [event for event in sense if event.sensor == sensor.id]
+        story = protocols.describe_sensor(sensor)
+        if given:
+            record = ", ".join(f"{e.value:g} на {e.time:g} мс" for e in given)
+            print(f"сенсор {sensor.id}: {story}; подано {record}")
+        else:
+            print(f"сенсор {sensor.id}: {story}; ничего не подано — молчит")
+    for motor in model.motors.values():
+        value = result.motors.get(motor.id, 0.0)
+        print(
+            f"мотор {motor.id}: {value:g} {protocols.motor_unit(motor)} "
+            f"({protocols.describe_motor(motor)} по {motor.source}) "
+            f"на {model.run.duration:g} мс"
+        )
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     model, diagnostics = _read(args.file)
     _print_diagnostics(diagnostics)
@@ -67,7 +151,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    result = simulate(model)
+    sense = _sense_log(model, args.sensor)
+    result = simulate(model, sense=list(sense))
     if result.degradation:
         print("деградация L2 -> L1:", file=sys.stderr)
         for note in result.degradation:
@@ -78,6 +163,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     for name, count in result.spike_count().items():
         rate = count / model.run.duration * 1000.0
         print(f"{name}: {count} спайков ({rate:.1f} Гц)")
+    if model.sensors or model.motors:
+        print()
+        _print_border(model, result, sense)
 
     if args.traces:
         path = Path(args.traces)
@@ -422,6 +510,13 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run", help="посчитать на уровне L1")
     run.add_argument("file")
     run.add_argument("--traces", help="куда выгрузить трассы в CSV")
+    run.add_argument(
+        "--sensor",
+        action="append",
+        metavar="ИМЯ=ВЕЛИЧИНА[@МС]",
+        help="что подать сенсору: key=1 или key=1@100,0@200 (величина 0…1, "
+        "момент в мс модельного времени)",
+    )
     run.set_defaults(func=cmd_run)
 
     view = sub.add_parser("view", help="посчитать и собрать HTML со схемой и трассами")

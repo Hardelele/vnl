@@ -221,6 +221,38 @@ def _stim_params(model: ir.Model) -> tuple[dict, dict, list[str]]:
     return sources, targets, losses
 
 
+def _border_losses(model: ir.Model) -> list[str]:
+    """Граница с миром на L2 не переносится -- и молчать об этом нельзя.
+
+    Причина не в том, что в NetPyNE нечем: поданную запись значений можно было
+    бы развернуть в `VecStim`, как разворачивается шаблон протокола. Дело в
+    том, что разворачивать нечего -- у сенсора нет заранее известных моментов,
+    в том и разница между ним и драйвом. Скрипт считается там, где никто
+    кнопку не нажмёт, и честный ответ здесь -- «эта дверь осталась закрытой», а
+    не молча выброшенный вход.
+
+    Мотор не переносится по другой причине: он не механизм, а способ прочитать
+    растр. Растр NetPyNE пишет сам, и посчитать по нему то же окно -- работа
+    скрипта прогона, а не `netParams`.
+    """
+    out: list[str] = []
+    for sensor in model.sensors.values():
+        targets = ", ".join(str(link.target) for link in sensor.targets) or "никуда"
+        out.append(
+            f"сенсор {sensor.id}: живой вход ({protocols.describe_sensor(sensor)}) "
+            f"на L2 не переносится -- заранее известных моментов у него нет; "
+            f"клетки {targets} останутся без него. Подайте запись значений "
+            f"списком времён через VecStim, если опыт надо повторить в NEURON"
+        )
+    for motor in model.motors.values():
+        out.append(
+            f"мотор {motor.id}: {protocols.describe_motor(motor)} по "
+            f"{motor.source} -- это чтение растра, а не механизм; в netParams "
+            f"его выразить нечем, считайте то же окно в скрипте прогона"
+        )
+    return out
+
+
 def export(model: ir.Model) -> ExportReport:
     cell_params, losses_cells = _cell_params(model)
     conn_params, losses_conns = _conn_params(model)
@@ -275,5 +307,6 @@ if __name__ == "__main__":
 '''
 
     return ExportReport(
-        script=body, losses=losses_cells + losses_conns + losses_stims
+        script=body,
+        losses=losses_cells + losses_conns + losses_stims + _border_losses(model),
     )

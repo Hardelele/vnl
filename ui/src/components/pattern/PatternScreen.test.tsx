@@ -78,6 +78,30 @@ const GLOSSARY: Glossary = {
     { id: 'v', name: 'мембранный потенциал', unit: 'мВ' },
     { id: 'g_exc', name: 'возбуждающая проводимость', unit: 'нСм' },
   ],
+  // Граница с миром: тем же реестром и теми же полями, что роды драйва (#560).
+  sensor: 'Дверь снаружи внутрь: величина от 0 до 1.',
+  sensors: [
+    {
+      id: 'rate',
+      name: 'частота',
+      note: 'Величина превращается в поток импульсов.',
+      trigger: 'level',
+      emits: 'events',
+      receptor: true,
+      params: [],
+    },
+  ],
+  motor: 'Дверь изнутри наружу: одно число сейчас.',
+  motors: [
+    {
+      id: 'rate',
+      name: 'частота',
+      note: 'Разряды за окно, переведённые в герцы.',
+      unit: 'Гц',
+      params: [],
+    },
+  ],
+  value: { min: 0, max: 1 },
 }
 
 /**
@@ -168,6 +192,8 @@ const PATTERN: PatternDetail = {
     ],
     modulators: [],
     stimuli: [],
+    sensors: [],
+    motors: [],
     recordings: [],
   },
 }

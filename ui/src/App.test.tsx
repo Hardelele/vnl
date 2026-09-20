@@ -422,6 +422,8 @@ describe('дорога с карточки в песочницу (#526)', () => 
       contacts: [],
       modulators: [],
       stimuli: [],
+      sensors: [],
+      motors: [],
       recordings: [],
     },
   }
@@ -435,6 +437,8 @@ describe('дорога с карточки в песочницу (#526)', () => 
       neurons: [],
       links: [],
       stimuli: [],
+      sensors: [],
+      motors: [],
       recordings: [],
       run: { dt: 0.1, duration: 500, level: 'L1', seed: 1 },
       dirty: false,

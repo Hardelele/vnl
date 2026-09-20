@@ -118,6 +118,41 @@ export interface Glossary {
   /** Что такое род драйва вообще -- объяснение самого поля (#553). */
   drive: string
   drives: DriveKindInfo[]
+  /** Что такое сенсор и мотор вообще -- объяснение самих полей (#560). */
+  sensor: string
+  sensors: SensorKindInfo[]
+  motor: string
+  motors: MotorKindInfo[]
+  /** Границы величины, которую принимает сенсор: ими задаются края кнопки. */
+  value: { min: number; max: number }
+}
+
+/**
+ * Род сенсора из того же реестра, что роды драйва (`protocols.SENSOR_KINDS`).
+ *
+ * `trigger` здесь не украшение: «отвечает на уровень» и «отвечает на
+ * изменение» для того, кто жмёт кнопку, разные вещи -- в первом случае поток
+ * идёт, пока держат, во втором приходит одно событие на нажатие.
+ */
+export interface SensorKindInfo {
+  id: string
+  name: string
+  note: string
+  /** level -- отвечает на удерживаемую величину, change -- на её перемену. */
+  trigger: 'level' | 'change'
+  /** events -- действует импульсами через синапс, current -- током. */
+  emits: 'events' | 'current'
+  receptor: boolean
+  params: DriveParam[]
+}
+
+/** Род мотора: как считает величину и в чём она меряется. */
+export interface MotorKindInfo {
+  id: string
+  name: string
+  note: string
+  unit: string
+  params: DriveParam[]
 }
 
 /**
@@ -225,6 +260,47 @@ export interface Stimulus {
   stop: number
 }
 
+/**
+ * Сенсор: дверь снаружи внутрь (#560).
+ *
+ * `story` -- род вместе с числами словами («частота, 100 Гц при 1»), и
+ * собирает его реестр родов на сервере: вторая сборка той же строки в браузере
+ * разошлась бы с первой молча, как это уже было со списком рецепторов.
+ * Величины здесь нет: она не свойство схемы, а вход прогона, и живёт в ответе
+ * сессии (`SimUpdate.sensors`).
+ */
+export interface Sensor {
+  id: string
+  kind: string
+  story: string
+  /** Гц при величине 1 -- у рода `rate`. */
+  to: number
+  targets: SensorLink[]
+}
+
+/** Подключение сенсора к точке клетки: те же поля, что у контакта. */
+export interface SensorLink {
+  target: Site
+  receptor: string
+  inhibitory: boolean
+  weight: number
+  delay: number
+}
+
+/**
+ * Мотор: дверь изнутри наружу. Смотрит на точку клетки, как запись, но отдаёт
+ * не график, а одно число -- его считает сессия (`SimUpdate.motors`).
+ */
+export interface Motor {
+  id: string
+  kind: string
+  story: string
+  /** Единица величины. Приходит с сервера: число без единицы -- шифр. */
+  unit: string
+  window: number
+  source: Site
+}
+
 export type RecordedVar = 'v' | 'g' | 'g_exc' | 'g_inh' | 'w' | 'spikes'
 
 export interface Recording {
@@ -250,6 +326,8 @@ export interface Model {
   contacts: Contact[]
   modulators: Modulator[]
   stimuli: Stimulus[]
+  sensors: Sensor[]
+  motors: Motor[]
   recordings: Recording[]
 }
 
@@ -259,6 +337,11 @@ export interface Result {
   /** Ключ вида `E.soma:v`. Времён нет: t = i * dt. */
   traces: Record<string, number[]>
   spikes: Record<string, number[]>
+  /**
+   * Величины моторов на конец прогона. Не трасса: мотор отдаёт число сейчас, а
+   * «сейчас» у досчитанного прогона одно -- его последний момент.
+   */
+  motors: Record<string, number>
   degradation: string[]
 }
 

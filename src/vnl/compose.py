@@ -111,7 +111,55 @@ def compose(sandbox: Sandbox) -> Composition:
     for name, modulator in sandbox.modulators.items():
         model.modulators[name] = copy.deepcopy(modulator)
 
+    # Граница с миром -- до связей: связь от сенсора выглядит как обычная, и
+    # отличить её можно, только зная список сенсоров целиком. Тот же порядок,
+    # что и в резолвере текста схемы: два разных ответа на вопрос «что значит
+    # эта стрелка» дали бы две разные сети из одного и того же проекта.
+    for sensor in sandbox.sensors:
+        if sensor.id in model.instances:
+            problems.append(f"имя {sensor.id!r} занято клеткой или блоком")
+            continue
+        model.sensors[sensor.id] = ir.Sensor(
+            id=sensor.id, kind=sensor.kind, to=sensor.to
+        )
+
+    for motor in sandbox.motors:
+        site = _site_or_problem(sandbox, motor.source, f"мотор {motor.id}", problems)
+        if site is None:
+            continue
+        model.motors[motor.id] = ir.Motor(
+            id=motor.id, source=site, kind=motor.kind, window=motor.window
+        )
+
     for link in sandbox.links:
+        sensor = model.sensors.get(link.source.instance)
+        if sensor is not None:
+            site = _site_or_problem(
+                sandbox, link.target, f"вход сенсора {link.id}", problems
+            )
+            if site is None:
+                continue
+            if site.instance not in model.instances:
+                problems.append(
+                    f"вход сенсора {link.id}: цель {site.instance!r} в сети "
+                    "отсутствует"
+                )
+                continue
+            sensor.targets.append(
+                ir.SensorLink(
+                    target=site,
+                    receptor=link.receptor,
+                    weight=link.weight,
+                    delay=link.delay,
+                )
+            )
+            continue
+        if link.target.instance in model.sensors:
+            problems.append(
+                f"связь {link.id}: в сенсор ничего не входит — он дверь "
+                "снаружи внутрь, а не клетка"
+            )
+            continue
         contact = _link_contact(sandbox, link, model, problems)
         if contact is not None:
             model.contacts.append(contact)
@@ -185,10 +233,26 @@ def _warnings(model: ir.Model) -> list[str]:
     """
     out: list[str] = []
     if model.instances and not model.stimuli:
-        out.append(
-            "нечем спайкать: в схеме нет ни одного стимула — сеть досчитает "
-            "до конца и промолчит. Повесьте драйв на вход блока или на клетку."
-        )
+        if model.sensors:
+            # Сенсор -- тоже вход, но входа без поданной величины не бывает:
+            # молчащая сеть здесь правильный ответ, а не поломка. Сказать об
+            # этом надо ровно потому, что сеть выглядит собранной.
+            out.append(
+                "драйва в схеме нет, а сенсор молчит, пока снаружи не подали "
+                "величину: нажмите кнопку или подайте значение в сессию — "
+                "выдумывать себе вход сенсор не станет."
+            )
+        else:
+            out.append(
+                "нечем спайкать: в схеме нет ни одного стимула — сеть досчитает "
+                "до конца и промолчит. Повесьте драйв на вход блока или на клетку."
+            )
+    for sensor in model.sensors.values():
+        if not sensor.targets:
+            out.append(
+                f"сенсор {sensor.id} ни к чему не подключён: величина войдёт и "
+                "никуда не пойдёт — проведите от него связь к клетке."
+            )
     out.extend(_receptor_notes(model))
     # Третий -- протокол, на котором движку верить нельзя (#508): пары чаще
     # 25 Гц меряют у нас не то, что мерили бы в опыте. Условие знает
@@ -284,6 +348,27 @@ def _unfold(
         for contact in model.contacts:
             if contact.id.startswith(prefix) and contact.plasticity.modulator == name:
                 contact.plasticity.modulator = prefix + name
+
+    # Граница с миром -- часть схемы, а не витрины: паттерн, у которого
+    # объявлен сенсор, честно сообщает, что ему нужно снаружи, и молча терять
+    # эту дверь при вставке блока нельзя. Имена разводятся той же приставкой,
+    # что у нейронов: две копии одного паттерна -- это два разных входа, и
+    # подача величины в один не должна дёргать другой.
+    for name, sensor in inner.sensors.items():
+        model.sensors[prefix + name] = replace(
+            copy.deepcopy(sensor),
+            id=prefix + name,
+            targets=[
+                replace(link, target=replace(link.target, instance=prefix + link.target.instance))
+                for link in sensor.targets
+            ],
+        )
+    for name, motor in inner.motors.items():
+        model.motors[prefix + name] = replace(
+            copy.deepcopy(motor),
+            id=prefix + name,
+            source=replace(motor.source, instance=prefix + motor.source.instance),
+        )
 
     # Витрина карточки (`snapshot.demo`) сюда намеренно не переносится: её
     # стимулы принадлежат демонстрации паттерна, а не этой сети.

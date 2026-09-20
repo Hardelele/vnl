@@ -60,6 +60,22 @@ _NS_MV_TO_NA = 1e-3
 _EXP_CEILING = 64.0
 
 
+@dataclass(frozen=True)
+class SenseEvent:
+    """Одно поданное снаружи значение: когда, какому сенсору и какое.
+
+    Из таких событий состоит поток входа -- запись всего, что пришло в сеть
+    извне. Запись, а не переменная: по ней прогон переигрывается заново, ровно
+    как по зерну переигрывается случайный драйв. Поэтому у события есть
+    модельное время, а не время по часам: настоящие секунды к прогону
+    отношения не имеют и при откате повторить их нечем.
+    """
+
+    time: float
+    sensor: str
+    value: float
+
+
 @dataclass
 class SimResult:
     dt: float
@@ -67,6 +83,10 @@ class SimResult:
     traces: dict[str, list[float]] = field(default_factory=dict)
     spikes: dict[str, list[float]] = field(default_factory=dict)
     degradation: list[str] = field(default_factory=list)
+    #: Величины моторов на последний посчитанный момент. Не трасса: мотор
+    #: отдаёт число сейчас, а не график за всё время, -- и считается оно по
+    #: окну растра, то есть по тому, что уже лежит в `spikes`.
+    motors: dict[str, float] = field(default_factory=dict)
 
     def spike_count(self) -> dict[str, int]:
         return {name: len(times) for name, times in self.spikes.items()}
@@ -184,6 +204,15 @@ class Snapshot:
     modulator_level: dict[str, float]
     #: Состояние генератора: без него повтор разойдётся с исходным прогоном.
     rng: tuple
+    #: Граница с миром: удерживаемые величины, фазы родов и то, сколько
+    #: поданного уже применено. Здесь же и причина, по которой это в снимке:
+    #: поток входа -- часть состояния прогона, а не внешняя переменная. Без
+    #: курсора откат на 50 мс оставил бы сеть с величиной, поданной на 100-й,
+    #: -- то есть показал бы прошлое, знающее своё будущее.
+    sensor_value: dict[str, float]
+    sensor_phase: dict[str, float]
+    sensor_seen: dict[str, float]
+    sensed: int
     #: Сколько отсчётов записано к этому моменту.
     samples: int
 
@@ -212,7 +241,9 @@ def _decay(value: float, dt: float, tau: float) -> float:
 
 
 class Simulator:
-    def __init__(self, model: ir.Model) -> None:
+    def __init__(
+        self, model: ir.Model, sense: list[SenseEvent] | None = None
+    ) -> None:
         self.model = model
         self.dt = model.run.dt
         self.rng = random.Random(model.run.seed)
@@ -274,6 +305,50 @@ class Simulator:
             if stim.kind in protocols.EVENT_KINDS
         }
 
+        # Синапсы сенсоров: у одного сенсора их столько, к скольким точкам он
+        # подключён. Устроены они ровно как синапсы стимула -- источника-клетки
+        # нет, амплитуда своя, -- потому что и вещь одна: событие приходит
+        # снаружи и открывает проводимость. Разница только в том, откуда
+        # берутся моменты.
+        self.sensor_synapses: dict[str, list[_Synapse]] = {}
+        for sensor in model.sensors.values():
+            links: list[_Synapse] = []
+            for number, link in enumerate(sensor.targets):
+                fake = ir.Contact(
+                    id=f"sensor:{sensor.id}:{number}",
+                    pre=link.target,
+                    post=link.target,
+                    receptor=link.receptor,
+                    weight=link.weight,
+                    delay=max(link.delay, self.dt),
+                )
+                links.append(
+                    _Synapse(
+                        contact=fake,
+                        target=link.target.instance,
+                        source=None,
+                        weight=link.weight,
+                        delay=max(link.delay, self.dt),
+                    )
+                )
+            self.sensor_synapses[sensor.id] = links
+
+        # Поток входа. Список приходит снаружи и остаётся общим объектом: его
+        # хозяин (сессия) дописывает в него нажатия, а симулятор только читает
+        # по порядку. Копия здесь означала бы, что после «Сброса» новый
+        # симулятор считает уже без записи -- то есть опыт с кнопками
+        # повторить нельзя.
+        self.sense_log: list[SenseEvent] = [] if sense is None else sense
+        self.sensed = 0
+        #: Удерживаемая величина каждого сенсора. Ноль -- «ничего не подавали»:
+        #: без привязки сенсор молчит, а не выдумывает себе вход.
+        self.sensor_value: dict[str, float] = {s: 0.0 for s in model.sensors}
+        #: Фаза рода: доля периода, накопленная с прошлого импульса.
+        self.sensor_phase: dict[str, float] = {s: 0.0 for s in model.sensors}
+        #: Величина на прошлом шаге -- её спрашивает род, отвечающий на
+        #: изменение («нажали», «отпустили»), а не на уровень.
+        self.sensor_seen: dict[str, float] = {s: 0.0 for s in model.sensors}
+
         self.pending: dict[int, list[tuple[_Synapse, float]]] = {}
         self.modulator_level: dict[str, float] = {m: 0.0 for m in model.modulators}
 
@@ -283,6 +358,11 @@ class Simulator:
         self.all_synapses: list[_Synapse] = [
             *self.synapses,
             *self.stim_synapses.values(),
+            *(
+                synapse
+                for links in self.sensor_synapses.values()
+                for synapse in links
+            ),
         ]
         self._synapse_index = {
             id(synapse): number for number, synapse in enumerate(self.all_synapses)
@@ -362,6 +442,93 @@ class Simulator:
             elif stim.kind == "poisson":
                 if self.rng.random() < stim.rate * self.dt / 1000.0:
                     self._schedule(self.stim_synapses[stim.id], stim.amplitude)
+
+    # --- граница с миром --------------------------------------------------
+
+    def sense_at(self, time: float, sensor_id: str, value: float) -> SenseEvent:
+        """Записать величину, поданную снаружи, на момент модельного времени.
+
+        Запись, а не присваивание: величина ложится в поток входа, и прогон
+        после отката переигрывает её оттуда -- ровно как переигрывает случайный
+        драйв по состоянию генератора. Живого «сейчас» у симулятора нет вовсе:
+        то, что для человека «нажал сейчас», для прогона -- «на 137-й
+        миллисекунде».
+
+        В прошлое подать нельзя: оно уже посчитано, и вписать туда нажатие
+        значило бы сделать вид, что клетка отвечала на то, чего не было.
+        Поэтому момент не раньше ближайшего непосчитанного шага.
+
+        Новое значение стирает записанное после себя будущее -- и это то же
+        правило, по которому перемотка стирает прежние трассы. Поток входа
+        переигрывается, пока время идёт по уже пройденному; но стоит человеку
+        снова взяться за кнопку, как прежнее будущее перестаёт быть будущим
+        этого прогона. Иначе нажатие на 150-й миллисекунде отменялось бы
+        отпусканием, записанным в прошлый раз на 200-й, -- и объяснить это тому,
+        кто держит кнопку, было бы нечем.
+        """
+        if sensor_id not in self.model.sensors:
+            known = ", ".join(self.model.sensors) or "их нет вовсе"
+            raise protocols.SenseError(
+                f"в схеме нет сенсора {sensor_id!r} (есть: {known})"
+            )
+        number = protocols.check_value(value)
+        moment = max(float(time), self.step * self.dt)
+        kept = [
+            event
+            for event in self.sense_log
+            if event.time < moment
+            or (event.time == moment and event.sensor != sensor_id)
+        ]
+        event = SenseEvent(time=moment, sensor=sensor_id, value=number)
+        kept.append(event)
+        self.sense_log[:] = kept
+        self.sensed = min(self.sensed, len(kept))
+        return event
+
+    def _sense(self) -> None:
+        """Применить поданное к этому шагу и дать сенсорам сказать своё.
+
+        Поток входа читается по порядку, курсором: он в снимке, поэтому после
+        отката сеть видит ровно те значения, которые были поданы до того
+        момента, и не видит поданных позже. Перебирать весь список на каждом
+        шаге было бы и медленнее, и неверно -- курсор и есть то, что делает
+        вход частью состояния, а не внешней переменной.
+        """
+        log = self.sense_log
+        while self.sensed < len(log) and log[self.sensed].time <= self.time:
+            event = log[self.sensed]
+            if event.sensor in self.sensor_value:
+                self.sensor_value[event.sensor] = event.value
+            self.sensed += 1
+
+        for sensor in self.model.sensors.values():
+            value = self.sensor_value[sensor.id]
+            count, phase = protocols.sensor_events(
+                sensor,
+                value,
+                self.sensor_seen[sensor.id],
+                self.sensor_phase[sensor.id],
+                self.dt,
+            )
+            self.sensor_phase[sensor.id] = phase
+            self.sensor_seen[sensor.id] = value
+            for _ in range(count):
+                for synapse in self.sensor_synapses[sensor.id]:
+                    self._schedule(synapse, synapse.weight)
+
+    def motors(self) -> dict[str, float]:
+        """Величины моторов на текущий момент -- по растру, а не по состоянию.
+
+        Поэтому они и повторяются при откате сами собой: окно смотрит только
+        назад, а прежнее будущее из растра стирается вместе с трассами.
+        """
+        now = self.step * self.dt
+        return {
+            motor.id: protocols.motor_value(
+                motor, self.result.spikes.get(motor.source.instance, ()), now
+            )
+            for motor in self.model.motors.values()
+        }
 
     def _deliver(self, step: int) -> None:
         for synapse, _ in self.pending.pop(step, []):
@@ -592,6 +759,11 @@ class Simulator:
         if self.step >= self.total_steps:
             return False
         self.time = self.step * self.dt
+        # Вход снаружи -- до драйва: и то и другое кладёт события в очередь
+        # доставки, и порядок между ними на результат не влияет, но читается
+        # он сверху вниз -- сперва то, что пришло из мира, потом заданное
+        # заранее.
+        self._sense()
         self._stimulate()
         self._deliver(self.step)
         self._integrate()
@@ -671,6 +843,7 @@ class Simulator:
         """Считать до конца. Прежний способ: он же шаги, только все сразу."""
         while self.step_once():
             pass
+        self.result.motors = self.motors()
         return self.result
 
     # --- снимок и откат ---------------------------------------------------
@@ -717,6 +890,10 @@ class Simulator:
             },
             modulator_level=dict(self.modulator_level),
             rng=self.rng.getstate(),
+            sensor_value=dict(self.sensor_value),
+            sensor_phase=dict(self.sensor_phase),
+            sensor_seen=dict(self.sensor_seen),
+            sensed=self.sensed,
             samples=len(self.result.times),
         )
 
@@ -756,8 +933,27 @@ class Simulator:
         }
         self.modulator_level = dict(state.modulator_level)
         self.rng.setstate(state.rng)
+        # Поток входа не откатывается и не обрезается -- он запись, и по ней
+        # продолжение переигрывается заново. Откатывается место в нём: курсор
+        # и удерживаемые величины на тот момент.
+        self.sensor_value = dict(state.sensor_value)
+        self.sensor_phase = dict(state.sensor_phase)
+        self.sensor_seen = dict(state.sensor_seen)
+        self.sensed = state.sensed
         self.result.truncate(state.samples)
+        # Величина мотора считается по растру, а растр только что обрезан:
+        # оставить прежнюю значило бы показывать величину из стёртого будущего.
+        self.result.motors = self.motors()
 
 
-def simulate(model: ir.Model) -> SimResult:
-    return Simulator(model).run()
+def simulate(
+    model: ir.Model, sense: list[SenseEvent] | None = None
+) -> SimResult:
+    """Посчитать модель целиком. `sense` -- заранее известный поток входа.
+
+    Поток передаётся сюда, а не подаётся по ходу, потому что здесь нет «по
+    ходу»: это расчёт от начала до конца. Запись значений при этом та же, что
+    в живой сессии, -- и прогон по ней совпадает с живым нажатием в те же
+    моменты спайк в спайк. В том и смысл записи.
+    """
+    return Simulator(model, sense=sense).run()

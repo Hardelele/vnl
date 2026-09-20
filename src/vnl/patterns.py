@@ -370,6 +370,41 @@ class SandboxStimulus:
 
 
 @dataclass
+class SandboxSensor:
+    """Сенсор проекта: та же дверь снаружи внутрь, что и в языке.
+
+    Подключение здесь не хранится: сенсор соединяют с клеткой обычной связью
+    (`Link`), у которой источник -- он сам. Это то же решение, что в тексте
+    схемы, где подключение пишется обычной стрелкой: связь холста и контакт --
+    одна вещь с двумя адресами, и заводить сенсору свой список целей значило бы
+    объявить, что «вес» у его входа означает что-то другое.
+
+    Место на холсте живёт здесь по той же причине, что у отдельной клетки: это
+    свойство холста, а не сети, и `compose` его не переносит.
+    """
+
+    id: str
+    kind: str = "rate"
+    to: float = 100.0
+    position: tuple[float, float] = (0.0, 0.0)
+
+
+@dataclass
+class SandboxMotor:
+    """Мотор проекта: дверь изнутри наружу.
+
+    Цель называется `source`, а не `target`, и связью не задаётся: мотор
+    ничего в клетку не вливает, он на неё смотрит -- как запись.
+    """
+
+    id: str
+    source: Endpoint
+    kind: str = "rate"
+    window: float = 50.0
+    position: tuple[float, float] = (0.0, 0.0)
+
+
+@dataclass
 class SandboxRecording:
     """Запись проекта.
 
@@ -394,6 +429,8 @@ class Sandbox:
     links: list[Link] = field(default_factory=list)
     modulators: dict[str, ir.Modulator] = field(default_factory=dict)
     stimuli: list[SandboxStimulus] = field(default_factory=list)
+    sensors: list[SandboxSensor] = field(default_factory=list)
+    motors: list[SandboxMotor] = field(default_factory=list)
     recordings: list[SandboxRecording] = field(default_factory=list)
     run: ir.RunSpec = field(default_factory=ir.RunSpec)
     created_at: str = field(default_factory=_now)
@@ -412,13 +449,22 @@ class Sandbox:
         raise PatternError(f"в песочнице нет блока {instance_id!r} ({known})")
 
     def taken_ids(self) -> set[str]:
-        """Имена, занятые объектами холста: блоки и отдельные клетки вместе.
+        """Имена, занятые объектами холста: блоки, клетки, сенсоры и моторы.
 
         Вместе, потому что в собранной сети они живут в одном пространстве
         имён: клетка с именем блока столкнулась бы с его нейронами уже в
         `compose`, то есть на запуске. Отказывать надо при добавлении.
+
+        Сенсор и мотор здесь по той же причине, только резче: связь адресуется
+        именем, и сенсор, названный как клетка, сделал бы стрелку `key -> MN`
+        двусмысленной -- сеть считалась бы, но не та.
         """
-        return {item.id for item in self.instances} | set(self.neurons)
+        return (
+            {item.id for item in self.instances}
+            | set(self.neurons)
+            | {sensor.id for sensor in self.sensors}
+            | {motor.id for motor in self.motors}
+        )
 
     def free_id(self, base: str) -> str:
         """Свободное имя объекта холста, начиная с предложенного."""

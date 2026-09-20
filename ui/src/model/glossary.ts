@@ -31,6 +31,11 @@ export const NO_GLOSSARY: Glossary = {
   recorded: [],
   drive: '',
   drives: [],
+  sensor: '',
+  sensors: [],
+  motor: '',
+  motors: [],
+  value: { min: 0, max: 1 },
 }
 
 export async function loadGlossary(): Promise<Glossary> {

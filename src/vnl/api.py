@@ -189,6 +189,50 @@ def _stimulus(stim: ir.Stimulus, duration: float) -> dict[str, Any]:
     }
 
 
+def _sensor(sensor: ir.Sensor) -> dict[str, Any]:
+    """Сенсор наружу: род, его числа и куда он подключён.
+
+    `story` -- род словами вместе с числами («частота, 100 Гц при 1»), и
+    собирает его реестр родов, а не интерфейс: та же причина, по которой
+    протокол драйва печатается словами отсюда же (#508). Список подключений
+    едет полями связи -- теми же, что у контакта: для человека это одна и та же
+    стрелка, и называться в ответе она обязана одинаково.
+    """
+    return {
+        "id": sensor.id,
+        "kind": sensor.kind,
+        "story": protocols.describe_sensor(sensor),
+        "to": sensor.to,
+        "targets": [
+            {
+                "target": _site(link.target),
+                "receptor": link.receptor,
+                "inhibitory": ir.is_inhibitory_receptor(link.receptor),
+                "weight": link.weight,
+                "delay": link.delay,
+            }
+            for link in sensor.targets
+        ],
+    }
+
+
+def _motor(motor: ir.Motor) -> dict[str, Any]:
+    """Мотор наружу: на кого смотрит, каким родом и в чём меряет.
+
+    Единица приходит отсюда, а не подписывается в браузере, по той же причине,
+    что единицы записей: число без единицы -- шифр, а расшифровать его может
+    только тот, кто знает предмет (#541).
+    """
+    return {
+        "id": motor.id,
+        "kind": motor.kind,
+        "story": protocols.describe_motor(motor),
+        "unit": protocols.motor_unit(motor),
+        "window": motor.window,
+        "source": _site(motor.source),
+    }
+
+
 def trace_key(recording: ir.Recording) -> str:
     return ir.trace_key(
         recording.target.instance, recording.target.section, recording.var
@@ -234,6 +278,8 @@ def model_payload(model: ir.Model) -> dict[str, Any]:
         "stimuli": [
             _stimulus(stim, model.run.duration) for stim in model.stimuli
         ],
+        "sensors": [_sensor(sensor) for sensor in model.sensors.values()],
+        "motors": [_motor(motor) for motor in model.motors.values()],
         "recordings": [
             {
                 "id": recording.id,
@@ -257,6 +303,14 @@ def result_payload(result: SimResult) -> dict[str, Any]:
         "spikes": {
             name: [round(time, TIME_DIGITS) for time in times]
             for name, times in result.spikes.items()
+        },
+        # Величины моторов на конец прогона. Не трасса: мотор отдаёт число
+        # сейчас, а «сейчас» у досчитанного прогона одно -- его последний
+        # момент. Округление общее с трассами: одна и та же величина не должна
+        # приходить по-разному.
+        "motors": {
+            name: round(value, TRACE_DIGITS)
+            for name, value in result.motors.items()
         },
         "degradation": list(result.degradation),
     }
@@ -494,6 +548,24 @@ def cell_payload(cell: Any) -> dict[str, Any]:
     }
 
 
+def _param(param: Any) -> dict[str, Any]:
+    """Поле рода: как его подписать, чем мерить и чем заполнить по умолчанию.
+
+    Один вид на все роды -- драйва, сенсора и мотора: `protocols.Param` у них
+    общий, и три способа отдать одно и то же поле означали бы три способа его
+    нарисовать.
+    """
+    return {
+        "name": param.name,
+        "label": param.label,
+        "unit": param.unit,
+        "default": param.default,
+        "step": param.step,
+        "form": param.form,
+        "note": param.note,
+    }
+
+
 def glossary_payload() -> dict[str, Any]:
     """Расшифровка подписей песочницы: рецепторы, мембрана, контакт, порты.
 
@@ -553,18 +625,7 @@ def glossary_payload() -> dict[str, Any]:
                 "note": drive.note,
                 "receptor": drive.receptor,
                 "template": drive.expand is not None,
-                "params": [
-                    {
-                        "name": param.name,
-                        "label": param.label,
-                        "unit": param.unit,
-                        "default": param.default,
-                        "step": param.step,
-                        "form": param.form,
-                        "note": param.note,
-                    }
-                    for param in drive.params
-                ],
+                "params": [_param(param) for param in drive.params],
             }
             for drive in protocols.DRIVE_KINDS.values()
         ],
@@ -578,6 +639,39 @@ def glossary_payload() -> dict[str, Any]:
             {"id": name, "name": variable.name, "unit": variable.unit}
             for name, variable in ir.RECORDED.items()
         ],
+        # Роды сенсора и мотора -- тем же списком и с теми же полями, что роды
+        # драйва. Оттуда же, из реестра: панель кнопок обязана называть род
+        # теми же словами, какими его называет прогон, и `trigger` здесь не
+        # украшение -- «отвечает на уровень» и «отвечает на изменение» для
+        # того, кто жмёт кнопку, разные вещи.
+        "sensor": protocols.SENSOR_NOTE,
+        "sensors": [
+            {
+                "id": kind.id,
+                "name": kind.name,
+                "note": kind.note,
+                "trigger": kind.trigger,
+                "emits": kind.emits,
+                "receptor": kind.receptor,
+                "params": [_param(param) for param in kind.params],
+            }
+            for kind in protocols.SENSOR_KINDS.values()
+        ],
+        "motor": protocols.MOTOR_NOTE,
+        "motors": [
+            {
+                "id": kind.id,
+                "name": kind.name,
+                "note": kind.note,
+                "unit": kind.unit,
+                "params": [_param(param) for param in kind.params],
+            }
+            for kind in protocols.MOTOR_KINDS.values()
+        ],
+        # Границы величины, которую принимает сенсор. Числами, а не словами в
+        # подсказке: ровно ими ползунок задаст свои края, а кнопка -- свои
+        # «нажато» и «отпущено».
+        "value": {"min": protocols.VALUE_MIN, "max": protocols.VALUE_MAX},
     }
 
 
@@ -738,6 +832,37 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 **_shape(stim),
             }
             for stim in sandbox.stimuli
+        ],
+        # Граница с миром. Приходит вместе с остальным состоянием, а не
+        # отдельным запросом, по той же причине, что и всё прочее в этом
+        # ответе: панель кнопок -- ещё одно представление того же проекта, и
+        # список сенсоров, собранный в браузере по своим правилам, разошёлся бы
+        # с тем, что считает сервер.
+        #
+        # Подключений у сенсора здесь нет: они живут в `links` обычными
+        # связями, у которых источник -- сам сенсор. Второй список тех же
+        # стрелок означал бы, что связь от сенсора -- не связь.
+        "sensors": [
+            {
+                "id": sensor.id,
+                "kind": sensor.kind,
+                "story": protocols.describe_sensor(sensor),
+                "to": sensor.to,
+                "position": list(sensor.position),
+            }
+            for sensor in sandbox.sensors
+        ],
+        "motors": [
+            {
+                "id": motor.id,
+                "kind": motor.kind,
+                "story": protocols.describe_motor(motor),
+                "unit": protocols.motor_unit(motor),
+                "window": motor.window,
+                "source": _endpoint(motor.source),
+                "position": list(motor.position),
+            }
+            for motor in sandbox.motors
         ],
         "recordings": [
             {"id": rec.id, "target": _endpoint(rec.target), "var": rec.var}

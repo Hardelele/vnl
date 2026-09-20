@@ -289,6 +289,29 @@ class PendingStimulus:
 
 
 @dataclass
+class PendingSensor:
+    """`sensor key : rate { to = 100Hz }` -- род и его числа, как написано.
+
+    Числа лежат словарём, а не полями: какие из них осмысленны, знает реестр
+    родов, а парсер только записывает написанное. Проверить имя параметра он
+    всё равно не может -- род на этом шаге ещё не признан, -- а разбирать
+    `rate` как что-то другое парсер не должен.
+    """
+
+    id: str
+    kind: str
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PendingMotor:
+    id: str
+    kind: str
+    source_address: str
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class PendingRecording:
     id: str
     target_address: str
@@ -306,6 +329,8 @@ class ParsedModel:
     modulators: dict[str, ir.Modulator]
     contacts: list[PendingContact]
     stimuli: list[PendingStimulus]
+    sensors: list[PendingSensor]
+    motors: list[PendingMotor]
     recordings: list[PendingRecording]
     run: ir.RunSpec
 
@@ -321,6 +346,8 @@ class Parser:
         self.modulators: dict[str, ir.Modulator] = {}
         self.contacts: list[PendingContact] = []
         self.stimuli: list[PendingStimulus] = []
+        self.sensors: list[PendingSensor] = []
+        self.motors: list[PendingMotor] = []
         self.recordings: list[PendingRecording] = []
         self.run = ir.RunSpec()
 
@@ -333,6 +360,8 @@ class Parser:
             "neuron": self._stmt_neuron,
             "modulator": self._stmt_modulator,
             "stim": self._stmt_stim,
+            "sensor": self._stmt_sensor,
+            "motor": self._stmt_motor,
             "record": self._stmt_record,
             "run": self._stmt_run,
         }
@@ -359,6 +388,8 @@ class Parser:
             modulators=self.modulators,
             contacts=self.contacts,
             stimuli=self.stimuli,
+            sensors=self.sensors,
+            motors=self.motors,
             recordings=self.recordings,
             run=self.run,
         )
@@ -520,6 +551,58 @@ class Parser:
                 stop=float(params.get("stop", float("inf"))),
                 receptor=str(params.get("receptor", "ampa")),
                 shape=shape,
+            )
+        )
+
+    def _stmt_sensor(self) -> None:
+        """`sensor key : rate { to = 100Hz }` -- дверь снаружи внутрь.
+
+        Подключение к клетке здесь не пишется: его пишут обычной стрелкой
+        (`key -> MN.soma { weight = 2nS }`), и разбирает её тот же
+        `_stmt_contact`, что и связь между клетками. Своего синтаксиса для
+        этого нет нарочно: сенсор подключается к точке так же, как контакт, --
+        с весом и рецептором, -- и второй способ написать одно и то же
+        заставил бы помнить, какой из них тут уместен.
+        """
+        cur = self.cur
+        name = cur.take("name").text
+        kind = "rate"
+        if cur.accept("colon"):
+            kind = cur.take("name").text
+        params = (
+            _parse_block(cur)
+            if cur.now.kind == "lbrace"
+            else _parse_flat_params(cur)
+        )
+        self.sensors.append(PendingSensor(id=name, kind=kind, params=params))
+
+    def _stmt_motor(self) -> None:
+        """`motor out : rate { from = MN.soma, window = 50ms }` -- дверь наружу.
+
+        Точка, на которую мотор смотрит, называется в блоке словом `from`, а не
+        стрелкой: стрелка в языке значит «сюда идёт сигнал», а мотор ничего в
+        клетку не вливает -- он на неё смотрит, как запись. `motor out <- MN`
+        завело бы вторую стрелку со своим направлением ради одного оператора.
+        """
+        cur = self.cur
+        name = cur.take("name").text
+        kind = "rate"
+        if cur.accept("colon"):
+            kind = cur.take("name").text
+        params = (
+            _parse_block(cur)
+            if cur.now.kind == "lbrace"
+            else _parse_flat_params(cur)
+        )
+        source = params.pop("from", "")
+        if not source:
+            raise ParseError(
+                f"мотор {name!r}: не сказано, за какой клеткой он смотрит; "
+                "нужно from = MN.soma"
+            )
+        self.motors.append(
+            PendingMotor(
+                id=name, kind=kind, source_address=str(source), params=params
             )
         )
 

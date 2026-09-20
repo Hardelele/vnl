@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from . import ir, theme, timeline, traces
+from . import ir, protocols, theme, timeline, traces
 from .layout import SOMA_R, LayoutResult, layout
 from .render_util import esc
 from .sim import SimResult
@@ -167,6 +167,62 @@ CIRCUIT_STYLE = """
 """
 
 
+def border_html(model: ir.Model, result: SimResult) -> str:
+    """Блок «Граница с миром»: сенсоры и моторы словами и числами.
+
+    Отдельной секцией, а не строкой под схемой: сенсор на схеме не нарисован --
+    он не клетка, и рисовать его пришлось бы новым видом фигуры, который в
+    раскладке ELK ничему не соответствует. Но промолчать о нём нельзя: по
+    схеме видно, что клетку кто-то гонит, и непонятно, кто именно.
+
+    Пусто -- секции нет вовсе. Отчёт схемы без границы обязан остаться ровно
+    таким, каким был: библиотека считается прежними числами и печатается
+    прежними страницами.
+    """
+    if not model.sensors and not model.motors:
+        return ""
+
+    items: list[str] = []
+    for sensor in model.sensors.values():
+        where = (
+            ", ".join(
+                f"{link.target} через {link.receptor}, {link.weight:g} нСм, "
+                f"{link.delay:g} мс"
+                for link in sensor.targets
+            )
+            or "ни к чему не подключён"
+        )
+        items.append(
+            f"<li><b>сенсор {esc(sensor.id)}</b> — "
+            f"{esc(protocols.describe_sensor(sensor))}; вход идёт в "
+            f"{esc(where)}</li>"
+        )
+    for motor in model.motors.values():
+        value = result.motors.get(motor.id)
+        # Число -- на конец прогона, и сказано это прямо: величина мотора
+        # меряется окном, а не всем прогоном, и «20 Гц» без «на 300-й
+        # миллисекунде» читалось бы как средняя частота за весь опыт.
+        tail = (
+            f"; на {model.run.duration:g} мс — {value:g} "
+            f"{esc(protocols.motor_unit(motor))}"
+            if value is not None
+            else ""
+        )
+        items.append(
+            f"<li><b>мотор {esc(motor.id)}</b> — "
+            f"{esc(protocols.describe_motor(motor))}, смотрит на "
+            f"{esc(str(motor.source))}{tail}</li>"
+        )
+
+    return (
+        "<h2>Граница с миром</h2><section><ul class='notes'>"
+        + "".join(items)
+        + "</ul><p class='sub note'>Сенсор ждёт величину снаружи: без неё он "
+        "молчит, а не выдумывает себе вход. Мотор отдаёт наружу число, а не "
+        "список спайков.</p></section>"
+    )
+
+
 def render(
     model: ir.Model,
     result: SimResult,
@@ -200,6 +256,8 @@ def render(
 <span>точка на ветви — место контакта</span></div>
 {layout_note}
 </section>
+
+{border_html(model, result)}
 
 {timeline.render(model, result)}
 

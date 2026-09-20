@@ -37,8 +37,10 @@ from .patterns import (
     PatternInstance,
     Port,
     Sandbox,
+    SandboxMotor,
     SandboxNeuron,
     SandboxRecording,
+    SandboxSensor,
     SandboxStimulus,
     adopt_demo,
     cell_type_at,
@@ -421,6 +423,156 @@ class Project:
         recording.var = var
         return recording
 
+    # --- граница с миром --------------------------------------------------
+    #
+    # Четыре операции вместо двух («завести» и «поправить» на каждую дверь) --
+    # по той же причине, по которой они разведены у стимула: заводит объект
+    # тот, кто кладёт его на холст, а правит тот, кто уже выбрал его в панели
+    # свойств, и одна операция на оба случая требовала бы от второго присылать
+    # всё заново.
+
+    def _sense_numbers(
+        self, where: str, target: Any, defaults: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, float]:
+        """Числа рода поверх канонических -- с отказом на чужое имя.
+
+        Канонические берутся из реестра родов, а не из полей датакласса: у
+        одного и того же поля они разные у разных родов, и «окно по умолчанию»
+        -- предметное знание, второе место для которого разойдётся с первым.
+        """
+        unknown = sorted(
+            key for key in params if key not in defaults or not hasattr(target, key)
+        )
+        if unknown:
+            known = ", ".join(defaults) or "их нет вовсе"
+            raise PatternError(
+                f"у {where} нет параметров: {', '.join(unknown)} (есть: {known})"
+            )
+        return {
+            name: float(params.get(name, canonical))
+            for name, canonical in defaults.items()
+        }
+
+    def add_sensor(
+        self,
+        sensor_id: str | None = None,
+        kind: str = "rate",
+        position: tuple[float, float] = (0.0, 0.0),
+        **params: Any,
+    ) -> SandboxSensor:
+        """Завести сенсор. Подключается он потом -- обычной связью."""
+        if kind not in protocols.SENSOR_KINDS:
+            raise PatternError(
+                f"род сенсора {kind!r} неизвестен: "
+                f"{', '.join(protocols.SENSOR_KIND_IDS)}"
+            )
+        chosen = sensor_id or self.sandbox.free_id("sensor")
+        if chosen in self.sandbox.taken_ids():
+            raise PatternError(f"имя {chosen!r} на холсте уже занято")
+        sensor = SandboxSensor(id=chosen, kind=kind, position=position)
+        numbers = self._sense_numbers(
+            "сенсора", sensor, protocols.sensor_defaults(kind), params
+        )
+        for key, value in numbers.items():
+            setattr(sensor, key, value)
+        problems = protocols.sensor_problems(sensor)
+        if problems:
+            raise PatternError("; ".join(problems))
+
+        self._remember(f"сенсор {chosen}")
+        self.sandbox.sensors.append(sensor)
+        return sensor
+
+    def set_sensor(self, sensor_id: str, **params: Any) -> SandboxSensor:
+        """Род и числа сенсора. Правка примеряется на копии -- как у стимула."""
+        sensor = self._sensor(sensor_id)
+        kind = str(params.pop("kind", sensor.kind))
+        if kind not in protocols.SENSOR_KINDS:
+            raise PatternError(
+                f"род сенсора {kind!r} неизвестен: "
+                f"{', '.join(protocols.SENSOR_KIND_IDS)}"
+            )
+        candidate = replace(sensor, kind=kind)
+        # Смена рода досыпает канонические числа нового -- но только туда, где
+        # ничего не набрано: заглянувший в соседний род не должен потерять свои.
+        defaults = protocols.sensor_defaults(kind)
+        numbers = self._sense_numbers("сенсора", candidate, defaults, params)
+        for key, value in numbers.items():
+            if key in params or not getattr(candidate, key, 0.0):
+                setattr(candidate, key, value)
+        problems = protocols.sensor_problems(candidate)
+        if problems:
+            raise PatternError("; ".join(problems))
+
+        self._remember(f"сенсор {sensor_id}")
+        sensor = self._sensor(sensor_id)
+        for slot in fields(SandboxSensor):
+            if slot.name not in ("id", "position"):
+                setattr(sensor, slot.name, getattr(candidate, slot.name))
+        return sensor
+
+    def add_motor(
+        self,
+        source: Endpoint,
+        motor_id: str | None = None,
+        kind: str = "rate",
+        position: tuple[float, float] = (0.0, 0.0),
+        **params: Any,
+    ) -> SandboxMotor:
+        """Завести мотор: он смотрит на точку клетки, как запись."""
+        if kind not in protocols.MOTOR_KINDS:
+            raise PatternError(
+                f"род мотора {kind!r} неизвестен: "
+                f"{', '.join(protocols.MOTOR_KIND_IDS)}"
+            )
+        chosen = motor_id or self.sandbox.free_id("motor")
+        if chosen in self.sandbox.taken_ids():
+            raise PatternError(f"имя {chosen!r} на холсте уже занято")
+        motor = SandboxMotor(id=chosen, source=source, kind=kind, position=position)
+        numbers = self._sense_numbers(
+            "мотора", motor, protocols.motor_defaults(kind), params
+        )
+        for key, value in numbers.items():
+            setattr(motor, key, value)
+        problems = protocols.motor_problems(motor)
+        if problems:
+            raise PatternError("; ".join(problems))
+
+        self._remember(f"мотор {chosen}")
+        self.sandbox.motors.append(motor)
+        return motor
+
+    def set_motor(self, motor_id: str, **params: Any) -> SandboxMotor:
+        motor = self._motor(motor_id)
+        kind = str(params.pop("kind", motor.kind))
+        if kind not in protocols.MOTOR_KINDS:
+            raise PatternError(
+                f"род мотора {kind!r} неизвестен: "
+                f"{', '.join(protocols.MOTOR_KIND_IDS)}"
+            )
+        source = params.pop("source", None)
+        candidate = replace(motor, kind=kind)
+        if source is not None:
+            if not isinstance(source, Endpoint):
+                raise PatternError("цель мотора -- точка холста, а не строка")
+            candidate.source = source
+        numbers = self._sense_numbers(
+            "мотора", candidate, protocols.motor_defaults(kind), params
+        )
+        for key, value in numbers.items():
+            if key in params or not getattr(candidate, key, 0.0):
+                setattr(candidate, key, value)
+        problems = protocols.motor_problems(candidate)
+        if problems:
+            raise PatternError("; ".join(problems))
+
+        self._remember(f"мотор {motor_id}")
+        motor = self._motor(motor_id)
+        for slot in fields(SandboxMotor):
+            if slot.name not in ("id", "position"):
+                setattr(motor, slot.name, getattr(candidate, slot.name))
+        return motor
+
     def set_run(self, **params: Any) -> ir.RunSpec:
         """Длительность, шаг, зерно и уровень детализации.
 
@@ -459,7 +611,16 @@ class Project:
         это на две операции незачем -- место на холсте у них одного рода, а
         второй маршрут пришлось бы выбирать тому, кто тащит фигуру мышью.
         """
-        target = self.sandbox.neurons.get(object_id)
+        target: Any = self.sandbox.neurons.get(object_id)
+        if target is None:
+            target = next(
+                (
+                    item
+                    for item in (*self.sandbox.sensors, *self.sandbox.motors)
+                    if item.id == object_id
+                ),
+                None,
+            )
         if target is None:
             target = self.sandbox.instance(object_id)  # проверка до снимка
         self._remember(f"перемещён {object_id}")
@@ -519,6 +680,17 @@ class Project:
         ]
         sandbox.recordings = [
             r for r in sandbox.recordings if not touches(r.target, object_id)
+        ]
+        # Двери с миром убираются по тому же правилу, что и всё остальное:
+        # сам объект -- если убрали его, и мотор, смотревший на убранную
+        # клетку, -- иначе он остался бы смотреть в никуда. Связи от сенсора
+        # уже отсеяны выше: `touches` разбирает имя владельца одинаково и для
+        # клетки, и для двери.
+        sandbox.sensors = [s for s in sandbox.sensors if s.id != object_id]
+        sandbox.motors = [
+            m
+            for m in sandbox.motors
+            if m.id != object_id and not touches(m.source, object_id)
         ]
 
     def ungroup(
@@ -736,6 +908,18 @@ class Project:
         raise PatternError(
             f"в блоке {block_id!r} нет контакта {contact_id!r} ({known})"
         )
+
+    def _sensor(self, sensor_id: str) -> SandboxSensor:
+        for sensor in self.sandbox.sensors:
+            if sensor.id == sensor_id:
+                return sensor
+        raise PatternError(f"сенсора {sensor_id!r} нет")
+
+    def _motor(self, motor_id: str) -> SandboxMotor:
+        for motor in self.sandbox.motors:
+            if motor.id == motor_id:
+                return motor
+        raise PatternError(f"мотора {motor_id!r} нет")
 
     def _stimulus(self, stimulus_id: str) -> SandboxStimulus:
         for stimulus in self.sandbox.stimuli:
