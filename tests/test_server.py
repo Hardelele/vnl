@@ -982,6 +982,39 @@ def test_undo_takes_back_the_last_change(base):
     assert empty["canUndo"] is False
 
 
+def test_redo_brings_the_undone_change_back(base):
+    """Возврат отменённого -- свой маршрут, и состояние он отдаёт целиком (#570)."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, before = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert len(undone["blocks"]) == 1
+    assert undone["canRedo"] is True
+    # Подпись называет то, что вернётся: кнопка «вперёд» без имени действия
+    # одинаково выглядит перед возвратом блока и перед возвратом связи.
+    assert undone["redoLabel"]
+
+    _, back = ask(base, "POST", f"/api/sandboxes/{sandbox}/redo")
+    assert [block["id"] for block in back["blocks"]] == [
+        block["id"] for block in before["blocks"]
+    ]
+    assert back["canRedo"] is False
+    assert back["fingerprint"] == before["fingerprint"]
+
+
+def test_a_new_change_after_undo_burns_the_forward_stack(base):
+    sandbox = sandbox_with_two_blocks(base)
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    _, after = ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr"})
+    assert after["canRedo"] is False
+
+    # И «вперёд» на пустой стопке не отказ: кнопка в этом случае погашена, а
+    # отказ был бы отказом на то, чего никто не просил.
+    status, same = ask(base, "POST", f"/api/sandboxes/{sandbox}/redo")
+    assert status == 200
+    assert same["canRedo"] is False
+
+
 def test_removing_a_block_takes_its_links(base):
     sandbox = sandbox_with_two_blocks(base)
     _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")

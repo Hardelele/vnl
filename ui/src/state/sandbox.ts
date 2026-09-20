@@ -45,6 +45,7 @@ import {
   setRecordingVar,
   setRunParams,
   setStimulusParams,
+  redo,
   undo,
   ungroupBlock,
   type ContactParams,
@@ -217,6 +218,7 @@ export interface SandboxPorts {
   ungroup: typeof ungroupBlock
   remove: typeof removeObject
   undo: typeof undo
+  redo: typeof redo
   save: typeof save
   asPattern: typeof saveAsPattern
 }
@@ -250,6 +252,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   ungroup: ungroupBlock,
   remove: removeObject,
   undo,
+  redo,
   save,
   asPattern: saveAsPattern,
 }
@@ -817,7 +820,20 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     remove: (object: string) => act((id) => io.remove(id, object), { selected: null }),
 
+    /**
+     * Шаг назад и шаг вперёд по истории проекта (#570).
+     *
+     * Выделение снимается в обоих: объекта, на который смотрит панель свойств,
+     * после шага истории может не быть вовсе -- он для того шага и возник.
+     * Оставленное выделение показывало бы пустую панель или, хуже, свойства
+     * другого объекта, занявшего то же имя.
+     *
+     * Состояние приходит целиком, как на любую операцию песочницы: считать
+     * «что изменилось» в браузере -- значит считать проект во второй раз, уже
+     * по-своему.
+     */
     undo: () => act((id) => io.undo(id), { selected: null }),
+    redo: () => act((id) => io.redo(id), { selected: null }),
     save: () => act((id) => io.save(id)),
 
     /**

@@ -94,6 +94,103 @@ def test_undo_on_empty_history_is_quiet(project):
     assert project.undo() is None
 
 
+def test_ten_steps_back_and_forward_return_the_same_project(project, ffi):
+    """Приёмка #570: десять действий, десять «назад», десять «вперёд».
+
+    Сравнивается не число объектов, а весь проект целиком (`to_plain`): вернуть
+    десять блоков, потеряв по дороге их места или связи, -- это не «вернуть».
+    """
+    start = to_plain(project.sandbox)
+    for index in range(10):
+        project.insert_pattern(ffi, instance_id=f"b{index}")
+    done = to_plain(project.sandbox)
+
+    for _ in range(10):
+        project.undo()
+    assert to_plain(project.sandbox) == start
+    assert not project.can_undo and project.can_redo
+
+    for _ in range(10):
+        project.redo()
+    assert to_plain(project.sandbox) == done
+    assert project.can_undo and not project.can_redo
+
+
+def test_a_new_action_burns_the_forward_stack(project, ffi):
+    """Новое действие после отката гасит «вперёд» -- общее правило редакторов.
+
+    Иначе «вперёд» склеило бы две разные истории проекта: вернуло бы схему,
+    которой в нём никогда не было.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+    project.insert_pattern(ffi, instance_id="b")
+    project.undo()
+    assert project.can_redo
+
+    project.insert_pattern(ffi, instance_id="c")
+    assert not project.can_redo
+    assert [block.id for block in project.sandbox.instances] == ["a", "c"]
+
+
+def test_redo_on_empty_stack_is_quiet(project, ffi):
+    assert project.redo() is None
+    project.insert_pattern(ffi, instance_id="a")
+    assert project.redo() is None
+
+
+def test_undo_and_redo_name_the_step(project, ffi):
+    """Подсказка кнопки называет действие, которое отменится (#570)."""
+    project.insert_pattern(ffi, instance_id="a")
+    assert project.undo_label is not None and "FFI" in project.undo_label
+    assert project.redo_label is None
+
+    project.undo()
+    assert project.undo_label is None
+    assert project.redo_label is not None and "FFI" in project.redo_label
+
+
+def test_a_batch_comes_back_whole(project, ffi):
+    """Возврат так же одношаговый, как отмена: пакет возвращается целиком."""
+    with project.batch("Claude собрал цепочку") as work:
+        work.insert_pattern(ffi, instance_id="a")
+        work.insert_pattern(ffi, instance_id="b")
+        work.connect(Endpoint("a", "out"), Endpoint("b", "in"), link_id="a_to_b")
+    whole = to_plain(project.sandbox)
+
+    project.undo()
+    assert project.sandbox.instances == [] and project.sandbox.links == []
+
+    assert project.redo() == "Claude собрал цепочку"
+    assert to_plain(project.sandbox) == whole
+
+
+def test_the_forward_stack_does_not_grow_without_bound(project, ffi):
+    """Стопка возврата держит столько же шагов, сколько история: `HISTORY_LIMIT`.
+
+    Снимки полные, и без предела возврат удвоил бы память вдвое против
+    названного числа -- а предел на память называют один раз, а не на половину
+    того, что в ней лежит.
+    """
+    for index in range(80):
+        project.insert_pattern(ffi, instance_id=f"b{index}")
+    for _ in range(80):
+        project.undo()
+    assert len(project.future) <= 50
+
+
+def test_moving_a_figure_comes_back_too(project, ffi):
+    """Отпечаток сети от отмены и возврата не меняется: место -- не физика."""
+    project.insert_pattern(ffi, instance_id="a")
+    before = project.fingerprint()
+    project.move("a", (120.0, 40.0))
+
+    project.undo()
+    assert project.sandbox.instance("a").position == (0.0, 0.0)
+    project.redo()
+    assert project.sandbox.instance("a").position == (120.0, 40.0)
+    assert project.fingerprint() == before
+
+
 def test_history_does_not_grow_without_bound(project, ffi):
     for index in range(80):
         project.insert_pattern(ffi, instance_id=f"b{index}")

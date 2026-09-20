@@ -133,6 +133,13 @@ async function openUserMenu(): Promise<void> {
   })
 }
 
+/** Пара «назад — вперёд» в верхней полосе (#570). */
+function history(): HTMLElement {
+  const pair = host.querySelector('.sb-bar .sb-history')
+  if (!pair) throw new Error('в полосе нет пары «назад — вперёд»')
+  return pair as HTMLElement
+}
+
 function loginLinks(): HTMLAnchorElement[] {
   return [...host.querySelectorAll('a')].filter(
     (link) => link.textContent?.trim().startsWith('Войти'),
@@ -460,6 +467,7 @@ describe('дорога с карточки в песочницу (#526)', () => 
       run: { dt: 0.1, duration: 500, level: 'L1', seed: 1 },
       dirty: false,
       canUndo: false,
+    canRedo: false,
       problems: [],
       warnings: [],
       portHints: [],
@@ -782,6 +790,117 @@ describe('дорога с карточки в песочницу (#526)', () => 
     const run = host.querySelector('.ap-run') as HTMLElement
     expect(run.textContent).toContain('Длительность')
     expect(run.textContent).toContain('Зерно')
+  })
+
+  it('отмена и возврат стоят парой слева сверху (#570)', async () => {
+    // Жалоба владельца: «когда я нажимаю кнопку „Отменить“, я ожидаю, что у
+    // меня отменится вообще всё… я бы добавил сверху кнопочки „назад-вперёд“,
+    // там, где обычно это у всяких редакторов располагается». Одинокая
+    // «Отменить» рядом с «Сохранить» читалась как «отменить все правки», а
+    // возврата отменённого не было вовсе.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+    await act(async () => {
+      sandboxController.store.setState({
+        project: sandbox({
+          canUndo: true,
+          canRedo: true,
+          undoLabel: 'разобран ffi',
+          redoLabel: 'вставлен паттерн «FFI»',
+        }),
+      })
+    })
+
+    // Парой и рядом с проектной частью -- там, где их держат все редакторы.
+    const pair = [...history().querySelectorAll('button')] as HTMLButtonElement[]
+    const back = pair[0] as HTMLButtonElement
+    const forward = pair[1] as HTMLButtonElement
+    expect(back.getAttribute('aria-label')).toBe('Отменить')
+    expect(forward.getAttribute('aria-label')).toBe('Вернуть')
+    // Подсказка называет то самое действие, которое отменится.
+    expect(back.title).toContain('разобран ffi')
+    expect(forward.title).toContain('вставлен паттерн «FFI»')
+    // Одинокой кнопки со словом «Отменить» в полосе больше нет: форма пары и
+    // есть объяснение, что это история, а не откат всех правок.
+    const bar = host.querySelector('.sb-bar') as HTMLElement
+    expect(
+      [...bar.querySelectorAll('button')].some(
+        (item) => item.textContent?.trim() === 'Отменить',
+      ),
+    ).toBe(false)
+
+    await act(async () => {
+      forward.click()
+    })
+    expect(asked.some((call) => call.path.endsWith('/redo'))).toBe(true)
+  })
+
+  it('гаснут, когда возвращать и отменять нечего (#570)', async () => {
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    const pair = [...history().querySelectorAll('button')] as HTMLButtonElement[]
+    const back = pair[0] as HTMLButtonElement
+    const forward = pair[1] as HTMLButtonElement
+    expect(back.disabled).toBe(true)
+    expect(forward.disabled).toBe(true)
+    expect(back.title).toContain('Отменять нечего')
+    expect(forward.title).toContain('Возвращать нечего')
+  })
+
+  it('Ctrl+Z и Ctrl+Shift+Z делают то же, что кнопки, и молчат в поле (#570)', async () => {
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', ctrlKey: true }),
+      )
+    })
+    expect(asked.some((call) => call.path.endsWith('/undo'))).toBe(true)
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'z',
+          code: 'KeyZ',
+          ctrlKey: true,
+          shiftKey: true,
+        }),
+      )
+    })
+    expect(asked.some((call) => call.path.endsWith('/redo'))).toBe(true)
+
+    // В поле ввода клавиша принадлежит полю: Ctrl+Z там отменяет набранную
+    // букву, и отбирать его у имени проекта нельзя.
+    asked = []
+    const name = host.querySelector('.sb-project-input') as HTMLInputElement
+    await act(async () => {
+      name.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'z',
+          code: 'KeyZ',
+          ctrlKey: true,
+          bubbles: true,
+        }),
+      )
+    })
+    expect(asked.some((call) => call.path.endsWith('/undo'))).toBe(false)
   })
 
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {

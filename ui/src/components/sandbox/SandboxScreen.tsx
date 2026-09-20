@@ -24,7 +24,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { objectCommand } from '../../lib/keys'
+import { historyCommand, objectCommand } from '../../lib/keys'
 import { CELLS, counted } from '../../lib/plural'
 import { driveHint, receptorHint } from '../../model/glossary'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
@@ -284,6 +284,33 @@ export function SandboxScreen({
    * проверять их прямо честнее, чем через отрисованный экран. Здесь остаётся
    * только исполнить решённое.
    */
+  /**
+   * `Ctrl+Z` и `Ctrl+Shift+Z` (он же `Ctrl+Y`): шаг назад и шаг вперёд (#570).
+   *
+   * Тем же устройством, что клавиши над объектом: слушатель на окне, разбор в
+   * `lib/keys`. Отдельным эффектом, а не веткой в соседнем, потому что и
+   * условия у них разные -- клавиша истории работает и тогда, когда не выбрано
+   * ничего, а `Delete` без выбранного объекта делать нечего.
+   *
+   * «Нечего отменять» ничего не делает молча -- ровно как погашенная кнопка:
+   * сообщение на клавишу, нажатую по привычке, было бы шумом.
+   */
+  useEffect(() => {
+    const key = (event: KeyboardEvent): void => {
+      // Пока открыта форма сохранения, экран занят ею: откатывать из-под неё
+      // то, что она как раз собирается записать, -- не то, о чём просят.
+      if (saving) return
+      const command = historyCommand(event)
+      if (!command) return
+      // Иначе Ctrl+Z уйдёт браузеру: на странице есть поля ввода, и он
+      // отменил бы правку в последнем из них.
+      event.preventDefault()
+      void (command === 'undo' ? control.undo() : control.redo())
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [control, saving])
+
   useEffect(() => {
     const key = (event: KeyboardEvent): void => {
       // Пока открыта форма сохранения, экран занят ею: удалять из-под неё то,
@@ -420,6 +447,41 @@ export function SandboxScreen({
           onCreate={() => void control.create(nextName(list))}
           onClose={() => control.close()}
         />
+        {/* Отмена и возврат -- парой и рядом с проектной частью (#570).
+            Парой, потому что форма и есть объяснение: одинокая «Отменить»
+            рядом с «Сохранить» читалась как «отменить все правки», то есть
+            «вернуть как было при открытии», -- а делала шаг истории. Две
+            стрелки друг за другом говорят «история» прежде всякой подписи.
+
+            Слева сверху -- там, где их держат все редакторы; владелец так и
+            сказал: «добавил бы сверху кнопочки назад-вперёд, там, где обычно
+            это у всяких редакторов располагается».
+
+            Подсказка называет само действие («Отменить: разобран ffi»):
+            подпись шага приходит с сервера вместе с состоянием, и второго
+            места, где написано, что сейчас отменится, нет. */}
+        <div className="sb-history">
+          <button
+            type="button"
+            className="sb-icon"
+            disabled={keeping || !project.canUndo}
+            aria-label="Отменить"
+            title={undoTitle(project.canUndo, project.undoLabel)}
+            onClick={() => void control.undo()}
+          >
+            ↶
+          </button>
+          <button
+            type="button"
+            className="sb-icon"
+            disabled={keeping || !project.canRedo}
+            aria-label="Вернуть"
+            title={redoTitle(project.canRedo, project.redoLabel)}
+            onClick={() => void control.redo()}
+          >
+            ↷
+          </button>
+        </div>
         <span className="sb-bar-gap" />
 
         {/* Раскладка -- по требованию, а не на каждую вставку: человек
@@ -446,14 +508,6 @@ export function SandboxScreen({
           onClick={() => void control.save()}
         >
           Сохранить
-        </button>
-        <button
-          type="button"
-          className="btn-secondary"
-          disabled={!project.canUndo}
-          onClick={() => void control.undo()}
-        >
-          Отменить
         </button>
         {/* Отсюда схема попадает в библиотеку -- и только отсюда: второго
             редактора схем нет, а пустой черновик наполнять было нечем (#525). */}
@@ -1019,6 +1073,29 @@ function arrival(
     'Это обычные объекты проекта: их правят панелью свойств и убирают, ' +
     'как любые другие.'
   )
+}
+
+/**
+ * Подсказка кнопки «назад»: что именно отменится (#570).
+ *
+ * Отдельной функцией, а не строкой в разметке: правило тут не механическое --
+ * у кнопки три состояния («нечего», «есть что, и оно названо», «есть что, но
+ * сервер старее страницы и подписи не прислал»), и подсказка обязана быть
+ * верной во всех трёх. Клавиша названа в каждом: о ней узнают отсюда, а не из
+ * списка сочетаний, которого в песочнице нет.
+ */
+export function undoTitle(can: boolean, label?: string | null): string {
+  if (!can) return 'Отменять нечего: история пуста'
+  return label
+    ? `Отменить: ${label} (Ctrl+Z)`
+    : 'Отменить последнее действие (Ctrl+Z)'
+}
+
+export function redoTitle(can: boolean, label?: string | null): string {
+  if (!can) return 'Возвращать нечего: отменённого нет'
+  return label
+    ? `Вернуть: ${label} (Ctrl+Shift+Z)`
+    : 'Вернуть отменённое (Ctrl+Shift+Z)'
 }
 
 /** Имя нового проекта. Одинаковые имена в списке делают его бесполезным. */

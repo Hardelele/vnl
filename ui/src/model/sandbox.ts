@@ -242,6 +242,23 @@ export interface SandboxState {
   /** Есть ли несохранённые изменения. Факт, а не подпись из макета. */
   dirty: boolean
   canUndo: boolean
+  /**
+   * Есть ли что вернуть после отмены (#570).
+   *
+   * Факт проекта, а не догадка браузера: стопка возврата живёт в `Project` на
+   * сервере, и считать её здесь значило бы завести вторую историю, которая
+   * разойдётся с первой на первом же обращении Claude через MCP.
+   */
+  canRedo: boolean
+  /**
+   * Что отменится и что вернётся -- человеческими словами: «вставлен паттерн
+   * «Растормаживание»», «разобран ffi». Отсюда их берёт подсказка кнопки.
+   *
+   * Необязательны: сервер бывает старее страницы, а кнопка обязана работать и
+   * без подписи -- она объясняет, а не управляет.
+   */
+  undoLabel?: string | null
+  redoLabel?: string | null
   /** Что мешает запуску. Пусто -- можно считать. */
   problems: string[]
   /**
@@ -644,6 +661,15 @@ export function removeObject(id: string, object: string): Promise<SandboxState> 
 
 export function undo(id: string): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/undo`, 'POST')
+}
+
+/**
+ * Вернуть отменённое (#570). Свой маршрут, а не `undo` со знаком: это другое
+ * действие человека, и отличать их телом запроса значило бы прятать половину
+ * возможностей сервера внутрь одного адреса.
+ */
+export function redo(id: string): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/redo`, 'POST')
 }
 
 export function save(id: string): Promise<SandboxState> {
