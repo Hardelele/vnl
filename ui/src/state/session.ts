@@ -140,7 +140,12 @@ export function loginFrom(state: SessionState, here: string): string {
  * навигацию, которой в jsdom нет.
  */
 const navigate = (url: string): void => {
-  window.location.assign(url)
+  // `replace`, а не `assign`: вход -- это цепочка редиректов, а не место, куда
+  // можно вернуться. `assign` оставил бы в истории запись про `/auth/login`, и
+  // стрелка «назад» приводила бы ровно на неё, а она запускала бы ту же цепочку
+  // заново и снова выбрасывала на авторизацию. Вернуться «через» вход было
+  // нельзя в принципе, сколько ни жми (#539).
+  window.location.replace(url)
 }
 
 let leave = navigate

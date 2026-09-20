@@ -189,6 +189,25 @@ describe('уход на вход', () => {
     }
   })
 
+  it('заменяет запись истории, а не добавляет: «назад» не должно вести на вход', () => {
+    // Вход -- цепочка редиректов, а не место, куда возвращаются. Добавь его в
+    // историю, и стрелка «назад» приводила бы ровно на него, а он запускал бы
+    // ту же цепочку и снова выбрасывал на авторизацию (#539).
+    const replace = vi.fn()
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, pathname: '/', search: '', assign, replace })
+    try {
+      // Настоящий переход, а не подменённый: проверяем именно его.
+      whenLeaving()
+      goToLogin()
+      expect(replace).toHaveBeenCalledTimes(1)
+      expect(assign).not.toHaveBeenCalled()
+    } finally {
+      whenLeaving()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('уводит один раз, сколько бы отказов ни пришло', () => {
     const went: string[] = []
     whenLeaving((url) => went.push(url))
