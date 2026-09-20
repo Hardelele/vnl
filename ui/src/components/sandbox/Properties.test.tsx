@@ -17,7 +17,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Properties } from './Properties'
 import type { CellState } from '../../model/sim'
-import type { SandboxBlock, SandboxNeuron, SandboxState } from '../../model/sandbox'
+import type {
+  SandboxBlock,
+  SandboxDrive,
+  SandboxNeuron,
+  SandboxState,
+} from '../../model/sandbox'
 import type { CellKind, Glossary, PatternPort, PointModel } from '../../model/types'
 
 /** Расшифровка -- ровно та, что приходит с сервера: своей здесь нет. */
@@ -239,7 +244,13 @@ const PROJECT = {
   links: [],
   stimuli: [],
   recordings: [
-    { id: 'r1', target: { object: 'X', port: null }, var: 'g_exc' },
+    // Адрес записи -- тот же конец связи, что у связи и у стимула: `instance`
+    // плюс порт. У клетки порта нет, и `null` тут не пропуск.
+    {
+      id: 'r1',
+      target: { instance: 'X', port: null, section: 'soma', fraction: 0.5 },
+      var: 'g_exc',
+    },
   ],
 } as unknown as SandboxState
 
@@ -728,7 +739,10 @@ describe('имя и копия объекта в панели свойств (#5
   it('клетку можно продублировать и убрать прямо отсюда', async () => {
     await mount({ selection: { kind: 'neuron', id: 'X' } })
 
+    // «Убрать запись» -- из свёрнутой группы её же записи (#565): она стоит
+    // выше, потому что показана там, куда смотрит, -- у своей клетки.
     expect(actions()).toEqual([
+      'Убрать запись',
       'Драйв на X',
       'Записывать X',
       'Дублировать клетку',
@@ -745,5 +759,126 @@ describe('имя и копия объекта в панели свойств (#5
     expect(fields()).not.toContain('Имя')
     expect(actions()).toContain('Дублировать блок')
     expect(actions()).toContain('Убрать блок')
+  })
+})
+
+describe('стимул и запись в свойствах своей клетки (#565)', () => {
+  /** Драйв, бьющий в названную точку: поля те же, что приходят с сервера. */
+  function drive(id: string, instance: string, patch = {}): SandboxDrive {
+    return {
+      id,
+      target: { instance, port: null, section: 'soma', fraction: 0.5 },
+      kind: 'poisson',
+      receptor: 'ampa',
+      rate: 250,
+      amplitude: 1.5,
+      times: [],
+      protocol: 'пуассоновский, в среднем 250 Гц',
+      start: 0,
+      stop: 500,
+      n: 0,
+      freq: 0,
+      isi: 0,
+      duration: 0,
+      bursts: 0,
+      burst_period: 0,
+      repeats: 1,
+      period: 0,
+      recovery: 0,
+      ...patch,
+    }
+  }
+
+  /** Проект с драйвами, целящимися в клетку `X` и внутрь блока `dis`. */
+  function withDrives(drives: SandboxDrive[]): SandboxState {
+    return { ...PROJECT, stimuli: drives } as SandboxState
+  }
+
+  it('единственный драйв клетки раскрыт: род, числа и окно видны сразу', async () => {
+    // Приёмка задачи: выбрана клетка с драйвом -- и всё правится на месте, без
+    // перехода на строку стимула в дереве объектов.
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      project: withDrives([drive('drive1', 'X')]),
+    })
+
+    const group = host.querySelector('details.sb-group')
+    expect(group?.hasAttribute('open')).toBe(true)
+    expect(group?.textContent).toContain('пуассоновский, в среднем 250 Гц')
+    expect(fields()).toContain('Род')
+    expect(fields()).toContain('Средняя частота, Гц')
+    expect(fields()).toContain('Начало, мс')
+    expect(fields()).toContain('Конец, мс')
+  })
+
+  it('двух драйвов уже не разворачивает: две простыни подряд не читаются', async () => {
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      project: withDrives([drive('drive1', 'X'), drive('drive2', 'X')]),
+    })
+
+    const groups = [...host.querySelectorAll('details.sb-group')]
+    const opened = groups.filter((node) => node.hasAttribute('open'))
+    expect(groups.length).toBeGreaterThanOrEqual(2)
+    expect(opened.map((node) => node.querySelector('.mono')?.textContent)).not.toContain(
+      'drive1',
+    )
+  })
+
+  it('чужой драйв в свойствах клетки не показан', async () => {
+    // Выделение одно на экран, и «принадлежит» тут значит ровно одно: цель.
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      project: {
+        ...withDrives([drive('drive1', 'dis/PYR')]),
+        recordings: [],
+      } as SandboxState,
+    })
+
+    expect(host.textContent).not.toContain('drive1')
+    expect(host.textContent).toContain('Драйва и записей здесь нет')
+  })
+
+  it('блоку принадлежит и драйв на порт, и драйв на внутренний узел', async () => {
+    // `ffi.in` и `ffi/IN` -- одна точка, названная с двух сторон: разводить их
+    // значило бы объявить драйв на порт и драйв на узел разными вещами.
+    await mount({
+      project: withDrives([
+        drive('d1', 'dis', { target: { instance: 'dis', port: 'in', section: 'soma', fraction: 0.5 } }),
+        drive('d2', 'dis/SST'),
+        drive('d3', 'X'),
+      ]),
+    })
+
+    const marks = [...host.querySelectorAll('details.sb-group .sb-kind')].map(
+      (node) => node.textContent,
+    )
+    expect(marks).toContain('d1')
+    expect(marks).toContain('d2')
+    expect(marks).not.toContain('d3')
+  })
+
+  it('на внутренний узел блока драйв вешается прямо из списка', async () => {
+    // Раньше драйв вешали только на порт, хотя сервер принимает любой конец
+    // связи: на тормозный нейрон блока подать было нечего (#530, #565).
+    await mount({
+      project: {
+        ...PROJECT,
+        blocks: [
+          {
+            ...BLOCK,
+            scheme: {
+              neurons: [{ id: 'PYR', inhibitory: false }, { id: 'SST', inhibitory: true }],
+              edges: [],
+            },
+          },
+        ],
+      } as unknown as SandboxState,
+    })
+
+    const buttons = [...host.querySelectorAll('.sb-inner .sb-plus')].map(
+      (node) => node.getAttribute('title'),
+    )
+    expect(buttons).toEqual(['Драйв на dis/PYR', 'Драйв на dis/SST'])
   })
 })

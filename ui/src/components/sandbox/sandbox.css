@@ -605,6 +605,44 @@
   background: var(--inh);
 }
 
+/* Строка внутреннего узла блока: сама ведёт соединение, а кнопка справа
+   вешает на узел драйв (#565). Двух действий в одной строке не было, пока
+   драйв жил только на портах; теперь их два, и щелчок по строке обязан
+   остаться одним -- соединением, за которым сюда приходят чаще.
+
+   Отступы с самой строки сняты и отданы кнопке: иначе полоса подсветки при
+   наведении обрывалась бы, не дойдя до края панели, и строка читалась бы
+   короче, чем есть. */
+.sb-inner {
+  padding: 0;
+  gap: 0;
+}
+
+.sb-inner-pick {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 8px var(--space-4);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sb-inner-pick:hover {
+  background: var(--subtle);
+}
+
+.sb-inner .sb-plus {
+  flex: none;
+  margin: 0 var(--space-3) 0 var(--space-2);
+}
+
 .sb-note {
   margin: 0;
   padding: var(--space-2) var(--space-4);

@@ -11,14 +11,18 @@
  * ровно столько, сколько параметров у модели: они будут только прибывать.
  */
 
+import type { ReactNode } from 'react'
+
 import { CELLS, LINKS, counted } from '../../lib/plural'
 import { momentWords } from '../../lib/times'
 import {
   NO_GLOSSARY,
+  driveHint,
   driveKind,
   driveKinds,
   driveParamLabel,
   receptorNote,
+  recordedName,
 } from '../../model/glossary'
 import type { CellState } from '../../model/sim'
 import type {
@@ -43,6 +47,10 @@ import type {
 } from '../../model/types'
 import { sandboxController, type Selection } from '../../state/sandbox'
 import { Vitals } from '../live/Vitals'
+// Разбор приставки (`ffi/I` принадлежит блоку `ffi`) -- один на весь
+// интерфейс: второе место, считающее владельца по-своему, разошлось бы с
+// первым на первом же блоке с вложенным именем.
+import { ownerOf } from './Canvas'
 
 /**
  * Список рецепторов для поля выбора.
@@ -201,16 +209,34 @@ export function Properties({
 
   if (selection.kind === 'block') {
     const block = project.blocks.find((item) => item.id === selection.id)
+    // Блоку принадлежат и стимулы на его портах, и стимулы на внутренних
+    // узлах (`ffi/I`, #530): владельца считает `ownerOf` -- тот же разбор
+    // приставки, которым холст решает, чью фигуру держит конец связи.
+    const mine = (target: Endpoint): boolean =>
+      block !== undefined && ownerOf(target.instance, project.blocks) === block.id
     return block ? (
-      <BlockProps block={block} cells={cells} glossary={glossary} palette={palette} />
+      <BlockProps
+        block={block}
+        drives={project.stimuli.filter((item) => mine(item.target))}
+        records={project.recordings.filter((item) => mine(item.target))}
+        cells={cells}
+        glossary={glossary}
+        palette={palette}
+      />
     ) : null
   }
 
   if (selection.kind === 'neuron') {
     const neuron = project.neurons.find((item) => item.id === selection.id)
+    // У клетки приставки нет: её имя в собранной сети -- она сама, и сравнение
+    // точное. `ownerOf` здесь дал бы то же самое, но обещал бы, что у клетки
+    // бывают внутренние узлы.
+    const at = (target: Endpoint): boolean => target.instance === selection.id
     return neuron ? (
       <NeuronProps
         neuron={neuron}
+        drives={project.stimuli.filter((item) => at(item.target))}
+        records={project.recordings.filter((item) => at(item.target))}
         cells={cells}
         spikes={spikes}
         elapsed={elapsed}
@@ -267,11 +293,22 @@ export function Properties({
 
 function BlockProps({
   block,
+  drives,
+  records,
   cells,
   glossary,
   palette,
 }: {
   block: SandboxBlock
+  /**
+   * Стимулы и записи блока -- и на портах, и на внутренних узлах (#565, #530).
+   *
+   * Вместе, а не двумя списками: `ffi.in` и `ffi/IN` -- это одна и та же
+   * точка, названная с двух сторон, и разводить их значило бы объявить, что
+   * драйв на порт и драйв на узел разные вещи.
+   */
+  drives: SandboxDrive[]
+  records: SandboxRecording[]
   cells: Record<string, CellState>
   glossary: Glossary
   palette: CellKind[]
@@ -329,18 +366,34 @@ function BlockProps({
         const flat = `${block.id}/${neuron.id}`
         const state = cells[flat]
         return (
-          <button
-            type="button"
-            className="row sb-pick"
-            key={neuron.id}
-            onClick={() => void control.touchEndpoint(flat, null)}
-          >
-            <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
-            <span className="mono row-id">{flat}</span>
-            <span className="mono row-dim row-end">
-              {state ? `${state.v.toFixed(1)} мВ` : 'соединить'}
-            </span>
-          </button>
+          <div className="row sb-inner" key={neuron.id}>
+            <button
+              type="button"
+              className="sb-inner-pick"
+              onClick={() => void control.touchEndpoint(flat, null)}
+            >
+              <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
+              <span className="mono row-id">{flat}</span>
+              <span className="mono row-dim row-end">
+                {state ? `${state.v.toFixed(1)} мВ` : 'соединить'}
+              </span>
+            </button>
+            {/* Драйв прямо на внутренний узел (#565). До сих пор его вешали
+                только на порт, хотя сервер принимает любой конец связи, --
+                и на тормозный нейрон блока, ради которого паттерн часто и
+                вставляют, подать было нечего, кроме как через панель
+                стимула. Кнопка отдельная, а не второй смысл у строки: щелчок
+                по строке уже занят соединением, и два действия в одном
+                щелчке различить нельзя. */}
+            <button
+              type="button"
+              className="sb-plus"
+              title={`Драйв на ${flat}`}
+              onClick={() => void control.stimulate(flat, null)}
+            >
+              ↯
+            </button>
+          </div>
         )
       })}
 
@@ -378,7 +431,12 @@ function BlockProps({
         />
       ))}
 
-      <div className="sb-actions">
+      {/* Стимулы и записи блока -- там же, где их правят у клетки (#565).
+          Заводятся они по-прежнему на конкретную точку: у блока их столько,
+          сколько портов, и общий «драйв на блок» был бы адресом, которого не
+          существует -- потенциал есть у клетки, а коробка это несколько
+          клеток с разными порогами. */}
+      <DrivesOf drives={drives} records={records} glossary={glossary}>
         {block.ports.filter(canDrive).map((port) => (
           <button
             key={port.name}
@@ -399,6 +457,9 @@ function BlockProps({
             Записывать {portTitle(port)}
           </button>
         ))}
+      </DrivesOf>
+
+      <div className="sb-actions">
         {/* Разобрать -- не то же, что убрать: блок не уносится, а заменяется
             своим же содержимым в другом виде (#532). Нужно там, где от
             паттерна нужна половина или его надо переделать на месте; «Fork»
@@ -462,6 +523,8 @@ function BlockProps({
  */
 function NeuronProps({
   neuron,
+  drives,
+  records,
   cells,
   spikes,
   elapsed,
@@ -469,6 +532,9 @@ function NeuronProps({
   palette,
 }: {
   neuron: SandboxNeuron
+  /** Стимулы, которые бьют в эту клетку, и записи, которые её пишут (#565). */
+  drives: SandboxDrive[]
+  records: SandboxRecording[]
   cells: Record<string, CellState>
   spikes: Record<string, number[]>
   elapsed: number
@@ -534,7 +600,11 @@ function NeuronProps({
         </p>
       )}
 
-      <div className="sb-actions">
+      {/* Стимулы и записи этой клетки -- здесь, а не только отдельной строкой
+          в дереве объектов (#565). У стимула ровно одна цель, и смотрят на
+          него оттуда, куда он бьёт: чтобы понять, почему клетка спайкает
+          пачками, человек выбирает клетку, а не идёт искать `drive2`. */}
+      <DrivesOf drives={drives} records={records} glossary={glossary}>
         {/* Драйв и запись идут на саму клетку: порта, на который их вешают у
             блока, здесь нет. */}
         <button
@@ -551,6 +621,9 @@ function NeuronProps({
         >
           Записывать {neuron.id}
         </button>
+      </DrivesOf>
+
+      <div className="sb-actions">
         {/* Копия ложится рядом, со своим именем и тем же типом -- значит с
             теми же параметрами мембраны, и правка порога задевает обеих
             (тип в IR один на всех своих клеток). Связей и драйва копия не
@@ -758,6 +831,38 @@ function DriveProps({
   drive: SandboxDrive
   glossary: Glossary
 }) {
+  return (
+    <>
+      <Head title="Стимул" note={drive.id} />
+      <div className="row">
+        <span className="mono row-path">→ {where(drive.target)}</span>
+      </div>
+      <DriveFields drive={drive} glossary={glossary} />
+      <Remove what="стимул" id={drive.id} />
+    </>
+  )
+}
+
+/**
+ * Поля одного стимула: род, числа, окно, рецептор (#565).
+ *
+ * Отдельно от `DriveProps`, потому что мест, где стимул правят, стало два:
+ * своя строка в дереве объектов и свойства той клетки, на которую он смотрит.
+ * Правят при этом одно и то же -- значит и набор полей должен быть один.
+ * Вторая их копия внутри панели клетки разошлась бы с этой на первом же новом
+ * роде драйва: там поле появилось бы, здесь нет.
+ *
+ * То, что стимул -- отдельная сущность, это не отменяет: у него своя жизнь,
+ * его правят и убирают, и строка в дереве объектов остаётся. Здесь он показан
+ * оттуда, куда бьёт, потому что цель у него ровно одна.
+ */
+function DriveFields({
+  drive,
+  glossary,
+}: {
+  drive: SandboxDrive
+  glossary: Glossary
+}) {
   const control = sandboxController
   // Поля рисуются по реестру родов, а не перечислены здесь. Пуассоновский шум
   // задаётся частотой, ток -- амплитудой, поезд -- числом импульсов и
@@ -768,10 +873,6 @@ function DriveProps({
   const params = kind?.params ?? []
   return (
     <>
-      <Head title="Стимул" note={drive.id} />
-      <div className="row">
-        <span className="mono row-path">→ {where(drive.target)}</span>
-      </div>
       {/* На подписи -- что это за поле вообще, на самом списке -- что значит
           выбранный род: это два разных вопроса, и один ответ на оба оставил
           бы без ответа тот, который задают чаще (#553). */}
@@ -820,7 +921,6 @@ function DriveProps({
         value={drive.stop}
         onChange={(stop) => void control.setDrive(drive.id, { stop })}
       />
-      <Remove what="стимул" id={drive.id} />
     </>
   )
 }
@@ -832,20 +932,114 @@ function RecordProps({
   record: SandboxRecording
   glossary: Glossary
 }) {
-  const control = sandboxController
   return (
     <>
       <Head title="Запись" note={record.id} />
       <div className="row">
         <span className="mono row-path">{where(record.target)}</span>
       </div>
-      <SelectField<RecordedVar>
-        label="Величина"
-        value={record.var}
-        options={recordedOptions(glossary, record.var)}
-        onChange={(value) => void control.setRecord(record.id, value)}
-      />
+      <RecordFields record={record} glossary={glossary} />
       <Remove what="запись" id={record.id} />
+    </>
+  )
+}
+
+/** Что пишет эта запись. Один набор полей на оба места -- см. `DriveFields`. */
+function RecordFields({
+  record,
+  glossary,
+}: {
+  record: SandboxRecording
+  glossary: Glossary
+}) {
+  return (
+    <SelectField<RecordedVar>
+      label="Величина"
+      value={record.var}
+      options={recordedOptions(glossary, record.var)}
+      onChange={(value) => void sandboxController.setRecord(record.id, value)}
+    />
+  )
+}
+
+/**
+ * Стимулы и записи, смотрящие на выбранный объект (#565).
+ *
+ * Свёрнутой группой на каждый, а не сплошным списком полей, -- и это ответ на
+ * названную в карточке развилку. У стимула полей до восьми (род, числа
+ * протокола, рецептор, окно), и три стимула развёрнутыми дают простыню, в
+ * которой не найти ни мембрану, ни кнопку; ровно поэтому свёрнуты типы клеток
+ * и контакты блока. В сводке стоит то, ради чего сюда и смотрят: протокол
+ * словами -- «поезд, 8 импульсов, 20 Гц», -- и он читается, не раскрывая
+ * ничего.
+ *
+ * Единственный стимул раскрыт сразу. Человек, выбравший клетку с одним
+ * драйвом, спрашивает именно про него, и щелчок здесь ничего не экономит --
+ * экономить нечего. Как только их двое, оба сворачиваются: список из двух
+ * свёрнутых строк читается, а две простыни подряд -- нет.
+ *
+ * Выделение не двоится: показаны здесь поля, а «выбранным» остаётся тот
+ * объект, который выбрали. Строка стимула в дереве объектов никуда не делась
+ * и открывает ровно то же самое -- у объекта есть имя, и прятать его оттуда
+ * значило бы скрывать то, что существует.
+ */
+function DrivesOf({
+  drives,
+  records,
+  glossary,
+  children,
+}: {
+  drives: SandboxDrive[]
+  records: SandboxRecording[]
+  glossary: Glossary
+  /**
+   * Чем завести новый драйв или новую запись на этом объекте.
+   *
+   * Приходит снаружи, потому что у объектов оно разное: у клетки одна точка --
+   * она сама, -- а у блока их столько, сколько портов и внутренних узлов.
+   * Общая кнопка «драйв на блок» была бы адресом, которого не существует:
+   * потенциал есть у клетки, а коробка -- это несколько клеток.
+   */
+  children: ReactNode
+}) {
+  return (
+    <>
+      <Section title="Драйв и записи" />
+      {drives.map((drive) => (
+        <details className="sb-group" key={drive.id} open={drives.length === 1}>
+          <summary title={driveHint(glossary, drive.kind)}>
+            <span className="sb-row-name">{drive.protocol || drive.kind}</span>
+            <span className="mono sb-kind">{drive.id}</span>
+          </summary>
+          {/* Адрес показан и здесь: у блока драйв бывает и на порт, и на
+              внутренний узел, и по одному `drive2` их не различить. */}
+          <p className="sb-note mono">→ {where(drive.target)}</p>
+          <DriveFields drive={drive} glossary={glossary} />
+          <Remove what="стимул" id={drive.id} />
+        </details>
+      ))}
+      {records.map((record) => (
+        <details className="sb-group" key={record.id} open={records.length === 1}>
+          {/* Величина словом, а не ключом трассы: `g_exc` -- шифр, и реестр
+              уже назвал его человеческим именем (#546). Справа имя записи:
+              две записи одной клетки различаются только им. */}
+          <summary>
+            <span className="sb-row-name">
+              запись: {recordedName(glossary, record.var)}
+            </span>
+            <span className="mono sb-kind">{record.id}</span>
+          </summary>
+          <RecordFields record={record} glossary={glossary} />
+          <Remove what="запись" id={record.id} />
+        </details>
+      ))}
+      {!drives.length && !records.length ? (
+        <p className="sb-note">
+          Драйва и записей здесь нет: без драйва сеть молчит, без записи её
+          нечем смотреть.
+        </p>
+      ) : null}
+      <div className="sb-actions">{children}</div>
     </>
   )
 }
