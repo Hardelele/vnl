@@ -133,6 +133,13 @@ async function openUserMenu(): Promise<void> {
   })
 }
 
+/** Пара «назад — вперёд» в верхней полосе (#570). */
+function history(): HTMLElement {
+  const pair = host.querySelector('.sb-bar .sb-history')
+  if (!pair) throw new Error('в полосе нет пары «назад — вперёд»')
+  return pair as HTMLElement
+}
+
 function loginLinks(): HTMLAnchorElement[] {
   return [...host.querySelectorAll('a')].filter(
     (link) => link.textContent?.trim().startsWith('Войти'),
@@ -460,6 +467,7 @@ describe('дорога с карточки в песочницу (#526)', () => 
       run: { dt: 0.1, duration: 500, level: 'L1', seed: 1 },
       dirty: false,
       canUndo: false,
+    canRedo: false,
       problems: [],
       warnings: [],
       portHints: [],
@@ -728,6 +736,212 @@ describe('дорога с карточки в песочницу (#526)', () => 
     // по-прежнему не тащит.
     expect(insert?.body).toMatchObject({ pattern: 'ffi', demo: false })
     expect(host.querySelector('.pat-name')).toBe(null)
+  })
+
+  it('проектная часть стоит слева сверху, а в правой панели её нет (#569)', async () => {
+    // Жалоба владельца: «у нас в UI сейчас справа находится практически всё.
+    // Например, там не место, как я считаю, названию проекта». Имя проекта
+    // легло в панель свойств в #563 -- туда, где правят выбранную клетку, -- а
+    // выбирали проект в другом месте.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    // Слева сверху: поле имени стоит в верхней полосе и правится прямо там.
+    const bar = host.querySelector('.sb-bar .sb-project-bar') as HTMLElement
+    expect(bar).not.toBeNull()
+    const name = bar.querySelector('.sb-project-input') as HTMLInputElement
+    expect(name.value).toBe('Проба')
+    await act(async () => {
+      name.value = 'Сеть внимания'
+      name.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+    expect(asked.some((call) => call.body.name === 'Сеть внимания')).toBe(true)
+
+    // В правой панели проектных полей не осталось -- и чисел прогона тоже: и
+    // то и другое не исчезает вместе со снятым выделением, значит панели
+    // выбранного объекта не принадлежит.
+    const right = host.querySelector('.sb-right') as HTMLElement
+    expect(right.textContent).not.toContain('Название')
+    expect(right.textContent).not.toContain('Длительность')
+    expect(right.textContent).not.toContain('Зерно')
+  })
+
+  it('управление временем и числа прогона стоят у таймлайна (#569)', async () => {
+    // «Попытки запустить, стоп -- я бы это к таймлайну отнёс… настройки
+    // прогона почему-то в месте, где у нас расположена детальная информация
+    // по конкретным нейронам». Оба переезда -- вниз, к дорожкам.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    // Наверху транспорта не осталось: это переезд, а не второй экземпляр.
+    expect(host.querySelector('.sb-bar .tr')).toBeNull()
+    expect(host.querySelector('.ap-head .tr')).not.toBeNull()
+    // Числа прогона -- над дорожками, в теле той же панели.
+    const run = host.querySelector('.ap-run') as HTMLElement
+    expect(run.textContent).toContain('Длительность')
+    expect(run.textContent).toContain('Зерно')
+  })
+
+  it('отмена и возврат стоят парой слева сверху (#570)', async () => {
+    // Жалоба владельца: «когда я нажимаю кнопку „Отменить“, я ожидаю, что у
+    // меня отменится вообще всё… я бы добавил сверху кнопочки „назад-вперёд“,
+    // там, где обычно это у всяких редакторов располагается». Одинокая
+    // «Отменить» рядом с «Сохранить» читалась как «отменить все правки», а
+    // возврата отменённого не было вовсе.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+    await act(async () => {
+      sandboxController.store.setState({
+        project: sandbox({
+          canUndo: true,
+          canRedo: true,
+          undoLabel: 'разобран ffi',
+          redoLabel: 'вставлен паттерн «FFI»',
+        }),
+      })
+    })
+
+    // Парой и рядом с проектной частью -- там, где их держат все редакторы.
+    const pair = [...history().querySelectorAll('button')] as HTMLButtonElement[]
+    const back = pair[0] as HTMLButtonElement
+    const forward = pair[1] as HTMLButtonElement
+    expect(back.getAttribute('aria-label')).toBe('Отменить')
+    expect(forward.getAttribute('aria-label')).toBe('Вернуть')
+    // Подсказка называет то самое действие, которое отменится.
+    expect(back.title).toContain('разобран ffi')
+    expect(forward.title).toContain('вставлен паттерн «FFI»')
+    // Одинокой кнопки со словом «Отменить» в полосе больше нет: форма пары и
+    // есть объяснение, что это история, а не откат всех правок.
+    const bar = host.querySelector('.sb-bar') as HTMLElement
+    expect(
+      [...bar.querySelectorAll('button')].some(
+        (item) => item.textContent?.trim() === 'Отменить',
+      ),
+    ).toBe(false)
+
+    await act(async () => {
+      forward.click()
+    })
+    expect(asked.some((call) => call.path.endsWith('/redo'))).toBe(true)
+  })
+
+  it('гаснут, когда возвращать и отменять нечего (#570)', async () => {
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    const pair = [...history().querySelectorAll('button')] as HTMLButtonElement[]
+    const back = pair[0] as HTMLButtonElement
+    const forward = pair[1] as HTMLButtonElement
+    expect(back.disabled).toBe(true)
+    expect(forward.disabled).toBe(true)
+    expect(back.title).toContain('Отменять нечего')
+    expect(forward.title).toContain('Возвращать нечего')
+  })
+
+  it('Ctrl+Z и Ctrl+Shift+Z делают то же, что кнопки, и молчат в поле (#570)', async () => {
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', ctrlKey: true }),
+      )
+    })
+    expect(asked.some((call) => call.path.endsWith('/undo'))).toBe(true)
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'z',
+          code: 'KeyZ',
+          ctrlKey: true,
+          shiftKey: true,
+        }),
+      )
+    })
+    expect(asked.some((call) => call.path.endsWith('/redo'))).toBe(true)
+
+    // В поле ввода клавиша принадлежит полю: Ctrl+Z там отменяет набранную
+    // букву, и отбирать его у имени проекта нельзя.
+    asked = []
+    const name = host.querySelector('.sb-project-input') as HTMLInputElement
+    await act(async () => {
+      name.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'z',
+          code: 'KeyZ',
+          ctrlKey: true,
+          bubbles: true,
+        }),
+      )
+    })
+    expect(asked.some((call) => call.path.endsWith('/undo'))).toBe(false)
+  })
+
+  it('сенсор и мотор кладут из палитры, как клетку (#571)', async () => {
+    // Жалоба владельца: «плюсом я не вижу сейчас в клетках сенсоров. Может
+    // быть, они где-то есть, но я их пока не вижу. И моторов тоже не вижу».
+    // Завести их можно было только из свойств выбранной клетки -- то есть
+    // человек, не знающий про ту кнопку, границы с миром не находил.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    // Рядом с палитрой клеток, куда за деталью схемы и идут.
+    // Экран открывается на «Библиотеке», когда в песочницу приходят с
+    // карточки; палитра клеток -- соседняя вкладка, и граница с миром лежит
+    // в ней, рядом с тем, что кладут на холст.
+    await pickTab('Клетки')
+    const left = host.querySelector('.sb-left') as HTMLElement
+    expect(left.textContent).toContain('Граница с миром')
+    const rows = [...left.querySelectorAll('.sb-row')]
+    const sensor = rows.find((item) => item.textContent?.includes('Сенсор')) as HTMLElement
+    const motor = rows.find((item) => item.textContent?.includes('Мотор')) as HTMLElement
+    expect(sensor).not.toBeUndefined()
+    expect(motor).not.toBeUndefined()
+
+    await act(async () => {
+      ;(sensor.querySelector('.sb-plus') as HTMLButtonElement).click()
+    })
+    // Кладётся один и без цели: соединяют его потом, как клетку с клеткой.
+    const put = asked.find((call) => call.path.endsWith('/sensors'))
+    expect(put?.method).toBe('POST')
+    expect(put?.body.source).toBeUndefined()
+
+    // А мотор без клетки не существует -- он и есть «смотрю на эту точку», и
+    // пока клетка не выбрана, кнопка говорит об этом, а не молчит.
+    const plus = motor.querySelector('.sb-plus') as HTMLButtonElement
+    expect(plus.disabled).toBe(true)
+    expect(plus.title).toContain('выберите её')
   })
 
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {

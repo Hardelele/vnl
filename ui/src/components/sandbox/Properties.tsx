@@ -7,6 +7,14 @@
  * подпись. Исключений два: имя паттерна (за него держится снимок блока) и
  * адрес связи (другой адрес -- это другая связь, а не правка этой).
  *
+ * **Правило панели: здесь живёт только выбранный объект.** Оно написано тут
+ * прямо, потому что именно его отсутствие превратило панель в свалку (#569):
+ * сюда легло всё новое подряд -- имя проекта (#563), числа прогона, -- и
+ * получилось, что проект правят там же, где клетку, а выбирают в другом месте.
+ * Проверка простая: если поле не исчезает вместе со снятым выделением, ему
+ * здесь не место. Имя проекта уехало в полосу слева сверху (`ProjectBar`),
+ * числа прогона -- к управлению временем (`RunSettings`).
+ *
  * Отдельным файлом, потому что экран песочницы и без неё большой, а свойств
  * ровно столько, сколько параметров у модели: они будут только прибывать.
  */
@@ -25,6 +33,7 @@ import {
   recordedName,
 } from '../../model/glossary'
 import type { CellState } from '../../model/sim'
+import { where } from '../../model/sandbox'
 import type {
   DriveKind,
   Endpoint,
@@ -32,8 +41,11 @@ import type {
   SandboxCell,
   SandboxContact,
   SandboxDrive,
+  SandboxLink,
+  SandboxMotor,
   SandboxNeuron,
   SandboxRecording,
+  SandboxSensor,
   SandboxState,
 } from '../../model/sandbox'
 import type {
@@ -43,7 +55,6 @@ import type {
   PatternPort,
   PointModel,
   RecordedVar,
-  RunSpec,
 } from '../../model/types'
 import { sandboxController, type Selection } from '../../state/sandbox'
 import { Vitals } from '../live/Vitals'
@@ -240,17 +251,6 @@ function MembraneFields({
 }
 
 /**
- * Адрес конца связи одной строкой.
- *
- * У блока это `ffi.out` -- порт; у клетки порта нет, и печатать `E.null`
- * нельзя: такого адреса не существует. Пишется само имя клетки -- ровно то,
- * чем она зовётся и в собранной сети.
- */
-export function where(endpoint: Pick<Endpoint, 'instance' | 'port'>): string {
-  return endpoint.port ? `${endpoint.instance}.${endpoint.port}` : endpoint.instance
-}
-
-/**
  * На какой порт можно подать драйв и какой можно записывать (#533).
  *
  * Модуляторный порт попадает в оба списка, и это не послабление: `gate` у
@@ -407,8 +407,174 @@ export function Properties({
     return drive ? <DriveProps drive={drive} glossary={glossary} /> : null
   }
 
+  if (selection.kind === 'sensor') {
+    const sensor = project.sensors.find((item) => item.id === selection.id)
+    return sensor ? (
+      <SensorProps
+        sensor={sensor}
+        // Куда смотрит сенсор -- это его связи: подключён он обычной стрелкой,
+        // у которой источник он сам. Второго списка целей у него нет, и
+        // заводить его значило бы объявить, что связь от сенсора -- не связь.
+        links={project.links.filter((link) => link.source.instance === sensor.id)}
+        glossary={glossary}
+      />
+    ) : null
+  }
+
+  if (selection.kind === 'motor') {
+    const motor = project.motors.find((item) => item.id === selection.id)
+    return motor ? <MotorProps motor={motor} glossary={glossary} /> : null
+  }
+
   const record = project.recordings.find((item) => item.id === selection.id)
   return record ? <RecordProps record={record} glossary={glossary} /> : null
+}
+
+/**
+ * Список родов сенсора или мотора для поля выбора (#571).
+ *
+ * Тем же устройством, что `driveOptions`, и по той же причине: реестр родов
+ * живёт на сервере (`protocols.SENSOR_KINDS`, `MOTOR_KINDS`), и своя копия
+ * здесь значила бы, что новый род появляется в симуляторе и не появляется в
+ * поле выбора. Текущий род обязан быть в списке, даже если реестр о нём не
+ * знает: `select` с чужим значением показал бы вместо него первый пункт, то
+ * есть панель соврала бы про род.
+ */
+function kindOptions(
+  kinds: Array<{ id: string; name: string; note: string }>,
+  value: string,
+): Array<{ id: string; name: string; note?: string }> {
+  const known = kinds.map((item) => ({ id: item.id, name: item.name, note: item.note }))
+  if (known.some((item) => item.id === value)) return known
+  return [{ id: value, name: value }, ...known]
+}
+
+/**
+ * Поле числа рода -- одно на сенсор и на мотор.
+ *
+ * Общее нарочно: числа у них устроены одинаково (реестр называет поле, его
+ * подпись, единицу и шаг), и различаются только тем, как их отправить. Две
+ * копии разошлись бы на первом же новом роде: у сенсора поле появилось бы, у
+ * мотора нет.
+ */
+function KindParamField({
+  owner,
+  param,
+  onChange,
+}: {
+  owner: Record<string, unknown>
+  param: DriveParam
+  onChange: (value: number) => void
+}) {
+  const value = Number((owner[param.name] as number | undefined) ?? param.default)
+  return (
+    <NumberField
+      label={driveParamLabel(param)}
+      hint={param.note}
+      step={param.form === 'int' ? 1 : param.step}
+      value={value}
+      onChange={(next) => onChange(param.form === 'int' ? Math.round(next) : next)}
+    />
+  )
+}
+
+/**
+ * Сенсор: род, числа рода и то, куда он бьёт (#571).
+ *
+ * Панель ровно такая же, как у стимула, и это не подражание, а признание
+ * родства: сенсор -- тот же внешний вход, только величину ему подают снаружи
+ * прогона, а не задают наперёд протоколом. Поэтому и поле рода объясняется той
+ * же парой подсказок -- на подписи «что это за поле», на списке «что значит
+ * выбранное».
+ *
+ * Цели показаны строками, а не полями: цель сенсора -- это связь, а связь
+ * правят, выбрав её саму. Другой адрес -- это другая связь, а не правка этой,
+ * ровно как у всякого конца связи в этой панели.
+ */
+function SensorProps({
+  sensor,
+  links,
+  glossary,
+}: {
+  sensor: SandboxSensor
+  links: SandboxLink[]
+  glossary: Glossary
+}) {
+  const control = sandboxController
+  const kind = (glossary.sensors ?? []).find((item) => item.id === sensor.kind)
+  return (
+    <>
+      <Head title="Сенсор" note={sensor.id} />
+      <p className="sb-note">{sensor.story}</p>
+      <SelectField
+        label="Род"
+        hint={glossary.sensor || undefined}
+        value={sensor.kind}
+        options={kindOptions(glossary.sensors ?? [], sensor.kind)}
+        onChange={(next) => void control.setSensor(sensor.id, { kind: next })}
+      />
+      {(kind?.params ?? []).map((param) => (
+        <KindParamField
+          key={param.name}
+          owner={sensor as unknown as Record<string, unknown>}
+          param={param}
+          onChange={(value) => void control.setSensor(sensor.id, { [param.name]: value })}
+        />
+      ))}
+      <Section title="Куда смотрит" />
+      {links.length ? (
+        links.map((link) => (
+          <p className="sb-note mono" key={link.id}>
+            → {where(link.target)}
+          </p>
+        ))
+      ) : (
+        // Одинокий сенсор -- законный объект, но величина до сети не доходит,
+        // и сказать об этом надо здесь, а не после пустого прогона.
+        <p className="sb-note">
+          Ни к чему не подключён: щёлкните по кружку справа от его фигуры, потом
+          по клетке. Пока связи нет, поданная величина никуда не идёт.
+        </p>
+      )}
+      <Remove what="сенсор" id={sensor.id} />
+    </>
+  )
+}
+
+/** Мотор: род, числа рода и клетка, на которую он смотрит (#571). */
+function MotorProps({ motor, glossary }: { motor: SandboxMotor; glossary: Glossary }) {
+  const control = sandboxController
+  const kind = (glossary.motors ?? []).find((item) => item.id === motor.kind)
+  return (
+    <>
+      <Head title="Мотор" note={motor.id} />
+      <div className="row">
+        {/* Цель стоит первой строкой, как у записи: мотор и есть «смотрю на
+            эту точку», и без неё он не значит ничего. */}
+        <span className="mono row-path">{where(motor.source)} →</span>
+      </div>
+      <p className="sb-note">
+        {motor.story}
+        {motor.unit ? `, отдаёт ${motor.unit}` : ''}
+      </p>
+      <SelectField
+        label="Род"
+        hint={glossary.motor || undefined}
+        value={motor.kind}
+        options={kindOptions(glossary.motors ?? [], motor.kind)}
+        onChange={(next) => void control.setMotor(motor.id, { kind: next })}
+      />
+      {(kind?.params ?? []).map((param) => (
+        <KindParamField
+          key={param.name}
+          owner={motor as unknown as Record<string, unknown>}
+          param={param}
+          onChange={(value) => void control.setMotor(motor.id, { [param.name]: value })}
+        />
+      ))}
+      <Remove what="мотор" id={motor.id} />
+    </>
+  )
 }
 
 function BlockProps({
@@ -1192,74 +1358,6 @@ function DrivesOf({
         </p>
       ) : null}
       <div className="sb-actions">{children}</div>
-    </>
-  )
-}
-
-/**
- * Имя проекта (#563).
- *
- * Здесь, рядом с параметрами прогона, а не выделением: это свойство самого
- * проекта, и снимать ради него выделение с блока незачем -- ровно по той же
- * причине, по которой тут стоят длительность и зерно.
- *
- * Не в верхней панели, где проект выбирают: там `select`, и превращать список
- * в поле ввода значило бы держать одно место в двух видах -- «выбираю» и
- * «правлю», -- между которыми надо ещё переключаться. Панель свойств для
- * правки и существует.
- *
- * Имя человеческое: идентификатор проекта отдельный (`sandbox.id`), и за него
- * держатся файл в хранилище и открытая сессия симуляции. Поэтому чинить после
- * переименования нечего -- в отличие от имени клетки.
- */
-export function ProjectFields({ name }: { name: string }) {
-  const control = sandboxController
-  return (
-    <>
-      <Section title="Проект" />
-      <TextField
-        label="Название"
-        value={name}
-        onChange={(next) => void control.renameProject(next)}
-      />
-    </>
-  )
-}
-
-/**
- * Параметры прогона.
- *
- * Стоят отдельно от выделения и видны всегда: длительность и зерно меняют
- * чаще всего, а ради них снимать выделение с блока -- лишний шаг там, где его
- * не за что оправдать.
- */
-export function RunFields({ run }: { run: RunSpec }) {
-  const control = sandboxController
-  return (
-    <>
-      <Section title="Прогон" />
-      <NumberField
-        label="Длительность, мс"
-        step={50}
-        value={run.duration}
-        onChange={(duration) => void control.setRun({ duration })}
-      />
-      <NumberField
-        label="Шаг, мс"
-        step={0.05}
-        value={run.dt}
-        onChange={(dt) => void control.setRun({ dt })}
-      />
-      <NumberField
-        label="Зерно"
-        step={1}
-        value={run.seed}
-        onChange={(seed) => void control.setRun({ seed })}
-      />
-      <p className="sb-note">
-        Новые числа берёт следующий запуск: уже идущее время досчитывается по
-        прежним.
-      </p>
     </>
   )
 }

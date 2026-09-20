@@ -12,7 +12,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { arrangement } from './arrange'
 import { placeBoxes, type LaidGraph, type LayoutBox, type LayoutEdge } from '../../lib/place'
-import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
+import type {
+  SandboxBlock,
+  SandboxLink,
+  SandboxMotor,
+  SandboxNeuron,
+  SandboxSensor,
+} from '../../model/sandbox'
 
 vi.mock('../../lib/place', () => ({
   placeBoxes: vi.fn(),
@@ -119,5 +125,68 @@ describe('что раскладка возвращает', () => {
   it('пустой холст раскладывать нечего -- и движок не зовётся', async () => {
     expect(await arrangement([], [], [], [])).toEqual({})
     expect(laid).not.toHaveBeenCalled()
+  })
+})
+
+describe('раскладка знает про границу с миром (#571)', () => {
+  const SENSOR: SandboxSensor = {
+    id: 'sensor1',
+    kind: 'rate',
+    story: 'частота, 100 Гц при 1',
+    to: 100,
+    position: [0, 0],
+  }
+  const MOTOR: SandboxMotor = {
+    id: 'motor1',
+    kind: 'rate',
+    story: 'частота за окно 50 мс',
+    unit: 'Гц',
+    window: 50,
+    source: { instance: 'E', port: null, section: 'soma', fraction: 0.5 },
+    position: [0, 0],
+  }
+
+  it('двери раскладываются наравне с клетками, и место у них по центру', async () => {
+    laid.mockImplementation(async (boxes) => answer(boxes))
+
+    const places = await arrangement(
+      [],
+      [neuron('E')],
+      [link('l1', 'sensor1', 'E')],
+      [],
+      [SENSOR],
+      [MOTOR],
+    )
+
+    // Все трое получили места, и у всех троих место -- середина фигуры.
+    expect(Object.keys(places).sort()).toEqual(['E', 'motor1', 'sensor1'])
+  })
+
+  it('мотор встаёт после своей клетки, хотя связи у него нет', async () => {
+    let edges: LayoutEdge[] = []
+    laid.mockImplementation(async (boxes, given) => {
+      edges = given
+      return answer(boxes)
+    })
+
+    await arrangement([], [neuron('E')], [], [], [], [MOTOR])
+
+    // Мотор смотрит на клетку, и для раскладки это «после неё»: иначе ELK
+    // положил бы его отдельным островом, и линия шла бы через всю схему.
+    expect(edges).toEqual([{ id: 'watch-motor1', from: 'E', to: 'motor1' }])
+  })
+
+  it('связь на объект, которого на холсте нет, раскладку не роняет', async () => {
+    let edges: LayoutEdge[] = []
+    laid.mockImplementation(async (boxes, given) => {
+      edges = given
+      return answer(boxes)
+    })
+
+    // Сенсор проекту известен, а холсту его не передали: ELK споткнулся бы на
+    // ребре в узел, которого в графе нет.
+    await arrangement([], [neuron('E')], [link('l1', 'sensor1', 'E')], [])
+
+    expect(edges).toEqual([])
   })
 })

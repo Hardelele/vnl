@@ -1127,6 +1127,20 @@ class Api:
         project.undo()
         return api.sandbox_payload(project)
 
+    def redo(self, sandbox_id: str) -> dict[str, Any]:
+        """Вернуть отменённое (#570).
+
+        Отдельный маршрут, а не `undo` со знаком: это другое действие человека,
+        и отличать их по телу запроса значило бы прятать половину возможностей
+        сервера внутрь одного адреса. Отказа «возвращать нечего» нет -- пустая
+        стопка возврата отвечает тем же состоянием, что и была: кнопка в этом
+        случае и так погашена, а отказ на неё был бы отказом на то, чего никто
+        не просил.
+        """
+        project = self._project(sandbox_id)
+        project.redo()
+        return api.sandbox_payload(project)
+
     def save_sandbox(self, sandbox_id: str) -> dict[str, Any]:
         project = self._project(sandbox_id)
         project.save()
@@ -1480,6 +1494,7 @@ def routes(service: Api) -> list[Route]:
             service.remove_object,
         ),
         Route("POST", re.compile(r"^/api/sandboxes/([^/]+)/undo$"), service.undo),
+        Route("POST", re.compile(r"^/api/sandboxes/([^/]+)/redo$"), service.redo),
         Route(
             "POST", re.compile(r"^/api/sandboxes/([^/]+)/save$"), service.save_sandbox
         ),

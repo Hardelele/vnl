@@ -89,6 +89,7 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
     run: { dt: 0.1, duration: 500, level: 'L1', seed: 1 },
     dirty: false,
     canUndo: false,
+    canRedo: false,
     problems: [],
     warnings: [],
     // Что сервер предложит в форме «Сохранить как паттерн».

@@ -35,6 +35,23 @@ export interface Endpoint {
  * такой конец связи через `resolve_endpoint`. Заводить ради клетки
  * фиктивный порт «сома» значило бы врать на обеих сторонах.
  */
+/**
+ * Адрес конца связи одной строкой.
+ *
+ * У блока это `ffi.out` -- порт; у клетки порта нет, и печатать `E.null`
+ * нельзя: такого адреса не существует. Пишется само имя клетки -- ровно то,
+ * чем она зовётся и в собранной сети.
+ *
+ * Здесь, рядом с самим концом связи, а не в панели свойств, где она выросла:
+ * тот же адрес печатают дерево объектов, подсказка знака на холсте и линия
+ * мотора (#571). Держать её в панели значило бы, что холст, которому она
+ * понадобилась, тянет к себе панель свойств целиком, -- а панель уже тянет с
+ * холста разбор приставки.
+ */
+export function where(endpoint: Pick<Endpoint, 'instance' | 'port'>): string {
+  return endpoint.port ? `${endpoint.instance}.${endpoint.port}` : endpoint.instance
+}
+
 export interface EndpointRef {
   instance: string
   port: string | null
@@ -242,6 +259,23 @@ export interface SandboxState {
   /** Есть ли несохранённые изменения. Факт, а не подпись из макета. */
   dirty: boolean
   canUndo: boolean
+  /**
+   * Есть ли что вернуть после отмены (#570).
+   *
+   * Факт проекта, а не догадка браузера: стопка возврата живёт в `Project` на
+   * сервере, и считать её здесь значило бы завести вторую историю, которая
+   * разойдётся с первой на первом же обращении Claude через MCP.
+   */
+  canRedo: boolean
+  /**
+   * Что отменится и что вернётся -- человеческими словами: «вставлен паттерн
+   * «Растормаживание»», «разобран ffi». Отсюда их берёт подсказка кнопки.
+   *
+   * Необязательны: сервер бывает старее страницы, а кнопка обязана работать и
+   * без подписи -- она объясняет, а не управляет.
+   */
+  undoLabel?: string | null
+  redoLabel?: string | null
   /** Что мешает запуску. Пусто -- можно считать. */
   problems: string[]
   /**
@@ -644,6 +678,15 @@ export function removeObject(id: string, object: string): Promise<SandboxState> 
 
 export function undo(id: string): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/undo`, 'POST')
+}
+
+/**
+ * Вернуть отменённое (#570). Свой маршрут, а не `undo` со знаком: это другое
+ * действие человека, и отличать их телом запроса значило бы прятать половину
+ * возможностей сервера внутрь одного адреса.
+ */
+export function redo(id: string): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/redo`, 'POST')
 }
 
 export function save(id: string): Promise<SandboxState> {

@@ -24,9 +24,11 @@ import type {
   Places,
   SandboxBlock,
   SandboxLink,
+  SandboxMotor,
   SandboxNeuron,
+  SandboxSensor,
 } from '../../model/sandbox'
-import { blockBox, cellBox, innerRef } from './Canvas'
+import { blockBox, cellBox, doorBox, innerRef } from './Canvas'
 
 /**
  * Отступ от края холста. По вертикали больше: над клеткой стоит её заряд, и
@@ -50,30 +52,61 @@ export async function arrangement(
   neurons: SandboxNeuron[],
   links: SandboxLink[],
   opened: string[],
+  /**
+   * Двери наружу: они тоже стоят на холсте и тоже раскладываются (#571).
+   *
+   * Необязательны -- у схемы без границы с миром их нет, и раскладка выходит
+   * ровно такой же, какой была. А вот пропустить их, когда они есть, нельзя:
+   * связь от сенсора ссылалась бы на узел, которого в графе нет, и ELK
+   * споткнулся бы на ней -- то есть «Разложить» перестало бы работать ровно в
+   * той схеме, у которой появился сенсор.
+   */
+  sensors: SandboxSensor[] = [],
+  motors: SandboxMotor[] = [],
 ): Promise<Places> {
   const boxes: LayoutBox[] = [
     ...blocks.map((block) => ({ id: block.id, ...blockBox(opened.includes(block.id)) })),
     ...neurons.map((neuron) => ({ id: neuron.id, ...cellBox() })),
+    ...[...sensors, ...motors].map((door) => ({ id: door.id, ...doorBox() })),
   ]
   if (!boxes.length) return {}
+  const known = new Set(boxes.map((box) => box.id))
 
-  const edges: LayoutEdge[] = links
-    .map((link) => ({
+  const edges: LayoutEdge[] = [
+    ...links.map((link) => ({
       id: link.id,
       from: owner(link.source.instance, blocks),
       to: owner(link.target.instance, blocks),
-    }))
+    })),
+    // Мотор связью не подключён -- он смотрит на клетку. Для раскладки это
+    // всё равно «после неё»: иначе ELK положил бы его отдельным островом, и
+    // линия к клетке шла бы через всю схему.
+    ...motors.map((motor) => ({
+      id: `watch-${motor.id}`,
+      from: owner(motor.source.instance, blocks),
+      to: motor.id,
+    })),
+  ]
     // Связь объекта на себя (и связь между двумя узлами одного блока) слоя не
     // добавляет, а ELK на ней спотыкается.
     .filter((edge) => edge.from !== edge.to)
+    // Конец, которого на холсте нет, -- тоже повод споткнуться: стимул или
+    // мотор на исчезнувшую клетку остаётся законным объектом проекта.
+    .filter((edge) => known.has(edge.from) && known.has(edge.to))
 
   const laid = await placeBoxes(boxes, edges)
   const places: Places = {}
-  const isCell = new Set(neurons.map((neuron) => neuron.id))
+  // Место клетки и двери -- середина их фигуры, место блока -- его левый
+  // верхний угол: так их рисует холст, и раскладке об этом надо знать.
+  const centred = new Set([
+    ...neurons.map((neuron) => neuron.id),
+    ...sensors.map((sensor) => sensor.id),
+    ...motors.map((motor) => motor.id),
+  ])
   for (const box of laid.boxes) {
     // ELK отдаёт левый верхний угол. У блока место -- он и есть, а у клетки --
     // середина фигуры: холст рисует её от центра.
-    places[box.id] = isCell.has(box.id)
+    places[box.id] = centred.has(box.id)
       ? [
           Math.round(box.x + box.width / 2 + MARGIN.x),
           Math.round(box.y + box.height / 2 + MARGIN.y),

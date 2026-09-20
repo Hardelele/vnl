@@ -166,7 +166,19 @@ const GLOSSARY: Glossary = {
       trigger: 'level',
       emits: 'events',
       receptor: true,
-      params: [],
+      // Числа рода -- те же, что в `protocols.SENSOR_KINDS`: панель рисует
+      // поля по реестру, а не по списку в коде.
+      params: [
+        {
+          name: 'to',
+          label: 'Частота при 1',
+          unit: 'Гц',
+          default: 100,
+          step: 10,
+          form: 'number',
+          note: 'Во сколько герц превращается величина 1.',
+        },
+      ],
     },
   ],
   motor: 'Дверь изнутри наружу: одно число сейчас.',
@@ -176,7 +188,17 @@ const GLOSSARY: Glossary = {
       name: 'частота',
       note: 'Разряды за окно, переведённые в герцы.',
       unit: 'Гц',
-      params: [],
+      params: [
+        {
+          name: 'window',
+          label: 'Окно',
+          unit: 'мс',
+          default: 50,
+          step: 10,
+          form: 'number',
+          note: 'За какой отрезок назад считаются разряды.',
+        },
+      ],
     },
   ],
   value: { min: 0, max: 1 },
@@ -283,10 +305,41 @@ const CELL: SandboxNeuron = {
   pointModel: POINT,
 }
 
+/** Сенсор и мотор проекта: дверь снаружи внутрь и дверь изнутри наружу. */
+const SENSOR = {
+  id: 'sensor1',
+  kind: 'rate',
+  story: 'частота, 100 Гц при 1',
+  to: 100,
+  position: [0, 200] as [number, number],
+}
+
+const MOTOR = {
+  id: 'motor1',
+  kind: 'rate',
+  story: 'частота за окно 50 мс',
+  unit: 'Гц',
+  window: 50,
+  source: { instance: 'X', port: null, section: 'soma', fraction: 0.5 },
+  position: [400, 200] as [number, number],
+}
+
 const PROJECT = {
   blocks: [BLOCK],
   neurons: [CELL],
-  links: [],
+  sensors: [SENSOR],
+  motors: [MOTOR],
+  links: [
+    {
+      id: 'l1',
+      source: { instance: 'sensor1', port: null, section: 'soma', fraction: 0.5 },
+      target: { instance: 'X', port: null, section: 'soma', fraction: 0.5 },
+      receptor: 'ampa',
+      inhibitory: false,
+      weight: 1,
+      delay: 1,
+    },
+  ],
   stimuli: [],
   recordings: [
     // Адрес записи -- тот же конец связи, что у связи и у стимула: `instance`
@@ -1043,5 +1096,49 @@ describe('вид точечной модели в панели свойств (#
       (node) => node.textContent,
     )
     expect(kinds).toContain('adex · -50 мВ')
+  })
+})
+
+describe('свойства двери наружу (#571)', () => {
+  it('сенсор показывает род, числа рода и куда смотрит', async () => {
+    // Прежде выбрать сенсор было нельзя вовсе: у него не было ни фигуры, ни
+    // ветки в панели, и род с числами задавал только сервер умолчаниями.
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' } })
+
+    expect(host.querySelector('.panel-title')?.textContent).toBe('Сенсор')
+    expect(host.textContent).toContain('частота, 100 Гц при 1')
+    // Род -- из реестра сервера, как у драйва.
+    const kind = host.querySelector('select') as HTMLSelectElement
+    expect([...kind.options].map((option) => option.textContent)).toEqual(['частота'])
+    // Поля рисуются по реестру родов, а не перечислены в панели.
+    const labels = [...host.querySelectorAll('.sb-field span')].map(
+      (node) => node.textContent,
+    )
+    expect(labels).toContain('Частота при 1, Гц')
+    const value = host.querySelector('.sb-field input') as HTMLInputElement
+    expect(value.value).toBe('100')
+    // Куда смотрит -- его связи: второго списка целей у сенсора нет.
+    expect(host.textContent).toContain('Куда смотрит')
+    expect(host.textContent).toContain('→ X')
+  })
+
+  it('одинокий сенсор говорит, что величина никуда не идёт', async () => {
+    const alone = { ...PROJECT, links: [] } as unknown as SandboxState
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' }, project: alone })
+
+    expect(host.textContent).toContain('Ни к чему не подключён')
+  })
+
+  it('мотор показывает, на какую клетку смотрит, и в чём его величина', async () => {
+    await mount({ selection: { kind: 'motor', id: 'motor1' } })
+
+    expect(host.querySelector('.panel-title')?.textContent).toBe('Мотор')
+    expect(host.querySelector('.row-path')?.textContent).toBe('X →')
+    expect(host.textContent).toContain('частота за окно 50 мс')
+    expect(host.textContent).toContain('отдаёт Гц')
+    const labels = [...host.querySelectorAll('.sb-field span')].map(
+      (node) => node.textContent,
+    )
+    expect(labels).toContain('Окно, мс')
   })
 })

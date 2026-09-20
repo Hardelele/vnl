@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { boardKey, keyLabel, objectCommand, typing } from './keys'
+import { boardKey, historyCommand, keyLabel, objectCommand, typing } from './keys'
 
 /** Нажатие как его увидит слушатель на окне. */
 function press(
@@ -141,5 +141,49 @@ describe('клавиша кнопки песочницы (#562)', () => {
   it('подпись клавиши -- латиница: это место клавиши, а не её буква', () => {
     expect(keyLabel('KeyA')).toBe('A')
     expect(keyLabel('Digit1')).toBe('1')
+  })
+})
+
+describe('клавиши истории проекта (#570)', () => {
+  it('Ctrl+Z отменяет, Ctrl+Shift+Z и Ctrl+Y возвращают', () => {
+    expect(historyCommand(press('z', { code: 'KeyZ', ctrlKey: true }))).toBe('undo')
+    expect(
+      historyCommand(press('Z', { code: 'KeyZ', ctrlKey: true, shiftKey: true })),
+    ).toBe('redo')
+    // Второе сочетание возврата -- привычка из офисных редакторов; выбрать
+    // одно значило бы отдать половине людей возврат только мышью.
+    expect(historyCommand(press('y', { code: 'KeyY', ctrlKey: true }))).toBe('redo')
+  })
+
+  it('на Mac то же самое делает Cmd', () => {
+    expect(historyCommand(press('z', { code: 'KeyZ', metaKey: true }))).toBe('undo')
+  })
+
+  it('смотрится место клавиши, а не буква: русская раскладка работает так же', () => {
+    // На русской раскладке та же клавиша шлёт «я», и разбор по `key` не
+    // работал бы ровно у того, кто читает этот экран по-русски.
+    expect(historyCommand(press('я', { code: 'KeyZ', ctrlKey: true }))).toBe('undo')
+  })
+
+  it('без Ctrl и в поле ввода клавиша не наша', () => {
+    expect(historyCommand(press('z', { code: 'KeyZ' }))).toBeNull()
+    expect(
+      historyCommand(
+        press('z', {
+          code: 'KeyZ',
+          ctrlKey: true,
+          target: { tagName: 'INPUT' } as unknown as EventTarget,
+        }),
+      ),
+    ).toBeNull()
+  })
+
+  it('чужие сочетания не перехватываются', () => {
+    // Ctrl+D правит объект (#563), Ctrl со стрелкой -- ходьба по словам, а
+    // разобранное кем-то раньше нажатие уже чужое.
+    expect(historyCommand(press('d', { code: 'KeyD', ctrlKey: true }))).toBeNull()
+    expect(
+      historyCommand(press('z', { code: 'KeyZ', ctrlKey: true, defaultPrevented: true })),
+    ).toBeNull()
   })
 })
