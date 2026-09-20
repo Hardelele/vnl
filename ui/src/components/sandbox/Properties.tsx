@@ -17,6 +17,7 @@ import type {
   Endpoint,
   SandboxBlock,
   SandboxCell,
+  SandboxContact,
   SandboxDrive,
   SandboxNeuron,
   SandboxRecording,
@@ -258,6 +259,24 @@ function BlockProps({
         )
       })}
 
+      <Section title="Связи внутри" />
+      {/* Механизм паттерна живёт в контактах не меньше, чем в мембране: в
+          «задержке проведения» весь смысл в двух контактах одного источника,
+          `delay = 1 мс` и `delay = 10 мс`. Пока их нельзя было тронуть,
+          потрогать механизм там, где он живёт, не получалось -- оставалось
+          переписывать `.vnl` и перекладывать схему заново (#531). */}
+      {block.contacts.map((contact) => (
+        <ContactGroup key={contact.id} block={block.id} contact={contact} />
+      ))}
+      {block.contacts.length ? (
+        <p className="sb-note">
+          Правка задевает только этот блок: снимок у экземпляра свой — ни такой
+          же блок рядом, ни паттерн в библиотеке не меняются.
+        </p>
+      ) : (
+        <p className="sb-note">Внутри блока связей нет.</p>
+      )}
+
       <Section title="Клетки" />
       {block.cells.map((cell) => (
         <CellGroup key={cell.type} block={block.id} cell={cell} />
@@ -426,6 +445,61 @@ function CellGroup({ block, cell }: { block: string; cell: SandboxCell }) {
           }
         />
       ))}
+    </details>
+  )
+}
+
+/**
+ * Параметры одного контакта внутри блока (#531).
+ *
+ * Поля те же три, что у связи песочницы, -- и это не повторение, а признание
+ * того, что вещь одна: связь и контакт различаются только адресом. Завести
+ * внутри блока свой «вес» значило бы, что одно и то же число зовётся
+ * по-разному в зависимости от того, с какой стороны коробки оно нарисовано.
+ *
+ * Свёрнуто по той же причине, что и тип клетки: у «растормаживания» контактов
+ * шесть, а полей у каждого три, и развёрнутыми они превращают панель в
+ * простыню. В сводке стоит задержка: ради неё сюда и приходят.
+ */
+function ContactGroup({
+  block,
+  contact,
+}: {
+  block: string
+  contact: SandboxContact
+}) {
+  const control = sandboxController
+  return (
+    <details className="sb-group">
+      <summary>
+        <span className={`sb-dot${contact.inhibitory ? ' is-inh' : ''}`} />
+        {/* Адрес -- точки снимка (`IN → FAR`), без приставки экземпляра:
+            правится снимок, а не собранная сеть, где тот же контакт зовётся
+            `ffi/c1`. */}
+        <span className="sb-row-name mono">
+          {contact.pre.instance} → {contact.post.instance}
+        </span>
+        <span className="mono sb-kind">{contact.delay} мс</span>
+      </summary>
+      <p className="sb-note mono">{contact.id}</p>
+      <SelectField
+        label="Рецептор"
+        value={contact.receptor}
+        options={RECEPTORS.map((name) => ({ id: name, name }))}
+        onChange={(receptor) =>
+          void control.setContact(block, contact.id, { receptor })
+        }
+      />
+      <NumberField
+        label="Вес, нСм"
+        value={contact.weight}
+        onChange={(weight) => void control.setContact(block, contact.id, { weight })}
+      />
+      <NumberField
+        label="Задержка, мс"
+        value={contact.delay}
+        onChange={(delay) => void control.setContact(block, contact.id, { delay })}
+      />
     </details>
   )
 }

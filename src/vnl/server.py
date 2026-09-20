@@ -511,6 +511,31 @@ class Api:
         project.set_cell(object_id, type_id, **params)
         return api.sandbox_payload(project)
 
+    def contact_params(
+        self, sandbox_id: str, object_id: str, contact_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Рецептор, вес и задержка контакта внутри блока (#531).
+
+        Тело разбирается ровно как у `link_params`, и это не повтор ради
+        повтора: у связи холста и у контакта блока один и тот же набор полей,
+        потому что вещь одна. Разойдись они -- и «вес» пришлось бы посылать
+        двумя разными именами в зависимости от того, где связь нарисована.
+
+        Правка задевает снимок этого экземпляра и никого больше: ни соседний
+        блок того же паттерна, ни библиотеку, -- за это снимок и хранится.
+        """
+        params: dict[str, Any] = {}
+        for key in ("weight", "delay"):
+            if body.get(key) is not None:
+                params[key] = float(body[key])
+        if body.get("receptor"):
+            params["receptor"] = str(body["receptor"])
+        if not params:
+            raise PatternError("нечего менять: ожидались weight, delay или receptor")
+        project = self._project(sandbox_id)
+        project.set_contact(object_id, contact_id, **params)
+        return api.sandbox_payload(project)
+
     def move_object(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """Сдвиг по холсту -- для любого объекта: и блока, и отдельной клетки."""
         project = self._project(sandbox_id)
@@ -771,6 +796,16 @@ def routes(service: Api) -> list[Route]:
             "PATCH",
             re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/cells/([^/]+)$"),
             service.cell_params,
+            wants="body",
+        ),
+        # Контакт внутри блока. Путь тоже про «объект», хотя контакты бывают
+        # только у блока: адрес мембраны и адрес контакта обязаны читаться
+        # одинаково, иначе панель свойств одного и того же блока ходила бы по
+        # двум разным семействам путей.
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/contacts/([^/]+)$"),
+            service.contact_params,
             wants="body",
         ),
         Route(

@@ -43,6 +43,7 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
         cells: [
           { type: 'pyr_l5', neurons: ['E'], inhibitory: false, pointModel: POINT },
         ],
+        contacts: [],
       },
     ],
     neurons: [],
@@ -124,6 +125,19 @@ describe('настройки блока', () => {
     await control.setCell('ffi', 'pyr_l5', { vThreshold: -44 })
 
     expect(cell).toHaveBeenCalledWith('s1', 'ffi', 'pyr_l5', { vThreshold: -44 })
+  })
+
+  it('правит контакт внутри блока по адресу объекта, а не связи (#531)', async () => {
+    // Контакт живёт в снимке экземпляра, а не в `sandbox.links`, поэтому
+    // маршрут у него свой -- но поля те же три, что у связи холста: связь есть
+    // связь, с какой бы стороны коробки она ни была нарисована.
+    const contact = vi.fn().mockResolvedValue(project({ dirty: true }))
+    const control = await opened({ contact })
+
+    await control.setContact('ffi', 'c2', { delay: 4 })
+
+    expect(contact).toHaveBeenCalledWith('s1', 'ffi', 'c2', { delay: 4 })
+    expect(control.store.getState().project?.dirty).toBe(true)
   })
 })
 

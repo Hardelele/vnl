@@ -31,11 +31,13 @@ import {
   save,
   saveAsPattern,
   setCellParams,
+  setContactParams,
   setLinkParams,
   setRecordingVar,
   setRunParams,
   setStimulusParams,
   undo,
+  type ContactParams,
   type DriveParams,
   type PatternDraft,
   type SandboxRow,
@@ -129,6 +131,7 @@ export interface SandboxPorts {
   addNeuron: typeof addNeuron
   connect: typeof connect
   params: typeof setLinkParams
+  contact: typeof setContactParams
   rename: typeof renameBlock
   cell: typeof setCellParams
   move: typeof moveObject
@@ -152,6 +155,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   addNeuron,
   connect,
   params: setLinkParams,
+  contact: setContactParams,
   rename: renameBlock,
   cell: setCellParams,
   move: moveObject,
@@ -332,8 +336,19 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     move: (object: string, position: [number, number]) =>
       act((id) => io.move(id, object, position)),
 
-    setParams: (link: string, params: { weight?: number; delay?: number; receptor?: string }) =>
+    setParams: (link: string, params: ContactParams) =>
       act((id) => io.params(id, link, params)),
+
+    /**
+     * Параметры контакта внутри блока (#531).
+     *
+     * Отдельная операция, а не `setParams` с другим адресом: связь песочницы
+     * живёт в `sandbox.links`, а контакт -- в снимке экземпляра, и маршруты у
+     * них разные. Поля при этом те же: связь есть связь, где бы она ни была
+     * нарисована.
+     */
+    setContact: (block: string, contact: string, params: ContactParams) =>
+      act((id) => io.contact(id, block, contact, params)),
 
     /** Подпись блока. Пустую не отправляем: сервер её всё равно не примет. */
     rename(block: string, label: string): Promise<void> {

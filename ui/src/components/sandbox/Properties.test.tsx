@@ -52,6 +52,28 @@ const BLOCK: SandboxBlock = {
   counts: { neurons: 5, contacts: 3 },
   scheme: { neurons: [], edges: [] },
   cells: [{ type: 'pyr', neurons: ['PYR'], inhibitory: false, pointModel: POINT }],
+  // Контакты снимка: адрес точками внутри блока, без приставки экземпляра --
+  // правится снимок, а не собранная сеть, где тот же контакт зовётся `dis/c1`.
+  contacts: [
+    {
+      id: 'c1',
+      pre: { instance: 'IN', section: 'soma', fraction: 0.5 },
+      post: { instance: 'PYR', section: 'soma', fraction: 0.5 },
+      receptor: 'ampa',
+      inhibitory: false,
+      weight: 2.2,
+      delay: 1,
+    },
+    {
+      id: 'c2',
+      pre: { instance: 'SST', section: 'soma', fraction: 0.5 },
+      post: { instance: 'PYR', section: 'soma', fraction: 0.5 },
+      receptor: 'gaba_a',
+      inhibitory: true,
+      weight: 3,
+      delay: 10,
+    },
+  ],
 }
 
 /** Клетка, положенная на холст руками: приставки блока у неё нет. */
@@ -107,6 +129,13 @@ function cellState(charge: number, spiked = false, peak = charge): CellState {
   return { v: -65 + charge * 15, spiked, charge, peak }
 }
 
+/** Подписи полей ввода в панели: по ним и проверяется состав правимого. */
+function fields(): string[] {
+  return [...host.querySelectorAll('.sb-field > span')].map(
+    (node) => node.textContent ?? '',
+  )
+}
+
 /** Подписи кнопок действия: драйв, запись и «убрать блок» идут одним списком. */
 function actions(): string[] {
   return [...host.querySelectorAll('.sb-actions button')].map(
@@ -158,6 +187,53 @@ describe('порты блока в панели свойств', () => {
     // драйв на `gate` снимает тормоз, драйв на `in` возбуждает.
     expect(actions()).not.toContain('Драйв на gate')
     expect(actions()).not.toContain('Записывать модулятор out')
+  })
+})
+
+describe('контакты блока в панели свойств (#531)', () => {
+  it('у контакта правятся те же три поля, что у связи песочницы', async () => {
+    await mount()
+
+    // Не второй набор полей: связь и контакт -- одна вещь с разными адресами.
+    // Пока контакты были только числом в сводке, задержку проведения нельзя
+    // было потрогать там, где она живёт.
+    expect(fields()).toEqual(
+      expect.arrayContaining(['Рецептор', 'Вес, нСм', 'Задержка, мс']),
+    )
+  })
+
+  it('в сводке контакта видна задержка и его адрес внутри снимка', async () => {
+    await mount()
+
+    const summaries = [...host.querySelectorAll('.sb-group summary')].map(
+      (node) => node.textContent ?? '',
+    )
+    expect(summaries).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('IN → PYR'),
+        expect.stringContaining('SST → PYR'),
+      ]),
+    )
+    expect(summaries.some((text) => text.includes('10 мс'))).toBe(true)
+  })
+
+  it('числа контакта показаны из снимка, а не пересчитаны панелью', async () => {
+    await mount()
+
+    const delays = [...host.querySelectorAll('input[type=number]')]
+      .map((node) => (node as HTMLInputElement).value)
+    expect(delays).toEqual(expect.arrayContaining(['2.2', '1', '3', '10']))
+  })
+
+  it('сказано прямо, что правка задевает только этот блок', async () => {
+    await mount()
+
+    // Ровно как уже сказано про тип клетки: у экземпляра свой снимок, и знать
+    // об этом надо до правки, а не после прогона.
+    const notes = [...host.querySelectorAll('.sb-note')].map(
+      (node) => node.textContent ?? '',
+    )
+    expect(notes.some((text) => text.includes('только этот блок'))).toBe(true)
   })
 })
 
