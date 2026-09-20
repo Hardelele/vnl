@@ -275,7 +275,18 @@ export function Canvas({
   ): void => {
     const svg = event.currentTarget.ownerSVGElement
     if (!svg) return
-    const scale = WIDTH / svg.getBoundingClientRect().width
+    // Сколько единиц холста в пикселе экрана.
+    //
+    // Холст вписан в свою область с сохранением пропорций (`viewBox` без
+    // `preserveAspectRatio` -- это `meet`), то есть масштаб задаёт та сторона,
+    // которой не хватает: `min(ширина/WIDTH, высота/HEIGHT)`. Считать его по
+    // одной ширине можно было, пока область повторяла пропорцию холста. С
+    // оконным каркасом (#504) высоту области задаёт нижняя панель, человек
+    // тянет её границу -- и пропорция расходится с `WIDTH/HEIGHT`. Тогда
+    // масштаб определяет высота, счёт по ширине даёт число меньше настоящего,
+    // и объект отстаёт от курсора.
+    const box = svg.getBoundingClientRect()
+    const scale = Math.max(WIDTH / box.width, HEIGHT / box.height)
     const grabX = event.clientX
     const grabY = event.clientY
     const [startX, startY] = from

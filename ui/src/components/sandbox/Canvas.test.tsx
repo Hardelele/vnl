@@ -417,3 +417,40 @@ describe('клетка на холсте объясняется подсказк
     expect(cell?.textContent).toContain('E')
   })
 })
+
+describe('перетаскивание по холсту', () => {
+  it('клетка едет за курсором, когда область холста не той пропорции', async () => {
+    // Холст вписан в область с сохранением пропорций, и масштаб задаёт та
+    // сторона, которой не хватает. Область 1520x420 шире, чем холст 760x420,
+    // поэтому упирается он в высоту: единиц холста в пикселе ровно один.
+    // Счёт по одной ширине дал бы половину -- и клетка отставала бы от курсора
+    // вдвое. Ровно это и случилось, когда высоту области стала задавать
+    // тянущаяся нижняя панель.
+    const moved: Array<[string, [number, number]]> = []
+    const box = vi
+      .spyOn(SVGElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ width: 1520, height: 420, x: 0, y: 0, top: 0, left: 0,
+        right: 1520, bottom: 420, toJSON: () => ({}) } as DOMRect)
+    try {
+      await mount({ onMove: (id, position) => moved.push([id, position]) })
+
+      const grabbed = cell('E')
+      await act(async () => {
+        grabbed.dispatchEvent(
+          new MouseEvent('pointerdown', { bubbles: true, clientX: 200, clientY: 100 }),
+        )
+        window.dispatchEvent(
+          new MouseEvent('pointermove', { bubbles: true, clientX: 300, clientY: 140 }),
+        )
+        window.dispatchEvent(
+          new MouseEvent('pointerup', { bubbles: true, clientX: 300, clientY: 140 }),
+        )
+      })
+
+      // Клетка стояла на [120, 100]; курсор проехал 100 по X и 40 по Y.
+      expect(moved).toEqual([['E', [220, 140]]])
+    } finally {
+      box.mockRestore()
+    }
+  })
+})
