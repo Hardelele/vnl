@@ -376,6 +376,75 @@ describe('палитра клеток', () => {
   })
 })
 
+/**
+ * Окно холста: прокрутка и приближение (#545).
+ *
+ * Проверяется ровно то, чем окно отличается от схемы: оно никуда не ездит,
+ * ничего не старит -- и при этом в него смотрит размещение нового объекта.
+ */
+describe('окно холста', () => {
+  it('прокрутка и приближение не ездят на сервер и не трогают проект', async () => {
+    const move = vi.fn()
+    const control = await opened({ move })
+    const before = control.store.getState().project
+
+    control.setView({ x: 900, y: 400, width: 600, height: 300 })
+
+    // Место объекта -- часть проекта и от приближения не меняется. Прогон от
+    // этого не стареет тоже: `fingerprint` считается по собранной модели, а
+    // окна в ней нет.
+    expect(move).not.toHaveBeenCalled()
+    expect(control.store.getState().project).toBe(before)
+    expect(control.store.getState().view).toEqual({
+      x: 900,
+      y: 400,
+      width: 600,
+      height: 300,
+    })
+  })
+
+  it('новая клетка ложится в видимую часть, а не по сетке от нуля', async () => {
+    const addNeuron = vi.fn().mockResolvedValue(project())
+    const control = await opened({ addNeuron })
+
+    // Уехали прокруткой далеко от начала координат.
+    control.setView({ x: 2000, y: 1000, width: 760, height: 420 })
+    await control.insertCell('pv')
+
+    // Прежняя сетка положила бы клетку на [280, 60] -- то есть за краем окна,
+    // где её не видно и не найти (#545).
+    expect(addNeuron).toHaveBeenCalledWith('s1', 'pv', [2280, 1060])
+  })
+
+  it('в узком окне ряд короче, и объект всё равно остаётся на виду', async () => {
+    const addNeuron = vi.fn().mockResolvedValue(project())
+    const control = await opened({ addNeuron })
+
+    // Окно шириной в одно место: второй объект идёт не вправо, а вниз.
+    control.setView({ x: 0, y: 0, width: 300, height: 420 })
+    await control.insertCell('pv')
+
+    expect(addNeuron).toHaveBeenCalledWith('s1', 'pv', [60, 200])
+  })
+
+  it('открытие проекта возвращает прокрутку к началу, но не приближение', async () => {
+    const control = await opened({})
+    control.setView({ x: 900, y: 400, width: 600, height: 300 })
+
+    await control.open('s1')
+
+    // Объекты другого проекта стоят в другом месте, и прокрутка к ним не
+    // относится. Приближение -- про экран человека, и его никто не просил
+    // менять; размер окна вдобавок уже померен областью.
+    expect(control.store.getState().view).toEqual({
+      x: 0,
+      y: 0,
+      width: 600,
+      height: 300,
+    })
+  })
+})
+
 describe('соединение', () => {
   it('клетка соединяется точкой на себе: порт пустой', async () => {
     const connect = vi.fn().mockResolvedValue(project())

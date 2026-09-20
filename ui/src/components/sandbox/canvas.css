@@ -1,12 +1,23 @@
-/* Холст песочницы. */
-
+/* Холст песочницы.
+ *
+ * `.canvas` -- сама область, `.cv-svg` -- окно в координаты схемы внутри неё.
+ * Область отдельной коробкой затем, что поверх окна лежит приближение числом:
+ * положить его внутрь SVG значило бы считать ему место в единицах схемы,
+ * которые от приближения меняются (#545). */
 .canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border-radius: 12px;
+}
+
+.cv-svg {
   display: block;
   width: 100%;
   height: 100%;
-  background: var(--panel);
-  border-radius: 12px;
   touch-action: none;
+  cursor: grab;
 }
 
 /* Рамка блока -- только прямой потомок: внутри раскрытого блока лежат свои
@@ -366,4 +377,42 @@
   font-family: var(--font-sans);
   font-size: 13px;
   fill: var(--faint);
+  /* Надпись не ловит мышь: пустое место холста тянется, и приглашение
+     «положите клетку» не должно быть единственным местом, за которое не
+     потянуть. */
+  pointer-events: none;
+}
+
+/* Приближение числом и «вписать» -- в углу области, поверх схемы.
+ *
+ * Строка не ловит мышь целиком, только сама кнопка: под ней лежит холст, и
+ * прозрачная полоса поперёк угла отбирала бы у него и прокрутку, и тягу. */
+.cv-tools {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  pointer-events: none;
+}
+
+.cv-fit {
+  pointer-events: auto;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cv-fit:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.cv-fit:disabled {
+  cursor: default;
+  opacity: 0.5;
 }

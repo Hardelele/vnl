@@ -72,9 +72,36 @@
  *
  * Возможностей при этом не прибавилось: и раскрытие, и разбор -- те же вызовы,
  * что и были (`toggleBlock`, `ungroup`).
+ *
+ * Холст -- окно в координаты схемы, а не картинка, которую вписывают (#545).
+ * `viewBox` следует за областью: единица холста -- пиксель экрана при
+ * приближении «один к одному», и от высоты нижней панели меняется только то,
+ * сколько схемы видно. Прежде `viewBox` был жёстким `760x420` и вписывался с
+ * сохранением пропорций, отчего схема меняла размер, когда тянут границу
+ * панели, а за пределами `760x420` ничего не существовало.
+ *
+ * По схеме ходят колесом и Ctrl с колесом -- теми же жестами, что на
+ * таймлайне после #548: голое колесо листает, Ctrl с колесом приближает. Два
+ * разных способа приближать в одном экране заводить нельзя: человек не
+ * помнит, над чем именно он держит курсор. Пустое место холста ещё и тянется
+ * мышью -- это тот же жест «двигать бумагу», которым двигают и объекты, и
+ * отдельного способа он не заводит.
+ *
+ * Приближение и прокрутка -- показ. Место объекта остаётся частью проекта и от
+ * приближения не меняется; на сервер окно не ездит, `fingerprint` не трогает,
+ * прогон не старит. Живёт оно в состоянии песочницы (`state/sandbox`), потому
+ * что смотрит туда не только холст: `free()` кладёт новый объект в видимое
+ * место.
  */
 
-import { useMemo, useState, type PointerEvent } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+} from 'react'
 
 import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { edgePath, miniature, type MiniEdge, type Miniature } from '../../lib/miniature'
@@ -83,11 +110,9 @@ import { wire, type Point, type WireEnd } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
 import type { CellKind } from '../../model/types'
-import type { Pending, Selection } from '../../state/sandbox'
+import type { CanvasView, Pending, Selection } from '../../state/sandbox'
 import './canvas.css'
 
-const WIDTH = 760
-const HEIGHT = 420
 const BOX = { width: 150, height: 62 }
 /**
  * Раскрытый блок. Шире и выше свёрнутого: внутрь надо поместить схему, а не
@@ -119,6 +144,36 @@ const PAD = { height: 20, inset: 6 }
 /** Ширина плашек с постоянной подписью: «▴ свернуть» и «разобрать на клетки». */
 const SHUT_WIDTH = 68
 const BREAK_WIDTH = 124
+
+/**
+ * Пределы приближения.
+ *
+ * Снизу 0.2: на пятой части схема из сотни объектов помещается в окно целиком,
+ * а подписи в ней уже не читаются -- дальше отдалять не для чего. Сверху 4:
+ * коробка блока в 150 единиц занимает тогда 600 пикселей, и разглядывать в ней
+ * нечего, кроме той же подписи.
+ */
+const MIN_ZOOM = 0.2
+const MAX_ZOOM = 4
+/** Чувствительность колеса: щелчок мыши (~100) меняет приближение примерно на 22%. */
+const WHEEL = 0.002
+/** Поле вокруг схемы при «вписать»: объект не должен упираться в край окна. */
+const FIT_MARGIN = 40
+
+/**
+ * Жесты холста, названные словами.
+ *
+ * Те же, что на таймлайне (`TIMELINE_HINT`), и написаны они здесь по той же
+ * причине: на вид колесо над холстом и колесо над таймлайном одинаковы, а
+ * значат разное ровно настолько, насколько разное под ними нарисовано.
+ */
+export const CANVAS_HINT =
+  'колесо прокручивает схему, Shift — вбок, Ctrl с колесом приближает, ' +
+  'пустое место тянется мышью'
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), high)
+}
 
 export type { Point }
 
@@ -165,6 +220,16 @@ export interface CanvasProps {
    * выбрав блок, а выбирают его здесь (#549).
    */
   onUngroupBlock?: (id: string) => void
+  /**
+   * Окно: какой кусок координат схемы показывать. Он же `viewBox`.
+   *
+   * Холст его не держит, а только меняет через `onView`: в это же окно
+   * смотрит `free()`, выбирая место новому объекту, и вторая копия «куда мы
+   * смотрим» разошлась бы с первой молча (#545).
+   */
+  view: CanvasView
+  /** Окно изменилось: прокрутили, приблизили или область стала другого размера. */
+  onView: (view: CanvasView) => void
   onEmpty: () => void
 }
 
@@ -333,12 +398,141 @@ export function Canvas({
   onMove,
   onToggleBlock,
   onUngroupBlock,
+  view,
+  onView,
   onEmpty,
 }: CanvasProps) {
   /** Объект, который сейчас тащат. Пока тащат -- рисуем его из этого состояния. */
   const [drag, setDrag] = useState<{ id: string; position: [number, number] } | null>(
     null,
   )
+  const frame = useRef<SVGSVGElement | null>(null)
+  /** Размер области в пикселях. До первого измерения его нет, а не «ноль». */
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null)
+  /** Размер, под который окно уже пересчитано: по нему видно, что он изменился. */
+  const fitted = useRef<{ width: number; height: number } | null>(null)
+  /** Свежее окно для обработчиков, висящих на window во время жеста. */
+  const live = useRef(view)
+  live.current = view
+
+  /**
+   * Во сколько раз схема увеличена: пикселей экрана в единице холста.
+   *
+   * Считается, а не хранится: держать приближение отдельным числом рядом с
+   * окном значило бы завести второе место, где написано одно и то же, и
+   * однажды они разошлись бы.
+   */
+  const zoom = size ? size.width / view.width : 1
+
+  // Область меряется у самого холста, а не считается из окна: её высоту
+  // задаёт нижняя панель, которую тянут мышью, и событие `resize` про это
+  // ничего не знает. `ResizeObserver` есть не везде (в jsdom его нет) --
+  // запасной путь через `resize` беднее, но врать не начинает.
+  useEffect(() => {
+    const el = frame.current
+    if (!el) return
+    const measure = (): void => {
+      const box = el.getBoundingClientRect()
+      if (box.width > 0 && box.height > 0) {
+        setSize((was) =>
+          was && was.width === box.width && was.height === box.height
+            ? was
+            : { width: box.width, height: box.height },
+        )
+      }
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const watch = new ResizeObserver(measure)
+    watch.observe(el)
+    return () => watch.disconnect()
+  }, [])
+
+  /**
+   * Область стала другого размера -- окно меняет размер, но не приближение.
+   *
+   * Ровно это и требовалось: человек тянет границу нижней панели, и схема не
+   * едет, а просто видна больше или меньше. Приближение берётся то, что было
+   * до измерения: из прежнего размера области и прежней ширины окна.
+   *
+   * `useLayoutEffect`, а не `useEffect`: иначе один кадр холст рисуется окном
+   * прежнего размера, вписанным в область нового, -- видимый скачок схемы при
+   * каждом движении границы.
+   */
+  useLayoutEffect(() => {
+    if (!size) return
+    const was = fitted.current
+    fitted.current = size
+    // Первое измерение: единица холста -- пиксель экрана.
+    const kept = was ? was.width / live.current.width : 1
+    const width = size.width / kept
+    const height = size.height / kept
+    if (
+      Math.abs(width - live.current.width) < 0.5 &&
+      Math.abs(height - live.current.height) < 0.5
+    ) {
+      return
+    }
+    onView({ ...live.current, width, height })
+  }, [size, onView])
+
+  /**
+   * Колесо: голое листает схему, Ctrl с колесом приближает.
+   *
+   * Те же жесты, что на таймлайне после #548, и по той же причине: два разных
+   * способа приближать в одном экране -- это жест, значение которого зависит
+   * от того, над чем держат курсор, а этого человек не помнит. Ctrl выбран не
+   * произвольно: им приближают в браузере, в картах и в редакторах, и щипок на
+   * трекпаде приходит тем же событием.
+   *
+   * Слушатель вешается руками, а не через `onWheel`: React вешает `wheel`
+   * пассивным, и `preventDefault` в нём молча ничего не делает -- страница
+   * продолжала бы прокручиваться под приближением.
+   */
+  useEffect(() => {
+    const el = frame.current
+    if (!el || !size) return
+
+    const onWheel = (event: WheelEvent): void => {
+      const now = live.current
+      // `preventDefault` до всякой проверки: и прокрутка схемы, и приближение
+      // -- наши жесты, и отдавать их браузеру (который прокрутит страницу или
+      // увеличит её целиком) нельзя ни в каком случае.
+      event.preventDefault()
+      const near = size.width / now.width
+
+      if (event.ctrlKey || event.metaKey) {
+        const next = clamp(near * Math.exp(-event.deltaY * WHEEL), MIN_ZOOM, MAX_ZOOM)
+        if (next === near) return
+        // Точка под курсором остаётся на месте: приближают, чтобы разглядеть
+        // конкретный узел, и уезжать из-под мыши он не должен.
+        const box = el.getBoundingClientRect()
+        const ux = now.x + ((event.clientX - box.left) / box.width) * now.width
+        const uy = now.y + ((event.clientY - box.top) / box.height) * now.height
+        const width = size.width / next
+        const height = size.height / next
+        onView({
+          x: ux - (ux - now.x) * (width / now.width),
+          y: uy - (uy - now.y) * (height / now.height),
+          width,
+          height,
+        })
+        return
+      }
+
+      // Shift с колесом листает вбок -- привычка из браузера, и отбирать её
+      // не за что. Горизонтальное колесо (трекпад) приходит `deltaX`.
+      const stepX = (event.shiftKey ? event.deltaY : event.deltaX) / near
+      const stepY = (event.shiftKey ? 0 : event.deltaY) / near
+      onView({ ...now, x: now.x + stepX, y: now.y + stepY })
+    }
+
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [size, onView])
 
   // Раскладка начинки считается один раз на отрисовку, а не в каждой связи:
   // `endpointPoint` спрашивает её для обоих концов каждой линии.
@@ -362,16 +556,20 @@ export function Canvas({
     if (!svg) return
     // Сколько единиц холста в пикселе экрана.
     //
-    // Холст вписан в свою область с сохранением пропорций (`viewBox` без
-    // `preserveAspectRatio` -- это `meet`), то есть масштаб задаёт та сторона,
-    // которой не хватает: `min(ширина/WIDTH, высота/HEIGHT)`. Считать его по
-    // одной ширине можно было, пока область повторяла пропорцию холста. С
-    // оконным каркасом (#504) высоту области задаёт нижняя панель, человек
-    // тянет её границу -- и пропорция расходится с `WIDTH/HEIGHT`. Тогда
-    // масштаб определяет высота, счёт по ширине даёт число меньше настоящего,
-    // и объект отстаёт от курсора.
+    // Один и тот же счёт и в перетаскивании, и в отрисовке: окно -- это и есть
+    // `viewBox`, а холст вписан в область с сохранением пропорций (`viewBox`
+    // без `preserveAspectRatio` -- это `meet`), то есть масштаб задаёт та
+    // сторона, которой не хватает. Считать его по одной ширине можно было,
+    // пока область повторяла пропорцию холста. С оконным каркасом (#504)
+    // высоту области задаёт нижняя панель, человек тянет её границу -- и
+    // пропорция расходится. Тогда масштаб определяет высота, счёт по ширине
+    // даёт число меньше настоящего, и объект отстаёт от курсора (#544).
+    //
+    // Теперь окно само следует за областью, и обе стороны дают одно и то же
+    // число -- кроме единственного кадра между измерением и пересчётом окна.
+    // Ради этого кадра `Math.max` и остаётся: он верен и в нём.
     const box = svg.getBoundingClientRect()
-    const scale = Math.max(WIDTH / box.width, HEIGHT / box.height)
+    const scale = Math.max(view.width / box.width, view.height / box.height)
     const grabX = event.clientX
     const grabY = event.clientY
     const [startX, startY] = from
@@ -400,14 +598,101 @@ export function Canvas({
     window.addEventListener('pointerup', drop)
   }
 
+  /**
+   * Пустое место холста тянется мышью -- окно едет за рукой.
+   *
+   * Тот же жест, которым двигают объекты, только двигается бумага под ними, и
+   * отдельного способа ходить по схеме он не заводит. Снятие выделения при
+   * этом никуда не делось: если рука не сдвинулась дальше порога, это был
+   * щелчок по пустому месту, а не перетаскивание. Разделять их по кнопке мыши
+   * (средняя -- тащить) значило бы прятать ход по схеме от тех, у кого мышь с
+   * двумя кнопками или трекпад.
+   */
+  const startPan = (event: PointerEvent<SVGSVGElement>): void => {
+    if (event.target !== event.currentTarget) return
+    const box = event.currentTarget.getBoundingClientRect()
+    const scale = Math.max(view.width / box.width, view.height / box.height)
+    const grabX = event.clientX
+    const grabY = event.clientY
+    const from = { x: view.x, y: view.y }
+    let moved = false
+
+    const move = (at: globalThis.PointerEvent): void => {
+      const dx = at.clientX - grabX
+      const dy = at.clientY - grabY
+      if (!moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return
+      moved = true
+      // Схема едет за рукой, значит окно едет против неё.
+      onView({ ...live.current, x: from.x - dx * scale, y: from.y - dy * scale })
+    }
+
+    const drop = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', drop)
+      if (!moved) onEmpty()
+    }
+
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', drop)
+  }
+
+  /**
+   * «Вписать»: показать всю схему целиком.
+   *
+   * Нужна затем же, зачем «целиком» на таймлайне: уехав прокруткой в угол
+   * схемы из двадцати клеток, назад по одному щелчку колеса не вернёшься, а
+   * искать потерянный объект вслепую -- не работа. Поле по краям, чтобы
+   * крайний объект не упирался в границу окна.
+   */
+  const bounds = useMemo(() => {
+    const spots: Array<{ x: number; y: number; width: number; height: number }> = []
+    for (const block of blocks) {
+      const box = blockBox(insides.has(block.id))
+      spots.push({ x: block.position[0], y: block.position[1], ...box })
+    }
+    for (const neuron of neurons) {
+      spots.push({
+        x: neuron.position[0] - DOT.width / 2,
+        y: neuron.position[1] - DOT.height / 2,
+        width: DOT.width,
+        height: DOT.height,
+      })
+    }
+    if (!spots.length) return null
+    return {
+      left: Math.min(...spots.map((item) => item.x)),
+      top: Math.min(...spots.map((item) => item.y)),
+      right: Math.max(...spots.map((item) => item.x + item.width)),
+      bottom: Math.max(...spots.map((item) => item.y + item.height)),
+    }
+  }, [blocks, neurons, insides])
+
+  const fit = (): void => {
+    if (!size || !bounds) return
+    const width = bounds.right - bounds.left + FIT_MARGIN * 2
+    const height = bounds.bottom - bounds.top + FIT_MARGIN * 2
+    // Приближение одно на обе стороны: разное растянуло бы схему.
+    const next = clamp(
+      Math.min(size.width / width, size.height / height),
+      MIN_ZOOM,
+      MAX_ZOOM,
+    )
+    const seen = { width: size.width / next, height: size.height / next }
+    onView({
+      x: (bounds.left + bounds.right) / 2 - seen.width / 2,
+      y: (bounds.top + bounds.bottom) / 2 - seen.height / 2,
+      ...seen,
+    })
+  }
+
   return (
-    <svg
-      className="canvas"
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onEmpty()
-      }}
-    >
+    <div className="canvas">
+      <svg
+        className="cv-svg"
+        ref={frame}
+        viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
+        onPointerDown={startPan}
+      >
       {links.map((link) => (
         <Link
           key={link.id}
@@ -424,8 +709,8 @@ export function Canvas({
       {blocks.map((block) => {
         const [x, y] = positionOf(block.id, block.position)
         const chosen = selected?.kind === 'block' && selected.id === block.id
-        const view = insides.get(block.id)
-        const open = view !== undefined
+        const inside = insides.get(block.id)
+        const open = inside !== undefined
         const box = blockBox(open)
         // У раскрытого блока светится не коробка, а разрядившийся узел: теперь
         // видно кто, и подсвечивать вместо него всю рамку значило бы прятать
@@ -592,12 +877,12 @@ export function Canvas({
               </g>
             ) : null}
 
-            {view ? (
+            {inside ? (
               <g transform={`translate(${x} ${y + HEADER})`}>
-                {view.edges.map((edge) => (
+                {inside.edges.map((edge) => (
                   <InnerEdge key={edge.id} edge={edge} />
                 ))}
-                {view.nodes.map((node) => {
+                {inside.nodes.map((node) => {
                   const flat = `${block.id}/${node.id}`
                   const waiting = pending?.instance === flat && !pending.port
                   // Имя в живой сети у внутреннего узла с приставкой (`ffi/E`):
@@ -795,12 +1080,39 @@ export function Canvas({
         )
       })}
 
+      {/* Пустой холст зовёт положить клетку, а не показывает пустоту. Надпись
+          стоит посреди окна, а не посреди координат: уехав прокруткой, человек
+          иначе видел бы просто ничего и не знал бы, что делать (#545). */}
       {blocks.length === 0 && neurons.length === 0 ? (
-        <text className="cv-empty" x={WIDTH / 2} y={HEIGHT / 2} textAnchor="middle">
+        <text
+          className="cv-empty"
+          x={view.x + view.width / 2}
+          y={view.y + view.height / 2}
+          textAnchor="middle"
+        >
           Пусто. Положите клетку из палитры или вставьте паттерн слева.
         </text>
       ) : null}
-    </svg>
+      </svg>
+
+      {/* Приближение числом и «вписать» -- поверх холста, а не в шапке панели:
+          у холста своей шапки нет, а жест над ним. Строка жестов подсказкой, а
+          не надписью: она объясняет, а не управляет, и место на холсте нужно
+          схеме. */}
+      <div className="cv-tools">
+        <button
+          type="button"
+          className="mono cv-fit"
+          disabled={!bounds}
+          title={`Показать всю схему целиком. ${CANVAS_HINT}`}
+          onClick={fit}
+        >
+          {Math.abs(zoom - 1) < 0.01
+            ? '1:1'
+            : `×${zoom < 10 ? zoom.toFixed(1) : zoom.toFixed(0)}`}
+        </button>
+      </div>
+    </div>
   )
 }
 

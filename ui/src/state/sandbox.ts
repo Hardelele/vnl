@@ -75,6 +75,30 @@ export interface Pending {
   port: string | null
 }
 
+/**
+ * Прямоугольник координат схемы, показанный на холсте, -- он же `viewBox`.
+ *
+ * Единица холста -- пиксель экрана при приближении «один к одному»; отсюда
+ * `width`/`height` в единицах, а не в долях: приближение это отношение
+ * пиксельного размера области к `width`, и держать его отдельным числом
+ * значило бы завести второе место, где написано, насколько всё увеличено.
+ */
+export interface CanvasView {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Окно до первого измерения области.
+ *
+ * Те самые `760x420`, что были жёстким размером холста: проекты, сложенные
+ * при них, целиком попадают в окно с первого кадра. Живёт это значение ровно
+ * до того, как холст померит себя, -- дальше размер окна задаёт область.
+ */
+export const START_VIEW: CanvasView = { x: 0, y: 0, width: 760, height: 420 }
+
 export interface SandboxView {
   list: SandboxRow[]
   project: SandboxState | null
@@ -104,6 +128,27 @@ export interface SandboxView {
    * выделением, которое серверу тоже не нужно.
    */
   opened: string[]
+  /**
+   * Окно холста: какой кусок координат схемы сейчас показан.
+   *
+   * Холст был картинкой `760x420`, которую вписывали в свою область с
+   * сохранением пропорций. Из этого следовали две беды сразу: схема меняла
+   * размер от высоты нижней панели (тянут границу -- едет вся схема, хотя
+   * место объектов то же), а за пределами `760x420` ничего не существовало --
+   * ни прокрутки, ни приближения, и после десятка объектов сетка размещения
+   * клала уже за краем (#545).
+   *
+   * Теперь холст -- окно: `viewBox` и есть этот прямоугольник, в единицах
+   * схемы, а его размер в пикселях меряет сам холст. От высоты панели меняется
+   * `height` этого окна -- то есть сколько схемы видно, а не какого она
+   * размера.
+   *
+   * Лежит рядом с `opened` и по той же причине: это показ, а не схема. На
+   * сервер не уходит, `dirty` от него не появляется, `fingerprint` не
+   * меняется, прогон не старится. Сюда же смотрит `free()`: новый объект
+   * кладётся в видимое место, а не по абсолютной сетке 3xN.
+   */
+  view: CanvasView
   busy: boolean
   error: string | null
   offline: boolean
@@ -128,6 +173,7 @@ const EMPTY: SandboxView = {
   selected: null,
   pending: null,
   opened: [],
+  view: START_VIEW,
   busy: false,
   error: null,
   offline: false,
@@ -190,14 +236,53 @@ const DEFAULT_PORTS: SandboxPorts = {
 }
 
 /**
+ * Шаг сетки размещения и отступ от края окна.
+ *
+ * Шаг чуть меньше самого широкого объекта (раскрытый блок 236x152) и заметно
+ * больше свёрнутого (150x62): раскрытые рядом чуть перекрываются, но сетка --
+ * прикидка «куда положить», а не раскладка. Отступ -- чтобы первый объект не
+ * прилипал к краю окна и не наезжал на подписи портов; те же числа, что были
+ * в абсолютной сетке до #545, чтобы место первых объектов не поехало.
+ */
+const SLOT = { x: 220, y: 140, margin: 60 }
+/**
+ * Сдвиг следующего захода, когда места в окне кончились.
+ *
+ * Больше половины фигуры клетки (74x38): иначе второй заход ложится на первый
+ * так плотно, что подписи перекрываются и читается одна из двух. Меньше
+ * четверти шага сетки: иначе последний заход вылезает за край окна -- ровно за
+ * тот край, от которого мы и уходили.
+ */
+const PASS = { x: 48, y: 36 }
+
+/**
  * Куда положить следующий объект, чтобы он не лёг поверх соседа.
  *
  * Считаются и блоки, и клетки: место на холсте у них одно, и нумеровать их
  * по отдельности значило бы класть первую клетку ровно на первый блок.
+ *
+ * Кладётся в видимую часть, а не по абсолютной сетке от нуля: холст стал
+ * окном, и объект, положенный по старой сетке «три в ряд», после десятка
+ * соседей появлялся бы за краем окна -- то есть нигде (#545). Сколько мест
+ * в ряду и сколько рядов, решает само окно; когда они кончаются, начинается
+ * новый заход, сдвинутый по диагонали, -- так новый объект не ложится точно
+ * на старый и всё равно остаётся на виду.
+ *
+ * Сетка при этом остаётся грубой прикидкой, а не раскладкой: разложить схему
+ * по-настоящему умеет «Разложить» (#543), и повторять её здесь, в месте, где
+ * известно только число объектов, было бы второй раскладкой.
  */
-function free(project: SandboxState | null): [number, number] {
+function free(project: SandboxState | null, view: CanvasView): [number, number] {
   const index = (project?.blocks.length ?? 0) + (project?.neurons.length ?? 0)
-  return [60 + (index % 3) * 220, 60 + Math.floor(index / 3) * 140]
+  const cols = Math.max(1, Math.floor((view.width - SLOT.margin) / SLOT.x))
+  const rows = Math.max(1, Math.floor((view.height - SLOT.margin) / SLOT.y))
+  const slot = index % (cols * rows)
+  // Заходов четыре, дальше по кругу: пятый сдвиг вывел бы объект за край окна.
+  const pass = Math.floor(index / (cols * rows)) % 4
+  return [
+    Math.round(view.x + SLOT.margin + (slot % cols) * SLOT.x + pass * PASS.x),
+    Math.round(view.y + SLOT.margin + Math.floor(slot / cols) * SLOT.y + pass * PASS.y),
+  ]
 }
 
 export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
@@ -238,8 +323,18 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
   const openProject = async (loader: () => Promise<SandboxState>): Promise<void> => {
     // Раскрытые блоки забываются вместе с проектом: в другом проекте те же
-    // имена принадлежат другим блокам.
-    store.setState({ busy: true, selected: null, pending: null, opened: [] })
+    // имена принадлежат другим блокам. Прокрутка холста возвращается к началу
+    // координат по той же причине -- объекты другого проекта стоят в другом
+    // месте, -- а приближение остаётся: оно про экран человека, а не про
+    // проект, и размер окна (`width`/`height`) уже померен областью.
+    const { view } = store.getState()
+    store.setState({
+      busy: true,
+      selected: null,
+      pending: null,
+      opened: [],
+      view: { ...view, x: 0, y: 0 },
+    })
     try {
       const project = await loader()
       store.setState({ project, busy: false, error: null, offline: false, denied: false })
@@ -310,7 +405,8 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     /** Вставить паттерн. Место выбирается так, чтобы блоки не ложились друг на друга. */
     insert(pattern: string): Promise<void> {
-      return act((id) => io.addBlock(id, pattern, free(store.getState().project)))
+      const { project, view } = store.getState()
+      return act((id) => io.addBlock(id, pattern, free(project, view)))
     },
 
     /**
@@ -320,7 +416,8 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
      * блоками, а столкновение с ними всплыло бы иначе только на запуске.
      */
     insertCell(cell: string): Promise<void> {
-      return act((id) => io.addNeuron(id, cell, free(store.getState().project)))
+      const { project, view } = store.getState()
+      return act((id) => io.addNeuron(id, cell, free(project, view)))
     },
 
     /**
@@ -363,6 +460,21 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
           ? opened.filter((id) => id !== block)
           : [...opened, block],
       })
+    },
+
+    /**
+     * Куда смотрит холст: прокрутка, приближение и новый размер области.
+     *
+     * Как и раскрытие, никуда не отправляется. Место объекта -- часть проекта
+     * и от приближения не меняется; приближение и прокрутка меняют только то,
+     * какой кусок схемы виден, поэтому ни шага отмены, ни отметки «не
+     * сохранено», ни устаревания прогона здесь быть не должно (#545).
+     *
+     * Ходит через состояние, а не живёт в самом холсте, потому что смотрит
+     * сюда не только холст: `free()` кладёт новый объект в видимое место.
+     */
+    setView(view: CanvasView): void {
+      store.setState({ view })
     },
 
     select(selection: Selection | null): void {

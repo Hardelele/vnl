@@ -59,6 +59,8 @@ export function SandboxScreen() {
   const selected = useSandbox((state) => state.selected)
   const pending = useSandbox((state) => state.pending)
   const opened = useSandbox((state) => state.opened)
+  /** Куда смотрит холст. Показ, а не схема: на сервер не уходит (#545). */
+  const canvasView = useSandbox((state) => state.view)
   const error = useSandbox((state) => state.error)
   const denied = useSandbox((state) => state.denied)
   const savedId = useSandbox((state) => state.saved?.id ?? null)
@@ -510,6 +512,10 @@ export function SandboxScreen() {
             // человек смотрит с первой секунды, а панель свойств открывается
             // уже после выбора блока (#549).
             onUngroupBlock={(id) => void control.ungroup(id)}
+            // Окно холста живёт в состоянии, а не в самом холсте: в него
+            // смотрит `free()`, выбирая место новому объекту (#545).
+            view={canvasView}
+            onView={(next) => control.setView(next)}
             onEmpty={() => control.select(null)}
           />
         </section>
