@@ -167,26 +167,38 @@ describe('масштаб времени', () => {
       .mockReturnValue(box(176, 1264))
   }
 
-  function wheel(deltaY: number, clientX: number): void {
+  function wheel(deltaY: number, clientX: number, ctrlKey = false): void {
     act(() => {
       ;(host.querySelector('.tl') as HTMLElement).dispatchEvent(
-        new WheelEvent('wheel', { deltaY, clientX, bubbles: true, cancelable: true }),
+        new WheelEvent('wheel', {
+          deltaY,
+          clientX,
+          ctrlKey,
+          bubbles: true,
+          cancelable: true,
+        }),
       )
     })
   }
 
-  it('над колонкой имён колесо листает дорожки, а не приближает', async () => {
+  it('голое колесо листает дорожки и не трогает масштаб (#548)', async () => {
     await mount()
     geometry()
 
+    // И над колонкой имён, и над полем: раньше над полем голое колесо
+    // приближало, и один жест значил два действия -- какое именно, зависело
+    // от невидимого состояния. Упёршись в предел масштаба, тот же поворот
+    // колеса вдруг доставался браузеру прокруткой, и выглядело это так, будто
+    // вниз таймлайн листается, а вверх -- приближается.
     wheel(-240, 100)
+    wheel(-240, 600)
 
     // Двенадцать дорожек иначе было бы нечем пройти: панель низкая, а колесо
     // -- единственный способ их прокрутить.
     expect((host.querySelector('.tl-zoom') as HTMLButtonElement).textContent).toBe('целиком')
   })
 
-  it('колесо приближает, кнопка возвращает прогон целиком', async () => {
+  it('Ctrl с колесом приближает, кнопка возвращает прогон целиком', async () => {
     await mount()
 
     const zoom = () => host.querySelector('.tl-zoom') as HTMLButtonElement
@@ -195,11 +207,7 @@ describe('масштаб времени', () => {
     expect(zoom().disabled).toBe(true)
     expect(body().style.width).toBe('')
 
-    act(() => {
-      ;(host.querySelector('.tl') as HTMLElement).dispatchEvent(
-        new WheelEvent('wheel', { deltaY: -100, clientX: 200, bubbles: true, cancelable: true }),
-      )
-    })
+    wheel(-100, 200, true)
 
     expect(zoom().textContent?.startsWith('×1.2')).toBe(true)
     expect(zoom().disabled).toBe(false)
@@ -217,11 +225,7 @@ describe('масштаб времени', () => {
     const marks = () => host.querySelectorAll('.tl-mark').length
     const before = marks()
 
-    act(() => {
-      ;(host.querySelector('.tl') as HTMLElement).dispatchEvent(
-        new WheelEvent('wheel', { deltaY: -600, clientX: 200, bubbles: true, cancelable: true }),
-      )
-    })
+    wheel(-600, 200, true)
 
     expect(marks()).toBeGreaterThan(before)
   })
