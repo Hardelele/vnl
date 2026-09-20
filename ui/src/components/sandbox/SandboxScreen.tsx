@@ -505,6 +505,11 @@ export function SandboxScreen() {
             }
             onMove={(id, position) => void control.move(id, position)}
             onToggleBlock={(id) => control.toggleBlock(id)}
+            // Та же операция, что и кнопка в панели свойств, -- второй
+            // реализации разбора не заводим. Разница только в дороге: на холст
+            // человек смотрит с первой секунды, а панель свойств открывается
+            // уже после выбора блока (#549).
+            onUngroupBlock={(id) => void control.ungroup(id)}
             onEmpty={() => control.select(null)}
           />
         </section>

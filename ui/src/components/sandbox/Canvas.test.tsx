@@ -299,7 +299,7 @@ describe('блок на холсте', () => {
     await mount({ blocks: [FFI], onToggleBlock: (id: string) => toggled.push(id) })
 
     act(() => {
-      host.querySelector('.cv-open circle')?.dispatchEvent(
+      host.querySelector('.cv-open .cv-open-pad')?.dispatchEvent(
         new MouseEvent('click', { bubbles: true }),
       )
     })
@@ -319,6 +319,130 @@ describe('блок на холсте', () => {
     expect(host.querySelector('.cv-block')?.getAttribute('class')).not.toContain(
       'is-spiking',
     )
+  })
+})
+
+/**
+ * Блок сам говорит, что его можно раскрыть и разобрать (#549).
+ *
+ * Обе возможности были и до задачи, но узнать о них было неоткуда: знак
+ * раскрытия был безымянным кружком рядом с кружками портов, а разбор жил
+ * только в панели свойств. Проверяется здесь не «функция вызвалась», а то,
+ * что в разметке есть слова, по которым это находят глазами.
+ */
+describe('блок говорит о себе (#549)', () => {
+  it('счётчик внутренностей сам и есть кнопка «показать, что внутри»', async () => {
+    const toggled: string[] = []
+    await mount({ blocks: [FFI], onToggleBlock: (id: string) => toggled.push(id) })
+
+    // Счётчик никуда не делся: он по-прежнему говорит, сколько внутри.
+    const peek = host.querySelector('.cv-open')
+    expect(peek?.querySelector('.cv-sub')?.textContent).toContain('3 кл.')
+    // Но теперь он ещё и зовёт: шеврон в подписи и слова в подсказке.
+    expect(peek?.querySelector('.cv-sub')?.textContent).toContain('▾')
+    expect(peek?.querySelector('title')?.textContent).toContain('что внутри')
+
+    act(() => {
+      peek?.querySelector('.cv-open-pad')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
+    expect(toggled).toEqual(['ffi'])
+  })
+
+  it('без переключателя счётчик остаётся справкой и ни на что не зовёт', async () => {
+    await mount({ blocks: [FFI] })
+
+    // Холст рисуется и там, где проект не правят. Шеврон в этом случае обещал
+    // бы дверь, которой нет.
+    expect(host.querySelector('.cv-sub')?.textContent).not.toContain('▾')
+    expect(host.querySelector('.cv-open')?.getAttribute('class')).toContain('is-mute')
+  })
+
+  it('знак раскрытия -- плашка с подписью, а не кружок, как порт', async () => {
+    await mount({ blocks: [FFI], onToggleBlock: vi.fn() })
+
+    // Ровно на этом человек и спотыкался: кружок рядом с кружками портов
+    // читался как «добавить порт», а не «показать начинку».
+    expect(host.querySelectorAll('.cv-open circle')).toHaveLength(0)
+    expect(host.querySelector('.cv-open .cv-open-pad')?.tagName).toBe('rect')
+  })
+
+  it('двойной щелчок по коробке ведёт туда же, куда плашка', async () => {
+    const toggled: string[] = []
+    await mount({ blocks: [FFI], onToggleBlock: (id: string) => toggled.push(id) })
+
+    act(() => {
+      host.querySelector('.cv-block > rect')?.dispatchEvent(
+        new MouseEvent('dblclick', { bubbles: true }),
+      )
+    })
+
+    expect(toggled).toEqual(['ffi'])
+  })
+
+  it('двойной щелчок по внутреннему узлу блок не сворачивает', async () => {
+    const toggled: string[] = []
+    await mount({
+      blocks: [FFI],
+      opened: ['ffi'],
+      onToggleBlock: (id: string) => toggled.push(id),
+    })
+
+    act(() => {
+      inner('I').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    })
+
+    // Два щелчка «соединить» подряд -- это не приказ спрятать начинку в тот
+    // самый момент, когда в неё целятся.
+    expect(toggled).toEqual([])
+  })
+
+  it('у раскрытого блока плашка зовётся «свернуть»', async () => {
+    await mount({ blocks: [FFI], opened: ['ffi'], onToggleBlock: vi.fn() })
+
+    const shut = host.querySelector('.cv-open.is-shut')
+    expect(shut?.querySelector('.cv-sub')?.textContent).toContain('свернуть')
+  })
+
+  it('у выбранного блока разбор находится прямо на холсте', async () => {
+    const broken: string[] = []
+    await mount({
+      blocks: [FFI],
+      selected: { kind: 'block', id: 'ffi' },
+      onUngroupBlock: (id: string) => broken.push(id),
+    })
+
+    const act_ = host.querySelector('.cv-act')
+    expect(act_?.querySelector('text')?.textContent).toBe('разобрать на клетки')
+    // Подпись называет последствие, а не прячет его: блок перестаёт быть
+    // блоком, и об этом сказано до щелчка, а не после.
+    expect(act_?.querySelector('title')?.textContent).toContain(
+      'перестанет быть блоком',
+    )
+
+    act(() => {
+      act_?.querySelector('rect')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
+    expect(broken).toEqual(['ffi'])
+  })
+
+  it('у невыбранного блока разбора на холсте нет', async () => {
+    await mount({ blocks: [FFI], onUngroupBlock: vi.fn() })
+
+    // Плашка под каждой коробкой превратила бы схему из десяти блоков в
+    // список кнопок.
+    expect(host.querySelectorAll('.cv-act')).toHaveLength(0)
+  })
+
+  it('порт называет себя портом, а узел внутри -- своим сетевым именем', async () => {
+    await mount({ blocks: [FFI], opened: ['ffi'], onToggleBlock: vi.fn() })
+
+    const port = [...host.querySelectorAll('.cv-port')][0]
+    expect(port?.querySelector('title')?.textContent).toContain('порт')
+    expect(inner('I').querySelector('title')?.textContent).toContain('ffi/I')
   })
 })
 

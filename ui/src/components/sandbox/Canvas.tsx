@@ -47,12 +47,38 @@
  * Долю считает сессия (`CellState.charge`): порог, покой и адаптация -- физика,
  * а у интерфейса под рукой только номинальный порог типа клетки, тогда как у
  * клетки он свой.
+ *
+ * О том, что блок раскрывается и разбирается, холст говорит сам (#549). Обе
+ * возможности были и раньше, но знака о них не было: раскрытие пряталось за
+ * кружком с плюсом -- таким же кружком, как порт рядом, -- а разбор жил только
+ * в панели свойств, куда надо сперва добраться. Человек, ради которого это
+ * делалось, не нашёл ни того, ни другого.
+ *
+ * Поэтому:
+ *
+ * - счётчик «3 кл. · 2 св.» внизу коробки стал самой кнопкой раскрытия. Он и
+ *   так говорил, что внутри что-то есть; теперь он ещё и предлагает туда
+ *   заглянуть -- шевроном, рамкой под курсором и подсказкой. Отдельный значок
+ *   рядом со счётчиком был бы вторым местом про одно и то же;
+ * - кнопка перестала быть кружком: кружок на холсте уже занят портом, и знак
+ *   «показать начинку» читался как «добавить порт». Теперь это плашка с
+ *   подписью, а порт остался кружком с именем;
+ * - двойной щелчок по коробке делает то же самое. Не вместо кнопки, а рядом:
+ *   кнопку находят глазами, двойной щелчок -- рукой, по привычке из файловых
+ *   окон;
+ * - «разобрать на клетки» появляется под выбранным блоком. Кнопка в панели
+ *   свойств остаётся: панель -- место, где блок правят целиком. Но узнать о
+ *   разборе можно, только уже выбрав блок, а выбирают его на холсте.
+ *
+ * Возможностей при этом не прибавилось: и раскрытие, и разбор -- те же вызовы,
+ * что и были (`toggleBlock`, `ungroup`).
  */
 
 import { useMemo, useState, type PointerEvent } from 'react'
 
 import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { edgePath, miniature, type MiniEdge, type Miniature } from '../../lib/miniature'
+import { CELLS, LINKS, counted } from '../../lib/plural'
 import { wire, type Point, type WireEnd } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
@@ -82,6 +108,17 @@ const DOT = { width: 74, height: 38 }
 /** Длина острия и половина плашки на конце внутренней связи -- как в миниатюре. */
 const TIP = 6
 const CAP = 4
+/**
+ * Плашка действия блока: «▾ 3 кл. · 2 св.», «▴ свернуть», «разобрать на клетки».
+ *
+ * Плашка, а не кружок: кружком на холсте нарисован порт, и второй кружок рядом
+ * человек читает как ещё одну точку подключения (#549). Высота и отступ общие,
+ * чтобы три плашки выглядели одним родом вещей, а не тремя случайностями.
+ */
+const PAD = { height: 20, inset: 6 }
+/** Ширина плашек с постоянной подписью: «▴ свернуть» и «разобрать на клетки». */
+const SHUT_WIDTH = 68
+const BREAK_WIDTH = 124
 
 export type { Point }
 
@@ -119,6 +156,15 @@ export interface CanvasProps {
   onMove: (id: string, position: [number, number]) => void
   /** Раскрыть или свернуть блок. Без неё блок остаётся коробкой. */
   onToggleBlock?: (id: string) => void
+  /**
+   * Разобрать блок на клетки и связи (#532).
+   *
+   * Необязательна по той же причине, что и раскрытие: холст рисуется и там,
+   * где проект не правят. Но там, где правят, дорога к разбору должна быть с
+   * холста, а не только из панели свойств: о кнопке в панели узнаёшь, уже
+   * выбрав блок, а выбирают его здесь (#549).
+   */
+  onUngroupBlock?: (id: string) => void
   onEmpty: () => void
 }
 
@@ -255,8 +301,15 @@ export function endpointEnd(
   return { x, y, halfWidth: DOT.width / 2, halfHeight: DOT.height / 2 }
 }
 
-/** Имя блока в одну строку: длинное вылезает за коробку, а коробка фиксирована. */
-export function short(label: string, limit = 18): string {
+/**
+ * Имя блока в одну строку: длинное вылезает за коробку, а коробка фиксирована.
+ *
+ * Предел в 18 знаков был взят на глаз и на глаз же промахивался: имя из
+ * библиотеки («Гиперполяризующее торможение») занимало 18 знаков кеглем 13 --
+ * шире, чем коробка в 150, -- и наезжало на порты по краям. Теперь 15: с
+ * запасом по ширине и без наездов (#549).
+ */
+export function short(label: string, limit = 15): string {
   return label.length <= limit ? label : label.slice(0, limit - 1).trimEnd() + '…'
 }
 
@@ -279,6 +332,7 @@ export function Canvas({
   onPickEndpoint,
   onMove,
   onToggleBlock,
+  onUngroupBlock,
   onEmpty,
 }: CanvasProps) {
   /** Объект, который сейчас тащат. Пока тащат -- рисуем его из этого состояния. */
@@ -397,55 +451,144 @@ export function Canvas({
             }`}
             onPointerDown={(event) => startDrag(event, block.id, block.position)}
             onClick={() => onPickBlock(block.id)}
+            // Двойной щелчок по коробке -- та же дверь, что и плашка внизу.
+            // Привычка из файловых окон: «двойной щелчок открывает». Кнопку
+            // находят глазами, двойной щелчок -- рукой, и одно другому не
+            // мешает, пока оба ведут в одно и то же место (#549).
+            onDoubleClick={
+              onToggleBlock ? () => onToggleBlock(block.id) : undefined
+            }
           >
             <rect x={x} y={y} width={box.width} height={box.height} rx={10} />
+            {/* У раскрытого блока подпись прижата влево: справа в той же
+                полосе стоит «свернуть», и по центру они встретились бы. У
+                свёрнутого в полосе больше ничего нет -- подпись по центру. */}
             <text
               className="cv-label"
-              x={x + box.width / 2}
-              y={open ? y + 17 : y + 26}
-              textAnchor="middle"
+              x={open ? x + 10 : x + box.width / 2}
+              y={open ? y + 17 : y + 24}
+              textAnchor={open ? 'start' : 'middle'}
             >
-              {short(block.label)}
+              {short(block.label, open ? 16 : 15)}
               <title>
                 {block.label} · {block.id}
               </title>
             </text>
+
+            {/* Счётчик внизу коробки -- он же кнопка «показать, что внутри».
+                Раньше это была справка рядом с безымянным «+»; теперь одно
+                место говорит и сколько внутри, и что туда можно заглянуть.
+                Без `onToggleBlock` заглядывать некуда -- остаётся справка. */}
             {open ? null : (
-              <text
-                className="cv-sub"
-                x={x + box.width / 2}
-                y={y + 44}
-                textAnchor="middle"
+              <g
+                className={`cv-open${onToggleBlock ? '' : ' is-mute'}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onClick={
+                  onToggleBlock
+                    ? (event) => {
+                        event.stopPropagation()
+                        onToggleBlock(block.id)
+                      }
+                    : undefined
+                }
               >
-                {block.counts.neurons} кл. · {block.counts.contacts} св.
-              </text>
+                <rect
+                  className="cv-open-pad"
+                  x={x + PAD.inset}
+                  y={y + box.height - PAD.height - PAD.inset}
+                  width={box.width - PAD.inset * 2}
+                  height={PAD.height}
+                  rx={6}
+                />
+                <text
+                  className="cv-sub"
+                  x={x + box.width / 2}
+                  y={y + box.height - PAD.inset - PAD.height / 2}
+                  dominantBaseline="central"
+                  textAnchor="middle"
+                >
+                  {onToggleBlock ? '▾ ' : ''}
+                  {block.counts.neurons} кл. · {block.counts.contacts} св.
+                </text>
+                {onToggleBlock ? (
+                  <title>
+                    Показать, что внутри: {counted(block.counts.neurons, CELLS)},{' '}
+                    {counted(block.counts.contacts, LINKS)}. К любой из них можно
+                    вести связь мимо портов. Двойной щелчок по блоку — то же самое.
+                  </title>
+                ) : null}
+              </g>
             )}
 
-            {onToggleBlock ? (
+            {open && onToggleBlock ? (
               <g
-                className="cv-open"
+                className="cv-open is-shut"
                 onPointerDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation()
                   onToggleBlock(block.id)
                 }}
               >
-                <circle cx={x + box.width - 14} cy={y + 14} r={7}>
-                  <title>
-                    {open
-                      ? `свернуть ${block.id}`
-                      : `показать, что внутри ${block.id}`}
-                  </title>
-                </circle>
+                <rect
+                  className="cv-open-pad"
+                  x={x + box.width - SHUT_WIDTH - PAD.inset}
+                  y={y + (HEADER - PAD.height) / 2}
+                  width={SHUT_WIDTH}
+                  height={PAD.height}
+                  rx={6}
+                />
                 <text
-                  className="cv-open-sign"
-                  x={x + box.width - 14}
-                  y={y + 14}
+                  className="cv-sub"
+                  x={x + box.width - SHUT_WIDTH / 2 - PAD.inset}
+                  y={y + HEADER / 2}
                   dominantBaseline="central"
                   textAnchor="middle"
                 >
-                  {open ? '−' : '+'}
+                  ▴ свернуть
                 </text>
+                <title>Свернуть {block.id} обратно в коробку с портами</title>
+              </g>
+            ) : null}
+
+            {/* Разбор -- у выбранного блока и только у него: плашка под каждой
+                коробкой превратила бы схему из десяти блоков в список кнопок.
+                Подпись называет последствие («перестанет быть блоком»), а не
+                прячет его за словом «разобрать»: блок после этого не
+                восстанавливается сам -- только отменой (#532, #549). */}
+            {chosen && onUngroupBlock ? (
+              <g
+                className="cv-act"
+                onPointerDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onUngroupBlock(block.id)
+                }}
+              >
+                <rect
+                  x={x}
+                  y={y + box.height + PAD.inset}
+                  width={BREAK_WIDTH}
+                  height={PAD.height}
+                  rx={6}
+                />
+                <text
+                  x={x + BREAK_WIDTH / 2}
+                  y={y + box.height + PAD.inset + PAD.height / 2}
+                  dominantBaseline="central"
+                  textAnchor="middle"
+                >
+                  разобрать на клетки
+                </text>
+                <title>
+                  {block.label} перестанет быть блоком: на холсте останутся{' '}
+                  {counted(block.counts.neurons, CELLS)} и{' '}
+                  {counted(block.counts.contacts, LINKS)} как обычные объекты
+                  проекта — их можно двигать, править и соединять поодиночке.
+                  Отменяется одним шагом.
+                </title>
               </g>
             ) : null}
 
@@ -469,6 +612,10 @@ export function Canvas({
                         waiting ? ' is-waiting' : ''
                       }${lit ? ' is-spiking' : ''}`}
                       onPointerDown={(event) => event.stopPropagation()}
+                      // Двойной щелчок по узлу -- это два щелчка «соединить»,
+                      // а не приказ свернуть блок: иначе начинка исчезала бы
+                      // ровно в тот момент, когда в неё целятся.
+                      onDoubleClick={(event) => event.stopPropagation()}
                       onClick={(event) => {
                         event.stopPropagation()
                         // Порта нет: конец связи -- сам нейрон, и зовут его
@@ -537,11 +684,20 @@ export function Canvas({
                   key={port.name}
                   className={`cv-port is-${port.direction}${waiting ? ' is-waiting' : ''}`}
                   onPointerDown={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation()
                     onPickEndpoint(block.id, port.name)
                   }}
                 >
+                  {/* Порт называет себя портом -- названной автором дверью, --
+                      чтобы не читаться как ещё один нейрон внутри. Узел
+                      внутри говорит о себе своим сетевым именем (`ffi/I`), и
+                      разница между «дверь» и «клетка» должна быть слышна и в
+                      подсказке, а не только в форме значка (#549). */}
+                  <title>
+                    порт {port.name} блока {block.id}: щёлкните, чтобы соединить
+                  </title>
                   <circle cx={point.x} cy={point.y} r={5} />
                   <text
                     className="cv-port-name"
