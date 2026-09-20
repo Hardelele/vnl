@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PatternScreen } from './PatternScreen'
 import type { SessionInfo } from '../../model/session'
 import type { Contact, Glossary, PatternDetail } from '../../model/types'
-import { session } from '../../state/session'
+import { session, whenLeaving } from '../../state/session'
 
 /** Контакт целиком: в ответе сервера у него есть и динамика, и пластичность. */
 function contact(part: Partial<Contact> & { id: string }): Contact {
@@ -263,14 +263,25 @@ function json(body: unknown, status = 200): Response {
 let root: Root | null = null
 let host: HTMLElement
 let back: number
+/** Сколько раз паттерн унесли в песочницу. Экраны переключает оболочка. */
+let carried: number
+/** Куда увели человека. Пусто -- никуда не уводили. */
+let went: string[]
 
 async function mount(): Promise<void> {
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
   back = 0
+  carried = 0
   await act(async () => {
-    root!.render(<PatternScreen id="ffi" onBack={() => (back += 1)} />)
+    root!.render(
+      <PatternScreen
+        id="ffi"
+        onBack={() => (back += 1)}
+        onToSandbox={() => (carried += 1)}
+      />,
+    )
   })
 }
 
@@ -320,6 +331,8 @@ async function click(label: string): Promise<void> {
 beforeEach(() => {
   deleteReply = { body: { deleted: 'ffi' }, status: 200 }
   served = PATTERN
+  went = []
+  whenLeaving((url) => went.push(url))
   serve()
 })
 
@@ -327,6 +340,7 @@ afterEach(() => {
   act(() => root?.unmount())
   host.remove()
   root = null
+  whenLeaving()
   vi.unstubAllGlobals()
 })
 
@@ -387,16 +401,48 @@ describe('удаление паттерна', () => {
   })
 })
 
-describe('чего на карточке больше нет', () => {
-  it('погашенных «Fork» и «В песочницу» не осталось', async () => {
-    // Они стояли `disabled` с подписью «появится вместе с песочницей», а
-    // песочница давно есть. Кнопка, которая никогда не нажимается, врёт про
-    // возможности (#525); дорога в песочницу идёт через её же панель.
+describe('дорога в песочницу (#526)', () => {
+  it('кнопка настоящая: она уносит паттерн, а не стоит погашенной', async () => {
+    // Раньше «В песочницу» стояла `disabled` с подписью «появится вместе с
+    // песочницей», а песочница давно была. Проверяется именно действие:
+    // кнопка, которую видно и которая ничего не делает, -- та же ложь.
+    session.store.setState({ info: SIGNED_IN })
+    await mount()
+
+    const go = button('В песочницу')
+    expect(go?.disabled).toBe(false)
+
+    await click('В песочницу')
+
+    expect(carried).toBe(1)
+    expect(went).toEqual([])
+  })
+
+  it('без входа кнопка на виду и уводит ко входу, а не молчит', async () => {
+    // Не прячется, как «Удалить»: та меняет библиотеку, а эта ведёт в место, и
+    // спрятать её значило бы скрыть, что песочница есть. Ответ на «войти?»
+    // один, поэтому окна с вопросом здесь нет -- сразу переход (#518).
+    session.store.setState({ info: ANONYMOUS })
+    await mount()
+
+    expect(button('В песочницу')?.getAttribute('title')).toContain('вход')
+
+    await click('В песочницу')
+
+    expect(went).toEqual(['/auth/login'])
+    expect(carried).toBe(0)
+  })
+
+  it('кнопки «Fork» нет и не будет', async () => {
+    // Форк значил «правимая копия паттерна», но править тело негде: редактора
+    // схем, кроме песочницы, нет. После #531 и #532 всё это делает та же
+    // дорога -- блок, правка контактов в снимке, «Разобрать на клетки»,
+    // «Сохранить как паттерн». Отдельная кнопка дала бы запись, отличную от
+    // оригинала только именем.
     session.store.setState({ info: SIGNED_IN })
     await mount()
 
     expect(button('Fork')).toBeUndefined()
-    expect(button('В песочницу')).toBeUndefined()
   })
 })
 

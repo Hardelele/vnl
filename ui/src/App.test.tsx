@@ -18,8 +18,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
-import type { Catalog } from './model/types'
+import type { SandboxState } from './model/sandbox'
+import type { Catalog, Pattern, PatternDetail } from './model/types'
 import { catalogController } from './state/catalog'
+import { sandboxController } from './state/sandbox'
 import { session, whenLeaving } from './state/session'
 import { simController } from './state/sim'
 
@@ -52,12 +54,21 @@ const CATALOG: Catalog = {
 const ANONYMOUS = { user: null, login: '/auth/login', logout: null, required: true }
 const NO_LOGIN = { user: null, login: null, required: false }
 
+/** Что спросили у сервера: путь, метод и разобранное тело запроса. */
+let asked: Array<{ path: string; method: string; body: Record<string, unknown> }>
+
 /** Сервер: первый подошедший образец адреса отвечает, остальное -- 404. */
 function serve(routes: Array<[string, unknown, number?]>): void {
+  asked = []
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       const path = String(url)
+      asked.push({
+        path,
+        method: init?.method ?? 'GET',
+        body: init?.body ? JSON.parse(String(init.body)) : {},
+      })
       for (const [mask, body, status] of routes) {
         if (path.startsWith(mask)) {
           return new Response(JSON.stringify(body), {
@@ -130,6 +141,7 @@ beforeEach(() => {
     loading: false,
   })
   simController.store.setState({ id: null, error: null, denied: false, built: null })
+  sandboxController.store.setState({ list: [], project: null, error: null, denied: false })
 })
 
 afterEach(async () => {
@@ -361,5 +373,189 @@ describe('закрытое действие', () => {
     expect(went).toEqual([])
     expect(host.textContent).toContain('нужен вход через Reckue auth')
     expect(loginLinks().map((link) => link.getAttribute('href'))).toContain('/auth/login')
+  })
+})
+
+/**
+ * С карточки паттерна в песочницу (#526).
+ *
+ * Проверяется дорога целиком -- каталог, карточка, песочница, -- потому что
+ * ломается она именно между экранами: кнопка на карточке была, вызов у
+ * песочницы был, а пути от одного к другому не было. Тест на отдельный
+ * обработчик такое пропустил бы.
+ */
+describe('дорога с карточки в песочницу (#526)', () => {
+  const SIGNED_IN = {
+    user: { sub: 'u1', email: 'user@reckue.com', name: null },
+    login: '/auth/login',
+    logout: '/auth/logout',
+    required: true,
+  }
+
+  const DETAIL: PatternDetail = {
+    // Та же запись, что в каталоге: карточка открывается по щелчку по ней.
+    ...(CATALOG.patterns[0] as Pattern),
+    demo: {
+      stimuli: [
+        {
+          id: 'drive',
+          target: { instance: 'IN', section: 'soma', fraction: 0.5 },
+          kind: 'poisson',
+          receptor: 'ampa',
+          amplitude: 1.5,
+          rate: 250,
+          times: [],
+          start: 20,
+          stop: 380,
+        },
+      ],
+      recordings: [],
+      run: { dt: 0.1, duration: 400, level: 'L1', seed: 7 },
+    },
+    body: {
+      name: 'ffi',
+      source: '',
+      run: { dt: 0.1, duration: 400, level: 'L1', seed: 7 },
+      cellTypes: {},
+      neurons: [],
+      contacts: [],
+      modulators: [],
+      stimuli: [],
+      recordings: [],
+    },
+  }
+
+  function sandbox(patch: Partial<SandboxState> = {}): SandboxState {
+    return {
+      schema: 1,
+      id: 's1',
+      name: 'Проба',
+      blocks: [],
+      neurons: [],
+      links: [],
+      stimuli: [],
+      recordings: [],
+      run: { dt: 0.1, duration: 500, level: 'L1', seed: 1 },
+      dirty: false,
+      canUndo: false,
+      problems: [],
+      warnings: [],
+      portHints: [],
+      fingerprint: 'abc',
+      updatedAt: '',
+      ...patch,
+    }
+  }
+
+  /** Проект после перехода: блок стоит, драйв и записи витрины приехали с ним. */
+  const FILLED = sandbox({
+    blocks: [
+      {
+        id: 'ffi',
+        patternId: 'ffi',
+        label: 'Feed-forward inhibition',
+        position: [60, 60],
+        ports: [],
+        counts: { neurons: 3, contacts: 3 },
+        scheme: { neurons: [], edges: [] },
+        cells: [],
+        contacts: [],
+      },
+    ],
+    stimuli: [
+      {
+        id: 'ffi.drive',
+        target: { instance: 'ffi/IN', port: null, section: 'soma', fraction: 0.5 },
+        kind: 'poisson',
+        receptor: 'ampa',
+        rate: 250,
+        amplitude: 1.5,
+        times: [],
+        start: 20,
+        stop: 380,
+      },
+    ],
+    recordings: [
+      {
+        id: 'ffi.r1',
+        target: { instance: 'ffi/IN', port: null, section: 'soma', fraction: 0.5 },
+        var: 'v',
+      },
+    ],
+    run: { dt: 0.1, duration: 400, level: 'L1', seed: 7 },
+    dirty: true,
+    canUndo: true,
+  })
+
+  function served(): void {
+    // Порядок важен: образцы примеряются по очереди, и `/api/sandboxes`
+    // перехватил бы вложенные адреса.
+    serve([
+      ['/api/session', SIGNED_IN],
+      ['/api/catalog', CATALOG],
+      ['/api/patterns/ffi', DETAIL],
+      ['/api/glossary', { schema: 1, receptors: [], point: [], contact: [], port: [] }],
+      ['/api/cells', { schema: 1, cells: [] }],
+      ['/api/sim', { error: 'считать нечего' }, 400],
+      ['/api/sandboxes/s1/blocks', FILLED],
+      ['/api/sandboxes/s1', sandbox()],
+      [
+        '/api/sandboxes',
+        { schema: 1, sandboxes: [{ id: 's1', name: 'Проба', blocks: 0, links: 0, updatedAt: '' }] },
+      ],
+    ])
+  }
+
+  /** Открыть карточку паттерна: щелчок по плитке каталога. */
+  async function openCard(): Promise<void> {
+    const card = host.querySelector('button.card') as HTMLButtonElement | null
+    if (!card) throw new Error('в каталоге нет плитки паттерна')
+    await act(async () => {
+      card.click()
+    })
+  }
+
+  it('паттерн ложится в выбранный проект вместе с витриной карточки', async () => {
+    served()
+    await mount()
+    await openCard()
+    await click('В песочницу')
+
+    // Проект за человека не выбирается: экран показывает список и говорит,
+    // куда ляжет блок. Молча завести новый значило бы насорить в чужом списке.
+    expect(host.textContent).toContain('ляжет в тот проект, который вы откроете')
+    expect(asked.some((call) => call.path.endsWith('/blocks'))).toBe(false)
+
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    const insert = asked.find((call) => call.path.endsWith('/blocks'))
+    expect(insert?.method).toBe('POST')
+    // Витрина едет только этой дорогой и только по явному действию человека.
+    expect(insert?.body).toMatchObject({ pattern: 'ffi', demo: true })
+    // И про это сказано словами: драйв лежит на вкладке «Объекты», куда
+    // человек в этот момент ещё не смотрел.
+    expect(host.textContent).toContain('вместе с витриной карточки')
+    expect(host.textContent).toContain('зерно 7')
+  })
+
+  it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {
+    serve([
+      ['/api/session', ANONYMOUS],
+      ['/api/catalog', CATALOG],
+      ['/api/patterns/ffi', DETAIL],
+      ['/api/glossary', { schema: 1, receptors: [], point: [], contact: [], port: [] }],
+      ['/api/sim', { error: 'считать нечего' }, 400],
+    ])
+    await mount()
+    await openCard()
+    await click('В песочницу')
+
+    expect(went).toEqual(['/auth/login'])
+    // Запрос, которому заранее откажут, не нужен никому: ни серверу, ни тому,
+    // кто уже уходит на вход.
+    expect(asked.some((call) => call.path.includes('/api/sandboxes'))).toBe(false)
   })
 })

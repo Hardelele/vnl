@@ -481,3 +481,32 @@ describe('раскрытие блока', () => {
     )
   })
 })
+
+describe('паттерн с карточки (#526)', () => {
+  it('едет блоком вместе с витриной, одним запросом', async () => {
+    // Одним, а не «вставить блок» плюс несколько «добавить стимул»: витрина
+    // -- часть одного действия человека, и «Отменить» обязано возвращать
+    // проект к тому, что было до перехода, а не оставлять драйв, целящийся в
+    // исчезнувший блок.
+    const addBlock = vi.fn().mockResolvedValue(project({ dirty: true }))
+    const control = await opened({ addBlock })
+
+    await control.bring('ffi')
+
+    expect(addBlock).toHaveBeenCalledWith('s1', 'ffi', expect.anything(), true)
+    expect(addBlock).toHaveBeenCalledTimes(1)
+    expect(control.store.getState().project?.dirty).toBe(true)
+  })
+
+  it('кнопка «+» в панели библиотеки витрину по-прежнему не тащит', async () => {
+    // Два ответа на один вопрос должны расходиться заметно: там просьба «дай
+    // кусок схемы в мою сеть», и чужой драйв в ней спорил бы с собственным
+    // входом.
+    const addBlock = vi.fn().mockResolvedValue(project())
+    const control = await opened({ addBlock })
+
+    await control.insert('ffi')
+
+    expect(addBlock).toHaveBeenCalledWith('s1', 'ffi', expect.anything(), false)
+  })
+})

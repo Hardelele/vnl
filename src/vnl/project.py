@@ -40,6 +40,7 @@ from .patterns import (
     SandboxNeuron,
     SandboxRecording,
     SandboxStimulus,
+    adopt_demo,
     cell_type_at,
     extract_pattern,
     suggest_ports,
@@ -198,9 +199,26 @@ class Project:
         label: str | None = None,
         instance_id: str | None = None,
         position: tuple[float, float] = (0.0, 0.0),
+        demo: bool = False,
     ) -> PatternInstance:
+        """Вставить паттерн блоком. Кладётся снимок, а не ссылка на библиотеку.
+
+        `demo` -- переход с карточки паттерна (#526): вместе с блоком в проект
+        ложится его витрина, настоящими стимулами и записями. Умолчание --
+        «нет»: вставка из панели «Библиотека» кладёт молчащий блок, и это не
+        недоделка, а правило (`adopt_demo` разбирает, почему у двух дорог
+        разный ответ).
+
+        Один шаг истории на всю вставку, а не два: снимок снят до блока, и
+        «Отменить» возвращает проект к тому, что было до перехода, -- вместе с
+        драйвом, записями и параметрами прогона. Разделять их значило бы, что
+        первое «Отменить» оставляет драйв, целящийся в исчезнувший блок.
+        """
         self._remember(f"вставлен паттерн «{pattern.name}»")
-        return self.sandbox.add_instance(pattern, label, instance_id, position)
+        item = self.sandbox.add_instance(pattern, label, instance_id, position)
+        if demo:
+            adopt_demo(self.sandbox, item.id)
+        return item
 
     def add_neuron(
         self,
