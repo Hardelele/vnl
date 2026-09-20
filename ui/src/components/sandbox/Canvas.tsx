@@ -29,6 +29,12 @@
  * узел блока -- то же самое, только имя у него сетевое: `ffi/I`. Фиктивный
  * порт «сома» пришлось бы поддерживать и на сервере, где его нет.
  *
+ * Сторону, с которой провод отходит от фигуры и с которой подходит к ней,
+ * выбирает `lib/wire` по взаимному расположению концов: место клетки на холсте
+ * задаёт человек, и связь справа налево не обязана обходить оба узла снаружи
+ * только потому, что выход нарисован справа (#542). Порт -- исключение: он
+ * нарисован кружком на своём краю коробки, и провод обязан прийти туда.
+ *
  * Подсветка: у свёрнутого блока светится коробка -- внутри кто-то разрядился;
  * у раскрытого светится сам разрядившийся узел, потому что теперь видно кто.
  *
@@ -47,6 +53,7 @@ import { useMemo, useState, type PointerEvent } from 'react'
 
 import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { edgePath, miniature, type MiniEdge, type Miniature } from '../../lib/miniature'
+import { wire, type Point, type WireEnd } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
 import type { Pending, Selection } from '../../state/sandbox'
@@ -75,7 +82,7 @@ const DOT = { width: 74, height: 38 }
 const TIP = 6
 const CAP = 4
 
-export type Point = { x: number; y: number }
+export type { Point }
 
 /** Раскладка начинки каждого раскрытого блока: id блока -> миниатюра. */
 export type Insides = ReadonlyMap<string, Miniature>
@@ -164,54 +171,73 @@ export function innerRef(
 }
 
 /**
- * Где связь касается объекта: у блока -- его порт или внутренний узел, у
- * клетки -- край фигуры.
+ * К чему связь крепится: у блока -- его порт или внутренний узел, у клетки --
+ * её фигура.
  *
- * Край, а не центр: линия, упирающаяся в середину фигуры, перечёркивает
- * подпись, а знак на её конце пропадает под заливкой. Сторона выбирается по
- * ходу связи -- уходит справа, приходит слева.
+ * Отдаётся не точка, а фигура целиком: сторона, с которой провод подходит,
+ * зависит от того, где стоит второй конец, и знать её здесь неоткуда. Выбирает
+ * её `wire`, а край фигуры считает по выбранной стороне. Край, а не центр:
+ * линия, упирающаяся в середину фигуры, перечёркивает подпись, а знак на её
+ * конце пропадает под заливкой.
  *
- * У свёрнутого блока внутреннего узла на холсте нет, и связь приводится к краю
- * коробки. Не прятать: связь в схеме есть и считается, а исчезнувшая линия
+ * У порта сторона задана жёстко: порт нарисован кружком на своём краю коробки
+ * (входы слева, выходы справа), и провод, подошедший с другой стороны,
+ * оторвался бы от него.
+ *
+ * У свёрнутого блока внутреннего узла на холсте нет, и связь приводится к
+ * коробке. Не прятать: связь в схеме есть и считается, а исчезнувшая линия
  * выглядела бы как потерянная правка.
  */
-export function endpointPoint(
+export function endpointEnd(
   endpoint: { instance: string; port: string | null },
-  side: 'source' | 'target',
   blocks: SandboxBlock[],
   neurons: SandboxNeuron[],
   positionOf: (id: string, fallback: [number, number]) => [number, number],
   insides: Insides = new Map(),
-): Point | null {
+): WireEnd | null {
   const inner = innerRef(endpoint.instance, blocks)
   if (inner) {
     const [x, y] = positionOf(inner.block.id, inner.block.position)
     const view = insides.get(inner.block.id)
     const node = view?.nodes.find((item) => item.id === inner.neuron)
     if (!node) {
-      return { x: x + (side === 'source' ? BOX.width : 0), y: y + BOX.height / 2 }
+      return {
+        x: x + BOX.width / 2,
+        y: y + BOX.height / 2,
+        halfWidth: BOX.width / 2,
+        halfHeight: BOX.height / 2,
+      }
     }
     return {
-      x: x + node.x + (side === 'source' ? node.width / 2 : -node.width / 2),
+      x: x + node.x,
       y: y + HEADER + node.y,
+      halfWidth: node.width / 2,
+      halfHeight: node.height / 2,
     }
   }
 
   const block = blocks.find((item) => item.id === endpoint.instance)
   if (block) {
-    return endpoint.port
-      ? portPoint(
-          block,
-          endpoint.port,
-          positionOf(block.id, block.position),
-          insides.has(block.id),
-        )
-      : null
+    if (!endpoint.port) return null
+    const point = portPoint(
+      block,
+      endpoint.port,
+      positionOf(block.id, block.position),
+      insides.has(block.id),
+    )
+    if (!point) return null
+    const port = block.ports.find((item) => item.name === endpoint.port)
+    return {
+      ...point,
+      halfWidth: 0,
+      halfHeight: 0,
+      side: port?.direction === 'in' ? 'left' : 'right',
+    }
   }
   const neuron = neurons.find((item) => item.id === endpoint.instance)
   if (!neuron) return null
   const [x, y] = positionOf(neuron.id, neuron.position)
-  return { x: x + (side === 'source' ? DOT.width / 2 : -DOT.width / 2), y }
+  return { x, y, halfWidth: DOT.width / 2, halfHeight: DOT.height / 2 }
 }
 
 /** Имя блока в одну строку: длинное вылезает за коробку, а коробка фиксирована. */
@@ -643,29 +669,34 @@ function Link({
   selected: boolean
   onPick: () => void
 }) {
-  const start = endpointPoint(link.source, 'source', blocks, neurons, positionOf, insides)
-  const end = endpointPoint(link.target, 'target', blocks, neurons, positionOf, insides)
-  if (!start || !end) return null
+  const from = endpointEnd(link.source, blocks, neurons, positionOf, insides)
+  const to = endpointEnd(link.target, blocks, neurons, positionOf, insides)
+  if (!from || !to) return null
 
   // Связь ведётся кривой: две прямые между соседними блоками сливаются, и
-  // какая куда идёт -- уже не разобрать.
-  const bend = Math.max(30, Math.abs(end.x - start.x) / 2)
-  const path = `M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`
+  // какая куда идёт -- уже не разобрать. Сторону выхода и входа выбирает
+  // `wire` по взаимному расположению концов (#542).
+  const line = wire(from, to)
+  const { end, tip } = line
 
   return (
     <g
       className={`cv-link${link.inhibitory ? ' is-inh' : ''}${selected ? ' is-on' : ''}`}
       onClick={onPick}
     >
-      <path className="cv-hit" d={path} fill="none" />
-      <path className="cv-wire" d={path} fill="none" />
+      {/* Полоса попадания мышью -- та же кривая, что видимая: разойдись они,
+          связь стало бы не выбрать там, где она нарисована. */}
+      <path className="cv-hit" d={line.path} fill="none" />
+      <path className="cv-wire" d={line.path} fill="none" />
       {link.inhibitory ? (
+        // Плашка поперёк хода связи -- как на схеме паттерна и в миниатюре.
+        // Прежде она стояла всегда вертикально: провод и входил всегда слева.
         <line
           className="cv-cap"
-          x1={end.x - 1}
-          y1={end.y - 6}
-          x2={end.x - 1}
-          y2={end.y + 6}
+          x1={end.x - tip.y * 6}
+          y1={end.y + tip.x * 6}
+          x2={end.x + tip.y * 6}
+          y2={end.y - tip.x * 6}
         />
       ) : (
         <circle className="cv-cap" cx={end.x} cy={end.y} r={3} />
