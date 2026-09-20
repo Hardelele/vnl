@@ -24,11 +24,11 @@ import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
 import { canChange, goToLogin, useSession } from '../../state/session'
 import { simController, useSim } from '../../state/sim'
-import { Thumbnail } from '../catalog/Thumbnail'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { ActivityPanel } from './ActivityPanel'
 import { Canvas } from './Canvas'
+import { LibraryRow } from './LibraryRow'
 import { Properties, RunFields, where } from './Properties'
 import { SavePattern } from './SavePattern'
 import './sandbox.css'
@@ -396,32 +396,16 @@ export function SandboxScreen() {
             </div>
           ) : tab === 'library' ? (
             <div className="sb-list">
-              {/* Миниатюра та же, что в каталоге, только мельче: по одному
-                  имени блок в списке из сорока не выбрать, а вторая реализация
-                  «как выглядит схема» разошлась бы с первой незаметно. */}
+              {/* Превью та же миниатюра, что в каталоге: по одному имени блок
+                  в списке из сорока не выбрать, а вторая реализация «как
+                  выглядит схема» разошлась бы с первой незаметно. Размер и
+                  разбор развилок -- в `LibraryRow` (#547). */}
               {(catalog?.patterns ?? []).map((pattern) => (
-                <div className="sb-row" key={pattern.id}>
-                  <span className="sb-mini">
-                    <Thumbnail scheme={pattern.scheme} label={pattern.name} />
-                  </span>
-                  <span className="sb-row-text">
-                    {/* Имя обрезается: панель узкая, а имена паттернов длинные. */}
-                    <span className="sb-row-name" title={pattern.name}>
-                      {pattern.name}
-                    </span>
-                    <span className="mono sb-level">
-                      {pattern.level} · {pattern.counts.neurons} кл.
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    className="sb-plus"
-                    title="Вставить в схему"
-                    onClick={() => void control.insert(pattern.id)}
-                  >
-                    +
-                  </button>
-                </div>
+                <LibraryRow
+                  key={pattern.id}
+                  pattern={pattern}
+                  onInsert={(id) => void control.insert(id)}
+                />
               ))}
               {catalog && catalog.patterns.length === 0 ? (
                 <p className="sb-hint">Библиотека пуста — вставлять нечего.</p>
