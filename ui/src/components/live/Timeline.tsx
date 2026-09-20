@@ -43,7 +43,7 @@ import {
   type ReactNode,
 } from 'react'
 
-import { ticks } from '../../lib/analysis'
+import { scaleMarks, ticks } from '../../lib/analysis'
 import './timeline.css'
 
 /** Внутренняя ширина дорожки: тянется по месту, важна только пропорция. */
@@ -236,7 +236,18 @@ export function Timeline({
     setZoom(1)
   }
 
-  const grid = ticks(duration, Math.min(Math.round(TICKS * zoom), TICKS_MAX))
+  const count = Math.min(Math.round(TICKS * zoom), TICKS_MAX)
+  /** Линии сетки -- на круглых тиках: они размечают поле. */
+  const grid = ticks(duration, count)
+  /**
+   * Подписи -- те же тики плюс конец прогона (#552).
+   *
+   * Ряд 1-2-5 доводит прогон в 340 мс до 300 и там кончается, а дорожки
+   * нарисованы до 340: правый край поля и есть конец. Шкала, кончающаяся
+   * раньше растра, говорит про прогон неправду -- на карточке паттерна это и
+   * читалось как «прогон на 300».
+   */
+  const scale = scaleMarks(duration, count)
 
   /**
    * Куда сдвинуть подпись относительно своей отметки.
@@ -287,7 +298,7 @@ export function Timeline({
             </button>
           </span>
           <span className="tl-marks" ref={marks}>
-            {grid.map((moment) => (
+            {scale.map((moment) => (
               <span
                 key={moment}
                 className="mono tl-mark"

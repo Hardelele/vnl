@@ -2157,3 +2157,171 @@ def test_a_catalog_cell_is_still_put_by_its_own_field(base):
     assert status == 201
     assert [cell["cellType"] for cell in added["neurons"]] == ["sst"]
     assert [item["type"] for item in added["cellTypes"]] == ["sst"]
+
+
+# --- тип проекта уезжает в каталог (#567) ---------------------------------
+
+
+def project_with_own_types(base) -> str:
+    """Проект с типами, которых в каталоге нет: блок разобран на клетки."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup")
+    return sandbox
+
+
+def test_a_project_type_is_put_into_the_catalog(base):
+    """Приёмка #567: `pyr_l5` из разобранного блока ложится в каталог.
+
+    До этого дорога в хранилище была одна -- `vnl cell add` с файлом, а файла
+    у такого типа нет: он живёт внутри песочницы.
+    """
+    sandbox = project_with_own_types(base)
+
+    status, catalog = ask(
+        base,
+        "POST",
+        "/api/cells",
+        {
+            "sandbox": sandbox,
+            "type": "pyr_l5",
+            "name": "Пирамида пятого слоя",
+            "note": "Выход блока: на ней смотрят, дошёл ли сигнал.",
+        },
+    )
+
+    assert status == 201
+    mine = next(cell for cell in catalog["cells"] if cell["id"] == "pyr_l5")
+    assert mine["name"] == "Пирамида пятого слоя"
+    assert mine["note"].startswith("Выход блока")
+    assert mine["builtin"] is False, "палитра пометит её «своя»"
+    assert "Проба" in (mine["source"] or ""), "видно, откуда запись взялась"
+    # Встроенные на месте и стоят первыми: человек ищет глазами по списку.
+    assert [cell["id"] for cell in catalog["cells"]][:5] == [
+        "pyr",
+        "pv",
+        "sst",
+        "vip",
+        "relay",
+    ]
+
+
+def test_a_cell_put_into_the_catalog_is_seen_by_another_project(base):
+    """Приёмка #567: в новом проекте тип виден наравне со встроенными.
+
+    Ради этого задача и заводилась: до неё `target` был заперт в одном
+    проекте, и получить такой же в соседнем можно было, только снова разобрав
+    паттерн.
+    """
+    sandbox = project_with_own_types(base)
+    ask(
+        base,
+        "POST",
+        "/api/cells",
+        {
+            "sandbox": sandbox,
+            "type": "pyr_l5",
+            "name": "Пирамида пятого слоя",
+            "note": "Выход блока.",
+        },
+    )
+
+    _, fresh = ask(base, "POST", "/api/sandboxes", {"name": "Соседний"})
+    status, added = ask(
+        base, "POST", f"/api/sandboxes/{fresh['id']}/neurons", {"cell": "pyr_l5"}
+    )
+
+    assert status == 201, "кладётся полем `cell` -- как любая клетка каталога"
+    assert [cell["cellType"] for cell in added["neurons"]] == ["pyr_l5"]
+
+
+def test_editing_the_threshold_afterwards_leaves_the_catalog_alone(base):
+    """Приёмка #567: в каталог уехала копия, а не ссылка на тип проекта."""
+    sandbox = project_with_own_types(base)
+    ask(
+        base,
+        "POST",
+        "/api/cells",
+        {
+            "sandbox": sandbox,
+            "type": "pyr_l5",
+            "name": "Пирамида пятого слоя",
+            "note": "Выход блока.",
+        },
+    )
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    victim = next(
+        cell for cell in project["neurons"] if cell["cellType"] == "pyr_l5"
+    )
+
+    ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/objects/{victim['id']}/cells/pyr_l5",
+        {"vThreshold": -41.0},
+    )
+
+    _, catalog = ask(base, "GET", "/api/cells")
+    kept = next(cell for cell in catalog["cells"] if cell["id"] == "pyr_l5")
+    assert kept["pointModel"]["vThreshold"] == pytest.approx(-50.0)
+
+
+def test_a_catalog_cell_is_refused_without_a_name_or_a_note(base):
+    sandbox = project_with_own_types(base)
+
+    status, answer = ask(
+        base, "POST", "/api/cells", {"sandbox": sandbox, "type": "pyr_l5"}
+    )
+    assert status == 400
+    assert "имя" in answer["error"]
+
+    status, answer = ask(
+        base,
+        "POST",
+        "/api/cells",
+        {"sandbox": sandbox, "type": "pyr_l5", "name": "Пирамида"},
+    )
+    assert status == 400
+    assert "объяснение" in answer["error"]
+
+
+def test_a_builtin_name_is_not_overridden_until_it_is_confirmed(base):
+    """Своя клетка перекрывает встроенную по-прежнему -- но не молча."""
+    sandbox = project_with_own_types(base)
+    body = {
+        "sandbox": sandbox,
+        "type": "pv",
+        "name": "Свой PV",
+        "note": "Из этого блока.",
+    }
+
+    status, answer = ask(base, "POST", "/api/cells", body)
+    assert status == 400
+    assert "Корзинчатый интернейрон PV" in answer["error"], "сказано, что уже лежит"
+
+    status, catalog = ask(base, "POST", "/api/cells", {**body, "replace": True})
+    assert status == 201
+    mine = next(cell for cell in catalog["cells"] if cell["id"] == "pv")
+    assert mine["name"] == "Свой PV"
+    assert mine["builtin"] is False
+    assert len([cell for cell in catalog["cells"] if cell["id"] == "pv"]) == 1
+
+
+def test_a_type_the_project_does_not_have_cannot_be_put_into_the_catalog(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Пустой"})
+
+    status, answer = ask(
+        base,
+        "POST",
+        "/api/cells",
+        {
+            "sandbox": project["id"],
+            "type": "target",
+            "name": "Мишень",
+            "note": "нет такого типа",
+        },
+    )
+
+    assert status == 400
+    assert "target" in answer["error"]

@@ -16,7 +16,8 @@ import { useSyncExternalStore } from 'react'
 
 import { layeredPlaces } from '../lib/miniature'
 import { OfflineError, isDenied } from '../model/catalog'
-import { loadCells } from '../model/cells'
+import { adoptCell, loadCells } from '../model/cells'
+import type { CellDraft } from '../model/cells'
 import { NO_GLOSSARY, loadGlossary } from '../model/glossary'
 import {
   addBlock,
@@ -170,6 +171,16 @@ export interface SandboxView {
    * ли оно вообще.
    */
   saved: { id: string; name: string; levelName: string } | null
+  /**
+   * Что получилось у последнего «в каталог»: имя записи и её идентификатор (#567).
+   *
+   * Держится здесь по той же причине, что и `saved`: каталог пополняется, а
+   * проект остаётся прежним, и по экрану песочницы не видно, случилось ли
+   * что-нибудь. Палитра слева при этом меняется -- в ней появляется строка, --
+   * но вкладка может быть открыта другая, да и найти новую строку среди
+   * знакомых глазами не всегда просто.
+   */
+  adopted: { id: string; name: string } | null
 }
 
 const EMPTY: SandboxView = {
@@ -186,6 +197,7 @@ const EMPTY: SandboxView = {
   offline: false,
   denied: false,
   saved: null,
+  adopted: null,
 }
 
 export interface SandboxPorts {
@@ -195,6 +207,7 @@ export interface SandboxPorts {
   open: typeof openSandbox
   addBlock: typeof addBlock
   cells: typeof loadCells
+  adopt: typeof adoptCell
   glossary: typeof loadGlossary
   addNeuron: typeof addNeuron
   addNeuronOfType: typeof addNeuronOfType
@@ -228,6 +241,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   open: openSandbox,
   addBlock,
   cells: loadCells,
+  adopt: adoptCell,
   glossary: loadGlossary,
   addNeuron,
   addNeuronOfType,
@@ -851,9 +865,45 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       }
     },
 
+    /**
+     * Положить тип клетки проекта в каталог (#567).
+     *
+     * Проект не меняется -- ни одного поля: в каталог уезжает копия типа, и
+     * связи между ней и проектом после этого нет. Поэтому состояние песочницы
+     * здесь и не заменяется, в отличие от всех операций над холстом: заменить
+     * его ответом о каталоге было бы неправдой о том, что случилось.
+     *
+     * Заменяется палитра -- целиком тем списком, который прислал сервер.
+     * Дописать новую строку руками было бы дешевле, но порядок каталога
+     * держит `cells.catalog` (встроенные первыми, своя перекрывает встроенную
+     * по идентификатору), и вторая реализация этого порядка разошлась бы с
+     * первой ровно на перекрытии -- то есть на том случае, ради которого
+     * `replace` и заводился.
+     */
+    async putCellIntoCatalog(draft: CellDraft): Promise<boolean> {
+      const project = store.getState().project
+      if (!project) return false
+      store.setState({ busy: true, adopted: null })
+      try {
+        const cells = await io.adopt(project.id, draft)
+        store.setState({
+          busy: false,
+          error: null,
+          offline: false,
+          denied: false,
+          cells,
+          adopted: { id: draft.type, name: draft.name.trim() },
+        })
+        return true
+      } catch (reason) {
+        fail(reason)
+        return false
+      }
+    },
+
     /** Убрать отметку об удачном сохранении: форму открывают заново. */
     forgetSaved(): void {
-      store.setState({ saved: null })
+      store.setState({ saved: null, adopted: null })
     },
   }
 }

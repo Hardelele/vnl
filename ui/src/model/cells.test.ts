@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { loadCells } from './cells'
+import { adoptCell, loadCells } from './cells'
 import { addNeuron, moveObject, setCellParams } from './sandbox'
 import type { CellKind } from './types'
 
@@ -103,5 +103,56 @@ describe('клетка на холсте', () => {
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/sandboxes/s1/move')
     expect(JSON.parse(String(init.body))).toEqual({ id: 'E', position: [220, 90] })
+  })
+})
+
+describe('тип проекта уезжает в каталог (#567)', () => {
+  it('кладётся по адресу каталога и называет проект, а не мембрану', async () => {
+    const fetcher = vi.fn().mockResolvedValue(reply({ schema: 1, cells: [PV] }))
+    vi.stubGlobal('fetch', fetcher)
+
+    await adoptCell('s1', {
+      type: 'target',
+      name: 'Клетка-мишень',
+      note: 'куда сходится схема',
+    })
+
+    const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
+    // Тот же адрес, что у чтения: список клеток и место, куда клетку кладут,
+    // -- одна вещь.
+    expect(url).toBe('/api/cells')
+    expect(init.method).toBe('POST')
+    // Мембраны в теле нет: её сервер возьмёт из названного проекта. Иначе в
+    // каталог можно было бы положить клетку, которой в проекте не стоит.
+    expect(JSON.parse(String(init.body))).toEqual({
+      sandbox: 's1',
+      type: 'target',
+      name: 'Клетка-мишень',
+      note: 'куда сходится схема',
+      replace: false,
+    })
+  })
+
+  it('подтверждённое перекрытие уходит отдельным полем', async () => {
+    const fetcher = vi.fn().mockResolvedValue(reply({ schema: 1, cells: [PV] }))
+    vi.stubGlobal('fetch', fetcher)
+
+    await adoptCell('s1', {
+      type: 'pv',
+      name: 'Свой PV',
+      note: 'из этого блока',
+      replace: true,
+    })
+
+    const [, init] = fetcher.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).replace).toBe(true)
+  })
+
+  it('возвращает весь каталог: порядок списка держит сервер', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ schema: 1, cells: [PV] })))
+
+    const cells = await adoptCell('s1', { type: 'target', name: 'М', note: 'н' })
+
+    expect(cells.map((cell) => cell.id)).toEqual(['pv'])
   })
 })

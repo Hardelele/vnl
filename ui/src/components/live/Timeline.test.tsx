@@ -21,7 +21,11 @@ let host: HTMLElement
 let seeks: number[] = []
 
 async function mount(
-  extra: { onSelect?: (name: string) => void; onSeek?: (time: number) => void } = {},
+  extra: {
+    onSelect?: (name: string) => void
+    onSeek?: (time: number) => void
+    duration?: number
+  } = {},
 ): Promise<void> {
   host = document.createElement('div')
   document.body.append(host)
@@ -228,5 +232,25 @@ describe('масштаб времени', () => {
     wheel(-600, 200, true)
 
     expect(marks()).toBeGreaterThan(before)
+  })
+})
+
+describe('шкала времени', () => {
+  const marks = () => [...host.querySelectorAll('.tl-mark')].map((m) => m.textContent)
+
+  it('называет конец прогона, а не обрывается на круглом тике', async () => {
+    // Приёмка #552: прогон 340 мс, круглый шаг 50 доводит до 300 -- и шкала
+    // выглядела так, будто прогон на 300 и кончился, хотя дорожки нарисованы
+    // до самого края поля.
+    await mount({ duration: 340 })
+
+    expect(marks()).toEqual(['0', '50', '100', '150', '200', '250', '300', '340'])
+  })
+
+  it('на круглом прогоне лишней подписи не заводит', async () => {
+    await mount({ duration: 400 })
+
+    expect(marks().at(-1)).toBe('400')
+    expect(marks().filter((mark) => mark === '400')).toHaveLength(1)
   })
 })
