@@ -66,7 +66,7 @@ from . import __version__, api, auth, cells, ir, protocols
 from .catalog import Query
 from .compose import compose
 from .index import Index, IndexUnavailable
-from .live import Pool, SessionError
+from .live import Pool, PoolFull, SessionError
 from .patterns import (
     DRAFT_LEVEL,
     LEVEL_NAMES,
@@ -180,6 +180,9 @@ class Api:
             # Паттерны рядом считаются все: библиотека одна на всех нарочно.
             "sandboxes": len(self._my_sandboxes()),
             "simulations": len(self.pool),
+            # Предел рядом с числом: «три симуляции» без него не говорит,
+            # близко ли стенд к отказу открывать новые (#517).
+            "simulationsLimit": self.pool.limit,
             "index": (
                 self.index.state(len(self.store.patterns()))
                 if self.index
@@ -397,9 +400,9 @@ class Api:
         """
         session = self.pool.get(sim_id)
         if session.origin != "pattern" and not self._mine(session.owner):
-            raise SessionError(
-                f"сессии {sim_id!r} нет: она закрыта или не открывалась"
-            )
+            # Текст берётся у пула, а не пишется здесь второй раз: разойдись
+            # эти две строки, и по ответу стало бы видно, что сессия есть.
+            raise SessionError(self.pool.no_such(sim_id))
         return session
 
     def sim(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
@@ -1517,6 +1520,11 @@ class Handler(BaseHTTPRequestHandler):
                 payload = route.call(*arguments)
         except (StoreError, SessionError) as exc:
             self._send(404, {"error": str(exc)})
+        except PoolFull as exc:
+            # 503, а не 404 и не 400: запрос верный, просто сейчас на него нет
+            # места. Такой ответ интерфейс показывает как «попробуйте позже», а
+            # не как «схема сломалась» (#517).
+            self._send(503, {"error": str(exc)})
         except (PatternError, ValueError) as exc:
             # Неготовая схема и неверный запрос -- нормальный исход, а не сбой:
             # такую причину интерфейс показывает рядом с объектом (#481).
