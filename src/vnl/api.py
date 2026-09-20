@@ -628,6 +628,10 @@ def glossary_payload() -> dict[str, Any]:
                 "reversal": receptor.reversal,
                 "tauDecay": receptor.tau_decay,
                 "inhibitory": ir.is_inhibitory_receptor(name),
+                # Зависимость от потенциала -- не оттенок, а другой знак
+                # нелинейности (#498), и знать о ней панель свойств обязана:
+                # веса у NMDA подбираются иначе, чем у AMPA.
+                "voltageDependent": receptor.voltage_dependent,
             }
             for name, receptor in ir.RECEPTORS.items()
         ],
@@ -667,7 +671,12 @@ def glossary_payload() -> dict[str, Any]:
         # же словом. Свой список в браузере разошёлся бы с этим молча --
         # подписи ни на один прогон не влияют.
         "recorded": [
-            {"id": name, "name": variable.name, "unit": variable.unit}
+            {
+                "id": name,
+                "name": variable.name,
+                "unit": variable.unit,
+                "note": variable.note,
+            }
             for name, variable in ir.RECORDED.items()
         ],
         # Роды сенсора и мотора -- тем же списком и с теми же полями, что роды

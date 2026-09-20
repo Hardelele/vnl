@@ -107,7 +107,7 @@ def _mech_name(receptor: str, reversal: float) -> str:
     return sanitize(f"{receptor}_e{sign}{abs(reversal):g}")
 
 
-def _syn_mech_params(model: ir.Model) -> dict:
+def _syn_mech_params(model: ir.Model) -> tuple[dict, list[str]]:
     used = {(contact.receptor, contact.reversal) for contact in model.contacts}
     used |= {
         (stim.receptor, stim.reversal)
@@ -115,15 +115,33 @@ def _syn_mech_params(model: ir.Model) -> dict:
         if stim.kind != "current"
     }
     out: dict = {}
+    losses: list[str] = []
     for receptor, reversal in sorted(used):
-        tau_decay = ir.RECEPTORS[receptor].tau_decay
+        kind = ir.RECEPTORS[receptor]
         out[_mech_name(receptor, reversal)] = {
             "mod": "Exp2Syn",
-            "tau1": max(0.1, tau_decay / 10.0),
-            "tau2": tau_decay,
+            "tau1": max(0.1, kind.tau_decay / 10.0),
+            "tau2": kind.tau_decay,
             "e": reversal,
         }
-    return out
+        if kind.voltage_dependent:
+            # `Exp2Syn` линеен: проводимость в нём не зависит от потенциала.
+            # Значит экспортированный NMDA -- это медленная AMPA, то есть
+            # ровно та ловушка, из-за которой задача #498 и делалась, только
+            # теперь на L2. Выбросить рецептор из скрипта нельзя (сеть станет
+            # другой сильнее), подменить механизм нечем -- своего mod-файла у
+            # нас нет, -- поэтому единственный честный ход: сказать вслух, что
+            # скрипт считает другую сеть, и назвать, чего именно в нём не будет.
+            losses.append(
+                f"рецептор {receptor}: зависимость проводимости от потенциала "
+                f"(блок магнием, [Mg] = {kind.mg:g} мМ) переносится как "
+                f"линейный Exp2Syn -- в NEURON этот механизм её не знает. В "
+                f"скрипте не будет ни порога по числу совпавших входов, ни "
+                f"плато после снятия входа: NMDA там работает как медленная "
+                f"AMPA. Для настоящего поведения нужен свой mod-механизм с "
+                f"множителем Джара--Стивенса"
+            )
+    return out, losses
 
 
 def _conn_params(model: ir.Model) -> tuple[dict, list[str]]:
@@ -297,6 +315,7 @@ def export(model: ir.Model) -> ExportReport:
     cell_params, losses_cells = _cell_params(model)
     conn_params, losses_conns = _conn_params(model)
     stim_sources, stim_targets, losses_stims = _stim_params(model)
+    syn_mechs, losses_mechs = _syn_mech_params(model)
 
     pop_params = {
         instance.id: {
@@ -326,7 +345,7 @@ netParams = specs.NetParams()
 
 netParams.cellParams = {cell_params!r}
 netParams.popParams = {pop_params!r}
-netParams.synMechParams = {_syn_mech_params(model)!r}
+netParams.synMechParams = {syn_mechs!r}
 netParams.connParams = {conn_params!r}
 netParams.stimSourceParams = {stim_sources!r}
 netParams.stimTargetParams = {stim_targets!r}
@@ -348,5 +367,11 @@ if __name__ == "__main__":
 
     return ExportReport(
         script=body,
-        losses=losses_cells + losses_conns + losses_stims + _border_losses(model),
+        losses=(
+            losses_cells
+            + losses_mechs
+            + losses_conns
+            + losses_stims
+            + _border_losses(model)
+        ),
     )
