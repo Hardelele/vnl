@@ -1402,3 +1402,39 @@ def test_the_whole_list_of_what_answers_without_login_fits_on_one_screen(tmp_pat
         ("POST", r"^/api/sim/([^/]+)/seek$"),
         ("DELETE", r"^/api/sim/([^/]+)$"),
     }
+
+
+def test_a_link_drawn_from_an_inhibitory_cell_comes_out_inhibitory(base):
+    """Интерфейс рецептор не шлёт -- значит, его выбирает сервер (#540).
+
+    Через HTTP целиком, потому что проверяется именно то, чем пользуется
+    холст: тело запроса на связь состоит из двух концов и больше ни из чего.
+    """
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Тормоз"})
+    sandbox = project["id"]
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "sst"})
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr"})
+
+    _, linked = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/links",
+        {"source": {"instance": "sst"}, "target": {"instance": "pyr"}},
+    )
+
+    link = linked["links"][0]
+    assert (link["receptor"], link["inhibitory"]) == ("gaba_a", True)
+    assert not [note for note in linked["warnings"] if link["id"] in note]
+
+    # Рецептор остаётся свободным: правка проходит, но о споре сказано вслух.
+    _, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/links/{link['id']}",
+        {"receptor": "ampa"},
+    )
+    assert changed["links"][0]["receptor"] == "ampa"
+    assert changed["problems"] == [], "запрета нет: нарочные сочетания бывают"
+    assert any(
+        "тормозный" in note and "ampa" in note for note in changed["warnings"]
+    ), changed["warnings"]

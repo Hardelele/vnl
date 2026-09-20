@@ -7,6 +7,7 @@ import pytest
 from vnl import ir
 from vnl.patterns import (
     Endpoint,
+    Link,
     Pattern,
     PatternError,
     Port,
@@ -862,3 +863,86 @@ def test_ungroup_refuses_what_is_not_a_block(project, ffi):
     with pytest.raises(PatternError, match="нет блока"):
         project.ungroup("X")
     assert len(project.history) == steps, "отказ не оставляет шага отмены"
+
+
+# --- рецептор по медиатору источника (#540) --------------------------------
+
+
+def inhibitory_cell(id: str = "sst") -> ir.CellType:
+    return ir.CellType(id=id, tags=("inhibitory",), transmitter="gaba")
+
+
+def excitatory_cell(id: str = "relay") -> ir.CellType:
+    return ir.CellType(id=id, tags=("excitatory",), transmitter="glutamate")
+
+
+def test_a_link_from_an_inhibitory_cell_is_inhibitory(project):
+    """Связь от ГАМК-клетки создаётся тормозной, а не быстрой возбуждающей.
+
+    Ровно та ловушка, из-за которой заведена #540: человек вёл связь от
+    клетки, которую холст рисует красной и квадратной, и получал `ampa`.
+    """
+    project.add_neuron("SST", inhibitory_cell())
+    project.add_neuron("PYR", excitatory_cell("pyr"))
+
+    link = project.connect(Endpoint("SST"), Endpoint("PYR"))
+
+    assert link.receptor == "gaba_a"
+    assert not [
+        note for note in project.warnings() if link.id in note
+    ], "умолчание не спорит само с собой"
+
+
+def test_a_link_from_an_excitatory_cell_stays_ampa(project):
+    project.add_neuron("IN", excitatory_cell())
+    project.add_neuron("PYR", excitatory_cell("pyr"))
+
+    assert project.connect(Endpoint("IN"), Endpoint("PYR")).receptor == "ampa"
+
+
+def test_an_unknown_transmitter_gets_ampa(project):
+    """Медиатора нет -- угадывать сверх таблицы нечего."""
+    project.add_neuron("X", ir.CellType(id="mystery"))
+    project.add_neuron("Y", ir.CellType(id="mystery2"))
+
+    assert project.connect(Endpoint("X"), Endpoint("Y")).receptor == "ampa"
+
+
+def test_the_named_receptor_wins(project):
+    """Умолчание -- не запрет: `gaba_b` вместо `gaba_a` осмысленный выбор."""
+    project.add_neuron("SST", inhibitory_cell())
+    project.add_neuron("PYR", excitatory_cell("pyr"))
+
+    link = project.connect(Endpoint("SST"), Endpoint("PYR"), receptor="gaba_b")
+
+    assert link.receptor == "gaba_b"
+
+
+def test_a_link_from_a_block_port_asks_the_cell_behind_it(project, ffi):
+    """Порт блока -- ярлык внутренней точки, и медиатор спрашивается у неё.
+
+    У `ffi` выход смотрит на пирамиду (`E`), поэтому связь возбуждающая; а
+    связь из корзинчатой клетки того же блока (`a/I`) -- тормозная, хотя
+    объект холста для обеих один и тот же.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+    project.add_neuron("X", excitatory_cell())
+
+    assert project.connect(Endpoint("a", "out"), Endpoint("X")).receptor == "ampa"
+    assert project.connect(Endpoint("a/I"), Endpoint("X")).receptor == "gaba_a"
+
+
+def test_a_saved_sandbox_is_not_rewritten(project):
+    """Старая связь остаётся как есть: про неё говорит предупреждение.
+
+    Умолчание касается только создаваемой связи. Переписать чужую схему задним
+    числом -- значит поменять результат прогона, который человек уже видел.
+    """
+    project.add_neuron("SST", inhibitory_cell())
+    project.add_neuron("PYR", excitatory_cell("pyr"))
+    project.sandbox.links.append(
+        Link("old", Endpoint("SST"), Endpoint("PYR"), receptor="ampa")
+    )
+
+    assert project.sandbox.links[0].receptor == "ampa"
+    assert any("old" in note for note in project.warnings()), project.warnings()

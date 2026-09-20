@@ -946,6 +946,42 @@ def resolve_endpoint(sandbox: Sandbox, endpoint: Endpoint) -> ir.Site:
     )
 
 
+def cell_type_at(sandbox: Sandbox, endpoint: Endpoint) -> ir.CellType | None:
+    """Тип клетки, на которой стоит этот конец связи (#540).
+
+    Нужен затем, чтобы рецептор новой связи выбирался по медиатору источника:
+    вопрос «чем эта клетка говорит» задаётся до сборки сети, в момент
+    соединения, когда собранной модели ещё нет.
+
+    Адреса все три (порт блока, отдельная клетка, узел внутри блока) сводятся
+    к имени собранной сети через `resolve_endpoint` -- разбирать их здесь
+    заново значило бы завести второе понимание того, что такое конец связи.
+    Дальше имя либо содержит приставку блока, и тип берётся из его снимка,
+    либо не содержит, и тип берётся из словаря песочницы.
+
+    `None` -- честный ответ, а не сбой: конец связи может указывать на
+    несуществующий блок или на клетку с потерянным типом. Отказываться здесь
+    нельзя -- про сломанный адрес скажет `compose`, рядом с остальными
+    замечаниями по схеме, а не исключением из-под создания связи.
+    """
+    try:
+        site = resolve_endpoint(sandbox, endpoint)
+    except PatternError:
+        return None
+
+    owner, _, inner = site.instance.partition(NESTED)
+    if inner:
+        try:
+            body = sandbox.instance(owner).snapshot.body
+        except PatternError:
+            return None
+        neuron = body.instances.get(inner)
+        return body.cell_types.get(neuron.cell_type) if neuron else None
+
+    own = sandbox.neurons.get(site.instance)
+    return sandbox.cell_types.get(own.cell_type) if own else None
+
+
 def _prefixed_contact(contact: ir.Contact, prefix: str) -> ir.Contact:
     return replace(
         copy.deepcopy(contact),

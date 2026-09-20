@@ -33,6 +33,34 @@ def is_inhibitory_receptor(receptor: str) -> bool:
     return receptor in INHIBITORY_RECEPTORS
 
 
+#: Медиатор источника -> рецептор, который на нём стоит по умолчанию (#540).
+#:
+#: Таблица лежит здесь, рядом с самими рецепторами, а не в обработчике
+#: маршрута: «на чём сидит ГАМК» -- такое же предметное знание, как реверсал, и
+#: спрашивают его песочница, CLI и Claude через MCP. Вторая копия в браузере
+#: разошлась бы с этой незаметно -- ровно по той причине, по которой
+#: тормозность клетки уже считается здесь, а не в интерфейсе.
+TRANSMITTER_RECEPTORS: dict[str, str] = {
+    "gaba": "gaba_a",
+    "glutamate": "ampa",
+    "acetylcholine": "nicotinic",
+}
+
+#: Чем кончается связь от клетки, про медиатор которой ничего не известно.
+#: То же умолчание, что у `Contact.receptor`: угадывать сверх таблицы нечего,
+#: а молча выбрать торможение «на всякий случай» было бы ещё одной ложью.
+FALLBACK_RECEPTOR = "ampa"
+
+
+def default_receptor(transmitter: str | None) -> str:
+    """Рецептор новой связи от источника с таким медиатором.
+
+    Это умолчание, а не запрет: `gaba_b` вместо `gaba_a` или `nmda` вместо
+    `ampa` -- осмысленный выбор, и правку рецептора руками ничто не отменяет.
+    """
+    return TRANSMITTER_RECEPTORS.get(transmitter or "", FALLBACK_RECEPTOR)
+
+
 @dataclass(frozen=True)
 class RecordedVariable:
     """Что за величина пишется и как её читать.
@@ -83,6 +111,32 @@ def parse_trace_key(key: str) -> tuple[str, str, str]:
 def is_inhibitory_cell(cell_type: "CellType") -> bool:
     """Тормозная ли клетка. Решается в одном месте, иначе разъедется."""
     return "inhibitory" in cell_type.tags or cell_type.transmitter == "gaba"
+
+
+def receptor_disagrees(cell_type: "CellType", receptor: str) -> bool:
+    """Спорит ли рецептор связи с тем, чем источник умеет говорить (#540).
+
+    Спор -- это разный знак: тормозная клетка через возбуждающий рецептор
+    подстёгивает цель вместо того, чтобы её гасить, и наоборот. Сочетание не
+    запрещается -- нарочные бывают, -- но и молчать о нём нельзя: человек
+    видит на холсте красную квадратную клетку и вправе считать, что связь от
+    неё тормозит.
+
+    Полярность обеих сторон спрашивается у тех же двух функций, что решают её
+    для всего остального (`is_inhibitory_cell`, `is_inhibitory_receptor`):
+    третьего определения «тормозный» здесь не заводится.
+
+    Молчание там, где судить не по чему, намеренное. Медиатора нет и тегов нет
+    -- значит, про клетку не сказано, возбуждающая она или тормозная, и
+    объявлять её возбуждающей по умолчанию значило бы ругаться на схему за то,
+    чего в ней не написано.
+    """
+    known = cell_type.transmitter in TRANSMITTER_RECEPTORS or bool(
+        {"inhibitory", "excitatory"}.intersection(cell_type.tags)
+    )
+    if not known or receptor not in RECEPTORS:
+        return False
+    return is_inhibitory_cell(cell_type) != is_inhibitory_receptor(receptor)
 
 
 #: Виды точечной модели, которые симулятор действительно считает. Список
