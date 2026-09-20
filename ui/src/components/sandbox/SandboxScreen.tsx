@@ -58,12 +58,36 @@ export interface SandboxScreenProps {
   bring?: string | null
   /** Положили -- просьба исполнена, и повторять её при следующем кадре незачем. */
   onBrought?: () => void
+  /**
+   * Открыть карточку паттерна (#566).
+   *
+   * Экраны переключает оболочка -- она одна знает, что такое «экран», -- а
+   * песочница только называет паттерн. Ровно так же устроена дорога в
+   * обратную сторону (#526): карточка не вставляет блок сама, а говорит
+   * оболочке, что несёт.
+   */
+  onOpenPattern?: (id: string) => void
+  /**
+   * С какой вкладки левой панели открыться.
+   *
+   * Нужна ровно на возврат с карточки: человек ушёл туда из панели
+   * «Библиотека» и возвращается в неё же, а не на «Клетки», с которых экран
+   * начинается обычно. Начальное значение, а не управляемое: дальше вкладку
+   * выбирает человек, и отбирать у него этот выбор после каждой перерисовки
+   * было бы хуже, чем не угадывать вовсе.
+   */
+  startTab?: LeftTab
 }
 
-export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
+export function SandboxScreen({
+  bring = null,
+  onBrought,
+  onOpenPattern,
+  startTab,
+}: SandboxScreenProps) {
   const control = sandboxController
   const sim = simController
-  const [tab, setTab] = useState<LeftTab>('cells')
+  const [tab, setTab] = useState<LeftTab>(startTab ?? 'cells')
   /** Открыта ли форма сохранения. Имя и порты спрашивают до записи. */
   const [saving, setSaving] = useState(false)
   /**
@@ -706,6 +730,12 @@ export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
                   key={pattern.id}
                   pattern={pattern}
                   onInsert={(id) => pick(() => void control.insert(id))}
+                  // Уход на карточку ничего не сохраняет и ничего не теряет:
+                  // проект живёт в состоянии песочницы и в открытом `Project`
+                  // на сервере -- вместе с историей отмены и несохранёнными
+                  // правками. Экран песочницы при этом снимается, поэтому
+                  // ящик закрывать не нужно -- его не станет вместе с ним.
+                  onOpen={onOpenPattern ? (id) => onOpenPattern(id) : undefined}
                 />
               ))}
               {catalog && catalog.patterns.length === 0 ? (

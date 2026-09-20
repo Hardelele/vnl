@@ -39,8 +39,17 @@
  * Подсказки на имени поэтому нет: показывать во всплывающем окне ровно то,
  * что и так написано рядом, -- лишний шум.
  *
- * Вставляет по-прежнему кнопка «+», и превью её щелчок не перехватывает: само
- * превью -- картинка без обработчиков.
+ * В строке два намерения, и они разведены (#566). Превью с именем открывают
+ * карточку паттерна -- посмотреть, что это за схема: числа прогона, связи,
+ * драйв (#546). «+» вставляет блок и с экрана не уводит: это главное действие
+ * панели, и отнимать его у одного нажатия нельзя.
+ *
+ * Разведены они так, чтобы разницу было видно до щелчка, а не после. Открытие
+ * -- это вся площадь строки, и она подсвечивается под курсором целиком, как
+ * любая строка-ссылка; «+» остаётся отдельной кнопкой поверх неё, с рамкой и
+ * подложкой, то есть читается как кнопка, а не как часть строки. Вариант
+ * «открывает только имя» отвергнут: цель в полторы строки текста -- это
+ * промах мышью, а на касании промах ещё и незаметный.
  */
 
 import { Thumbnail } from '../catalog/Thumbnail'
@@ -49,11 +58,19 @@ import type { Pattern } from '../../model/types'
 export interface LibraryRowProps {
   pattern: Pattern
   onInsert: (id: string) => void
+  /**
+   * Открыть карточку паттерна.
+   *
+   * Необязательна: строка живёт и там, где уводить с экрана некуда, -- а
+   * погашенная строка-ссылка выглядела бы поломкой. Без неё строка остаётся
+   * такой, какой была до #566: превью, имя и «+».
+   */
+  onOpen?: (id: string) => void
 }
 
-export function LibraryRow({ pattern, onInsert }: LibraryRowProps) {
-  return (
-    <div className="sb-row sb-lib">
+export function LibraryRow({ pattern, onInsert, onOpen }: LibraryRowProps) {
+  const body = (
+    <>
       <span className="sb-preview">
         {/* Подпись для чтения не глазами говорит про состав, а не повторяет
             имя: имя написано тут же строкой ниже и будет прочитано дважды. */}
@@ -62,22 +79,36 @@ export function LibraryRow({ pattern, onInsert }: LibraryRowProps) {
           label={`схема: ${pattern.counts.neurons} кл., ${pattern.counts.contacts} св.`}
         />
       </span>
-      <span className="sb-lib-line">
-        <span className="sb-row-text">
-          <span className="sb-row-name sb-lib-name">{pattern.name}</span>
-          <span className="mono sb-level">
-            {pattern.level} · {pattern.counts.neurons} кл.
-          </span>
+      <span className="sb-row-text">
+        <span className="sb-row-name sb-lib-name">{pattern.name}</span>
+        <span className="mono sb-level">
+          {pattern.level} · {pattern.counts.neurons} кл.
         </span>
+      </span>
+    </>
+  )
+  return (
+    <div className="sb-row sb-lib">
+      {onOpen ? (
         <button
           type="button"
-          className="sb-plus"
-          title="Вставить в схему"
-          onClick={() => onInsert(pattern.id)}
+          className="sb-lib-open"
+          title={`Открыть карточку: ${pattern.name}`}
+          onClick={() => onOpen(pattern.id)}
         >
-          +
+          {body}
         </button>
-      </span>
+      ) : (
+        <span className="sb-lib-open is-flat">{body}</span>
+      )}
+      <button
+        type="button"
+        className="sb-plus sb-lib-plus"
+        title="Вставить в схему — не уходя с экрана"
+        onClick={() => onInsert(pattern.id)}
+      >
+        +
+      </button>
     </div>
   )
 }

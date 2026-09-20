@@ -74,11 +74,27 @@ import './pattern.css'
 export interface PatternScreenProps {
   id: string
   onBack: () => void
+  /**
+   * Откуда сюда пришли -- подпись первой крошки (#566).
+   *
+   * Карточку открывают из каталога и из панели «Библиотека» в песочнице, и
+   * возврат обязан вести туда же, откуда пришли: «Библиотека» в крошках,
+   * уводящая в каталог того, кто пришёл из проекта, -- это потерянное место
+   * работы, а не навигация. Подпись приходит снаружи, потому что называть
+   * экраны -- дело оболочки: она же пишет их на вкладках, и вторая таблица
+   * имён разошлась бы с первой.
+   */
+  backLabel?: string
   /** Унести этот паттерн в песочницу (#526). Экраны переключает оболочка. */
   onToSandbox: () => void
 }
 
-export function PatternScreen({ id, onBack, onToSandbox }: PatternScreenProps) {
+export function PatternScreen({
+  id,
+  onBack,
+  backLabel = 'Библиотека',
+  onToSandbox,
+}: PatternScreenProps) {
   const [pattern, setPattern] = useState<PatternDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   /** Отказ был «нужен вход»: он поправим входом, а не повторным открытием. */
@@ -148,7 +164,7 @@ export function PatternScreen({ id, onBack, onToSandbox }: PatternScreenProps) {
   if (error) {
     return (
       <div className="pat">
-        <Crumbs onBack={onBack} />
+        <Crumbs onBack={onBack} label={backLabel} />
         {denied ? (
           <LoginHint login={login}>{error}</LoginHint>
         ) : (
@@ -163,7 +179,7 @@ export function PatternScreen({ id, onBack, onToSandbox }: PatternScreenProps) {
   if (!pattern) {
     return (
       <div className="pat">
-        <Crumbs onBack={onBack} />
+        <Crumbs onBack={onBack} label={backLabel} />
         <p className="pat-hint">Читаем паттерн…</p>
       </div>
     )
@@ -186,7 +202,7 @@ export function PatternScreen({ id, onBack, onToSandbox }: PatternScreenProps) {
 
   return (
     <div className="pat">
-      <Crumbs onBack={onBack} level={pattern.level} name={pattern.name} />
+      <Crumbs onBack={onBack} label={backLabel} level={pattern.level} name={pattern.name} />
 
       <header className="pat-head">
         <div className="pat-title">
@@ -448,17 +464,20 @@ async function act(run: () => Promise<void>): Promise<void> {
 
 function Crumbs({
   onBack,
+  label,
   level,
   name,
 }: {
   onBack: () => void
+  /** Имя того места, откуда пришли: каталог или песочница (#566). */
+  label: string
   level?: string
   name?: string
 }) {
   return (
     <nav className="pat-crumbs" aria-label="Где мы">
       <button type="button" className="pat-back" onClick={onBack}>
-        Библиотека
+        {label}
       </button>
       {level ? <span className="mono">/ {level}</span> : null}
       {name ? <span className="pat-here">/ {name}</span> : null}
