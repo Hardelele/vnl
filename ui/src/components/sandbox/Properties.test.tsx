@@ -43,6 +43,7 @@ const GLOSSARY: Glossary = {
   contact: { receptor: 'Чем контакт действует на цель.', weight: 'Сила контакта.' },
   port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
   // Роды драйва -- те же, что отдаёт сервер: панель рисует поля по ним (#508).
+  drive: 'Чем гонят схему. От рода зависит, повторится ли картина растра.',
   drives: [
     {
       id: 'poisson',
@@ -59,6 +60,33 @@ const GLOSSARY: Glossary = {
           step: 10,
           form: 'number',
           note: 'Средняя частота событий.',
+        },
+        {
+          name: 'amplitude',
+          label: 'Вес',
+          unit: 'нСм',
+          default: 1.5,
+          step: 0.1,
+          form: 'number',
+          note: 'Сколько проводимости открывает один импульс.',
+        },
+      ],
+    },
+    {
+      id: 'spikes',
+      name: 'список спайков',
+      note: 'Ровно заданные моменты: картина повторяется всегда.',
+      receptor: true,
+      template: false,
+      params: [
+        {
+          name: 'times',
+          label: 'Моменты',
+          unit: 'мс',
+          default: 0,
+          step: 1,
+          form: 'times',
+          note: 'Моменты импульсов через пробел или запятую.',
         },
         {
           name: 'amplitude',
@@ -581,6 +609,7 @@ describe('род драйва и его поля (#508)', () => {
     const select = host.querySelector('select') as HTMLSelectElement
     expect([...select.options].map((option) => option.textContent)).toEqual([
       'пуассоновский',
+      'список спайков',
       'поезд',
     ])
     expect(select.value).toBe('poisson')
@@ -591,6 +620,42 @@ describe('род драйва и его поля (#508)', () => {
 
     const select = host.querySelector('select') as HTMLSelectElement
     expect(select.title).toContain('в среднем')
+  })
+
+  it('объяснён и сам род, и поле, в котором его выбирают (#553)', async () => {
+    // Два разных вопроса: «что значит пуассоновский» и «что вообще такое род
+    // драйва». Один ответ на оба оставил бы без ответа тот, который задают
+    // чаще: в закрытом списке видно одно значение.
+    await mountDrive()
+
+    const label = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'Род',
+    )
+    expect(label?.querySelector('span')?.getAttribute('title')).toContain(
+      'повторится ли картина растра',
+    )
+  })
+
+  it('каждый род в списке объяснён своим текстом, а не общим', async () => {
+    await mountDrive()
+
+    // Первый список в панели -- род; второй, рецептор, объяснён своим (#541).
+    const select = host.querySelector('select') as HTMLSelectElement
+    const options = [...select.options]
+    expect(options.map((option) => option.title)).toEqual([
+      expect.stringContaining('в среднем'),
+      expect.stringContaining('повторяется всегда'),
+      expect.stringContaining('Ровный гребень'),
+    ])
+  })
+
+  it('число протокола объясняется так же, как параметр мембраны', async () => {
+    await mountDrive({ kind: 'train', n: 8, freq: 20, protocol: 'поезд, 8 импульсов, 20 Гц' })
+
+    const field = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'Импульсов',
+    ) as HTMLElement
+    expect(field.title).toContain('Сколько импульсов')
   })
 
   it('у пуассоновского драйва частота названа средней', async () => {
@@ -629,10 +694,20 @@ describe('род драйва и его поля (#508)', () => {
       protocol: 'список, 2 импульса',
     })
 
-    // Рода `spikes` в словаре теста нет -- панель показывает то, что в
-    // проекте, и не выдумывает полей за сервер.
-    const select = host.querySelector('select') as HTMLSelectElement
-    expect(select.value).toBe('spikes')
+    // Поле моментов у этого рода есть -- значит вторая, только читаемая
+    // строка с теми же числами была бы спором панели с самой собой.
+    expect(fields()).toContain('Моменты, мс')
     expect(host.textContent).not.toContain('2 момента: 10, 20 мс')
+  })
+
+  it('род, которого нет в словаре, всё равно виден в поле', async () => {
+    // Панель показывает то, что в проекте: `select` с чужим значением
+    // показал бы вместо него первый пункт, то есть соврал бы про род, а
+    // следующая правка молча перевела бы драйв на него.
+    await mountDrive({ kind: 'tbs', protocol: 'theta-burst, 10 пачек' })
+
+    const select = host.querySelector('select') as HTMLSelectElement
+    expect(select.value).toBe('tbs')
+    expect([...select.options].map((option) => option.textContent)[0]).toBe('tbs')
   })
 })

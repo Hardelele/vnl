@@ -545,6 +545,7 @@ def glossary_payload() -> dict[str, Any]:
         # причине: что у `tbs` есть «пачек» и «между пачками», а у `train` --
         # «тест восстановления», знает реестр, и браузеру остаётся нарисовать
         # то, что пришло.
+        "drive": protocols.KIND_NOTE,
         "drives": [
             {
                 "id": drive.id,

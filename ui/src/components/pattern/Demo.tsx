@@ -20,7 +20,7 @@
 
 import { siteText } from '../../lib/site'
 import { momentWords } from '../../lib/times'
-import { receptorHint, recordedName } from '../../model/glossary'
+import { driveHint, driveKind, receptorHint, recordedName } from '../../model/glossary'
 import type { DemoRun, Glossary, Stimulus } from '../../model/types'
 
 export interface DemoProps {
@@ -93,13 +93,19 @@ function DriveRow({
   glossary: Glossary
 }) {
   const rest = details(stim, duration)
-  const receptor = stim.kind !== 'current'
+  const receptor = synaptic(stim, glossary)
   return (
     <div className="row pat-fact">
       <span className="pat-fact-head">
         <span className="row-arrow">→</span>
         <span className="mono row-path">{siteText(stim.target)}</span>
-        <span>{driveWords(stim)}</span>
+        {/* Род драйва объясняется так же, как рецептор строкой ниже (#553).
+            «Пуассоновский» -- такой же шифр, как `gaba_a`, и цена непонимания
+            у него выше: от рода зависит, повторится картина или нет, и человек
+            тратит время, разглядывая случайность как поломку. Шаблоны из #508
+            объясняются здесь же: новый род без объяснения стал бы таким же
+            шифром, каким было слово «пуассоновский». */}
+        <span title={driveHint(glossary, stim.kind)}>{driveWords(stim, glossary)}</span>
       </span>
       {receptor || rest ? (
         <span className="row-dim">
@@ -132,9 +138,24 @@ function DriveRow({
  * Вес приписывается здесь: он есть у всех родов, кроме тока, и в словах
  * протокола ему делать нечего -- протокол это про моменты, а не про силу.
  */
-function driveWords(stim: Stimulus): string {
-  if (stim.kind === 'current') return stim.protocol
-  return `${stim.protocol}, вес ${stim.amplitude} нСм`
+function driveWords(stim: Stimulus, glossary: Glossary): string {
+  return synaptic(stim, glossary)
+    ? `${stim.protocol}, вес ${stim.amplitude} нСм`
+    : stim.protocol
+}
+
+/**
+ * Входит ли драйв в клетку через синапс.
+ *
+ * От этого зависит сразу двое: есть ли у драйва вес в наносименсах и есть ли
+ * у него рецептор. Вопрос один и тот же -- ток входит в клетку помимо синапса,
+ * и ни того, ни другого у него нет, -- поэтому и ответ один, из реестра родов
+ * (#553). Пока ответа сервера нет, держимся единственного рода, который и без
+ * реестра точно не синаптический: соврать про «вес 0.2 нСм» у тока хуже, чем
+ * подождать словарь.
+ */
+function synaptic(stim: Stimulus, glossary: Glossary): boolean {
+  return driveKind(glossary, stim.kind)?.receptor ?? stim.kind !== 'current'
 }
 
 /** Моменты спайков и окно -- вторая строка: длинные, а читают их после рода. */

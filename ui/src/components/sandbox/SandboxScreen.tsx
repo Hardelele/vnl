@@ -25,6 +25,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { CELLS, counted } from '../../lib/plural'
+import { driveHint } from '../../model/glossary'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
 import type { CellState } from '../../model/sim'
 import { catalogController, useCatalog } from '../../state/catalog'
@@ -643,11 +644,17 @@ export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
                   onPick={() => pick(() => control.select({ kind: 'link', id: link.id }))}
                 />
               ))}
+              {/* У стимула в подписи стоит протокол словами, а не только
+                  адрес: вопрос «почему спайки ложатся пачками» задают, глядя
+                  на растр, и ответ обязан быть на том же экране, а не через
+                  щелчок по объекту (#553). Слова считает сервер -- он же и
+                  объясняет род наведением. */}
               {project.stimuli.map((drive) => (
                 <Row
                   key={drive.id}
-                  label={`${drive.id} → ${where(drive.target)}`}
+                  label={`${drive.id} → ${where(drive.target)} · ${drive.protocol}`}
                   kind="стимул"
+                  hint={driveHint(glossary, drive.kind)}
                   on={selected?.kind === 'stimulus' && selected.id === drive.id}
                   onPick={() => pick(() => control.select({ kind: 'stimulus', id: drive.id }))}
                 />
@@ -830,16 +837,24 @@ function rows(
 function Row({
   label,
   kind,
+  hint,
   on,
   onPick,
 }: {
   label: string
   kind: string
+  /** Расшифровка подписи: что это за объект и чем он отличается от соседних. */
+  hint?: string
   on: boolean
   onPick: () => void
 }) {
   return (
-    <button type="button" className={`sb-row sb-pick${on ? ' is-on' : ''}`} onClick={onPick}>
+    <button
+      type="button"
+      className={`sb-row sb-pick${on ? ' is-on' : ''}`}
+      title={hint}
+      onClick={onPick}
+    >
       <span className="sb-row-name">{label}</span>
       <span className="mono sb-kind">{kind}</span>
     </button>

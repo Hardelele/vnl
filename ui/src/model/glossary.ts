@@ -29,6 +29,7 @@ export const NO_GLOSSARY: Glossary = {
   contact: {},
   port: {},
   recorded: [],
+  drive: '',
   drives: [],
 }
 
@@ -79,7 +80,19 @@ export function recordedName(glossary: Glossary, id: RecordedVar): string {
  * показывать в этом случае, решает сама панель; у неё есть то, что в проекте.
  */
 export function driveKind(glossary: Glossary, id: string): DriveKindInfo | undefined {
-  return glossary.drives.find((item) => item.id === id)
+  return driveKinds(glossary).find((item) => item.id === id)
+}
+
+/**
+ * Роды драйва из ответа сервера. Нет их в ответе -- нет и родов.
+ *
+ * Проверка не формальная: ответ приходит от сервера, а сервер бывает старее
+ * страницы -- вкладку держат открытой неделями. Обращение к полю, которого в
+ * ответе нет, уронило бы не подсказку, а весь экран, ради которого страницу и
+ * открыли.
+ */
+export function driveKinds(glossary: Glossary): DriveKindInfo[] {
+  return glossary.drives ?? []
 }
 
 /**
@@ -91,4 +104,22 @@ export function driveKind(glossary: Glossary, id: string): DriveKindInfo | undef
  */
 export function driveParamLabel(param: DriveParam): string {
   return param.unit ? `${param.label}, ${param.unit}` : param.label
+}
+
+/**
+ * Объяснение рода драйва по его имени. Нет в словаре -- нет и подсказки.
+ *
+ * Тем же устройством, что `receptorHint`, и по той же причине: спрашивают об
+ * этом не в одном месте. Панель свойств объясняет род в поле выбора, дерево
+ * объектов -- в строке стимула, карточка паттерна -- в строке драйва. Вторая
+ * такая склейка разошлась бы с первой на первой же правке формата (#553).
+ *
+ * Название рода приписано к объяснению нарочно: в дереве и на карточке текст
+ * висит на словах протокола («поезд, 8 импульсов, 20 Гц»), а не на самом
+ * слове «поезд», и без имени подсказка начиналась бы с середины разговора.
+ */
+export function driveHint(glossary: Glossary, id: string): string | undefined {
+  const kind = driveKind(glossary, id)
+  if (!kind) return undefined
+  return kind.note ? `${kind.name}. ${kind.note}` : kind.name
 }

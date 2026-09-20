@@ -505,7 +505,27 @@ describe('дорога с карточки в песочницу (#526)', () => 
       ['/api/session', SIGNED_IN],
       ['/api/catalog', CATALOG],
       ['/api/patterns/ffi', DETAIL],
-      ['/api/glossary', { schema: 1, receptors: [], point: [], contact: [], port: [] }],
+      [
+        '/api/glossary',
+        {
+          schema: 1,
+          receptors: [],
+          point: [],
+          contact: [],
+          port: [],
+          drive: 'Чем гонят схему.',
+          drives: [
+            {
+              id: 'poisson',
+              name: 'пуассоновский',
+              note: 'Случайные моменты со средней частотой.',
+              receptor: true,
+              template: false,
+              params: [],
+            },
+          ],
+        },
+      ],
       ['/api/cells', { schema: 1, cells: [] }],
       ['/api/sim', { error: 'считать нечего' }, 400],
       ['/api/sandboxes/s1/blocks', FILLED],
@@ -550,6 +570,26 @@ describe('дорога с карточки в песочницу (#526)', () => 
     // человек в этот момент ещё не смотрел.
     expect(host.textContent).toContain('вместе с витриной карточки')
     expect(host.textContent).toContain('зерно 7')
+  })
+
+  it('в дереве объектов у стимула написан род, а не только адрес (#553)', async () => {
+    // Вопрос «почему спайки ложатся пачками» задают, глядя на растр, и ответ
+    // обязан быть на том же экране: иначе род драйва виден только тому, кто
+    // догадался щёлкнуть по стимулу.
+    served()
+    await mount()
+    await openCard()
+    await click('В песочницу')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    const drive = [...host.querySelectorAll('.sb-row')].find((node) =>
+      node.textContent?.includes('ffi.drive'),
+    ) as HTMLElement
+    expect(drive.textContent).toContain('пуассоновский, в среднем 250 Гц')
+    expect(drive.title).toContain('Случайные моменты')
   })
 
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {

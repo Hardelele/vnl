@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import pytest
 
-from vnl import ir
+from vnl import ir, protocols
 from vnl.compose import compose
 from vnl.patterns import Pattern, Port
 from vnl.resolve import load
@@ -1614,6 +1614,20 @@ def test_the_glossary_explains_the_labels_on_the_screen(base):
     assert set(recorded) == set(ir.RECORDED)
     assert recorded["g_exc"]["name"] == ir.RECORDED["g_exc"].name
     assert recorded["v"]["unit"] == "мВ"
+
+    # Роды драйва -- тем же ответом и по тому же правилу (#553): объяснение
+    # есть у каждого рода и у каждого его числа, а сам список -- тот, который
+    # исполняет солвер. Разойдись они, и панель предложила бы род, которого
+    # симулятор не знает, или умолчала бы о том, который знает.
+    drives = {item["id"]: item for item in glossary["drives"]}
+    assert set(drives) == set(protocols.KINDS)
+    assert all(item["note"] for item in drives.values())
+    assert all(
+        param["note"]
+        for item in drives.values()
+        for param in item["params"]
+    ), "число без объяснения -- такой же шифр, как род без объяснения"
+    assert glossary["drive"], "у самого поля «род» объяснение своё"
 
 
 def test_a_builtin_cell_carries_its_own_explanation(base):

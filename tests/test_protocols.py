@@ -326,3 +326,63 @@ def test_without_plasticity_the_rate_is_nobody_business():
     model = chain("stim s -> A.soma : pairs { n = 15, isi = 10ms, freq = 40Hz, weight = 3nS }")
     assert protocols.cautions(model) == []
 
+# --- род драйва объяснён словами (#553) ------------------------------------
+
+
+def note_of(kind: str) -> str:
+    return protocols.DRIVE_KINDS[kind].note
+
+
+def test_poisson_says_the_moments_are_random_and_the_rate_is_average():
+    """Из-за этой строки и заводилась задача: 100 Гц читали как метроном."""
+    said = note_of("poisson").lower()
+    assert "случайн" in said
+    assert "в среднем" in said
+    assert "зерн" in said, "повторяемость -- половина ответа про случайность"
+
+
+def test_poisson_rate_is_labelled_average_not_just_frequency():
+    rate = next(
+        param
+        for param in protocols.DRIVE_KINDS["poisson"].params
+        if param.name == "rate"
+    )
+    assert rate.label == "Средняя частота"
+    assert rate.unit == "Гц"
+
+
+def test_spikes_says_the_picture_always_repeats():
+    said = note_of("spikes")
+    assert "всегда" in said and "заданные моменты" in said
+
+
+def test_current_says_there_are_no_events_at_all():
+    said = note_of("current")
+    assert "нет" in said and "ток" in said
+
+
+def test_templates_are_explained_too_not_only_the_old_three():
+    """Новый род без объяснения -- такой же шифр, каким было слово «пуассоновский»."""
+    for kind in protocols.TEMPLATES:
+        assert len(note_of(kind)) > 40, kind
+    assert "ровно каждые" in note_of("train")
+
+
+def test_every_number_of_every_kind_is_explained():
+    unexplained = [
+        f"{kind}.{param.name}"
+        for kind, drive in protocols.DRIVE_KINDS.items()
+        for param in drive.params
+        if not param.note
+    ]
+    assert unexplained == []
+
+
+def test_the_field_itself_is_explained_apart_from_its_values():
+    # В закрытом списке видно одно значение: подсказка на нём расшифровывает
+    # выбранное, а «что это за поле вообще» -- другой вопрос.
+    assert "повторится" in protocols.KIND_NOTE
+    assert protocols.KIND_NOTE not in {
+        drive.note for drive in protocols.DRIVE_KINDS.values()
+    }
+

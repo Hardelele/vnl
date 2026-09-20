@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { NO_GLOSSARY, loadGlossary } from './glossary'
+import { NO_GLOSSARY, driveHint, driveKinds, loadGlossary } from './glossary'
 
 function reply(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -59,5 +59,43 @@ describe('расшифровка подписей', () => {
     // как работала до #541.
     expect(NO_GLOSSARY.receptors).toEqual([])
     expect(NO_GLOSSARY.cell).toEqual({})
+    expect(NO_GLOSSARY.drives).toEqual([])
+  })
+})
+
+describe('роды драйва из словаря (#553)', () => {
+  const GLOSSARY = {
+    ...NO_GLOSSARY,
+    drives: [
+      {
+        id: 'poisson',
+        name: 'пуассоновский',
+        note: 'Случайные моменты со средней частотой.',
+        receptor: true,
+        template: false,
+        params: [],
+      },
+    ],
+  }
+
+  it('подсказка называет род и объясняет его', () => {
+    // Имя приписано нарочно: в дереве и на карточке текст висит на словах
+    // протокола, а не на самом слове «пуассоновский».
+    expect(driveHint(GLOSSARY, 'poisson')).toBe(
+      'пуассоновский. Случайные моменты со средней частотой.',
+    )
+  })
+
+  it('незнакомый род -- не подсказка наугад', () => {
+    expect(driveHint(GLOSSARY, 'tbs')).toBeUndefined()
+  })
+
+  it('ответ старого сервера без родов не роняет экран', () => {
+    // Вкладку держат открытой неделями, и сервер бывает старее страницы.
+    // Обращение к полю, которого в ответе нет, уронило бы не подсказку, а
+    // весь экран, ради которого страницу и открыли.
+    const old = { ...NO_GLOSSARY, drives: undefined } as unknown as typeof NO_GLOSSARY
+    expect(driveKinds(old)).toEqual([])
+    expect(driveHint(old, 'poisson')).toBeUndefined()
   })
 })

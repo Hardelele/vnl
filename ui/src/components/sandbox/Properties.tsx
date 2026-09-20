@@ -16,6 +16,7 @@ import { momentWords } from '../../lib/times'
 import {
   NO_GLOSSARY,
   driveKind,
+  driveKinds,
   driveParamLabel,
   receptorNote,
 } from '../../model/glossary'
@@ -661,7 +662,7 @@ function driveOptions(
   glossary: Glossary,
   value: string,
 ): Array<{ id: string; name: string; note?: string }> {
-  const known = glossary.drives.map((item) => ({
+  const known = driveKinds(glossary).map((item) => ({
     id: item.id,
     name: item.name,
     note: item.note,
@@ -734,9 +735,12 @@ function DriveProps({
       <div className="row">
         <span className="mono row-path">→ {where(drive.target)}</span>
       </div>
+      {/* На подписи -- что это за поле вообще, на самом списке -- что значит
+          выбранный род: это два разных вопроса, и один ответ на оба оставил
+          бы без ответа тот, который задают чаще (#553). */}
       <SelectField<DriveKind>
         label="Род"
-        hint={kind?.note}
+        hint={glossary.drive || undefined}
         value={drive.kind}
         options={driveOptions(glossary, drive.kind)}
         onChange={(next) => void control.setDrive(drive.id, { kind: next })}
@@ -745,9 +749,14 @@ function DriveProps({
           уметь напечатать себя списком времён -- вот он и печатает, прямо
           здесь: без этого «поезд» остаётся таким же словом на веру, каким был
           «пуассоновский». У пуассоновского драйва моментов заранее нет вовсе,
-          и строка с ними не показывается -- врать про «0 моментов» незачем. */}
+          и строка с ними не показывается -- врать про «0 моментов» незачем.
+
+          Строкой, а не полем, -- у тех родов, у которых поля моментов нет:
+          у списка спайков они правятся, и показывать их второй раз значило бы
+          спорить с самим собой. Какому роду поле положено, знает реестр, а не
+          этот файл: имя рода здесь было бы последней его копией в браузере. */}
       {drive.protocol ? <p className="sb-note">{drive.protocol}</p> : null}
-      {drive.times.length && drive.kind !== 'spikes' ? (
+      {drive.times.length && !params.some((param) => param.form === 'times') ? (
         <p className="sb-note mono">{momentWords(drive.times)}</p>
       ) : null}
       {params.map((param) => (

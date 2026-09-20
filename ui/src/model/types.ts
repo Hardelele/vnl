@@ -115,6 +115,8 @@ export interface Glossary {
   contact: Record<string, string>
   port: Record<string, string>
   recorded: RecordedKind[]
+  /** Что такое род драйва вообще -- объяснение самого поля (#553). */
+  drive: string
   drives: DriveKindInfo[]
 }
 
