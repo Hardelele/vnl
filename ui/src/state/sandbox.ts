@@ -285,6 +285,23 @@ const PASS = { x: 48, y: 36 }
 const UNGROUP_STEP = { x: 120, y: 90 }
 
 /**
+ * Смотрит ли объект в ту же точку, куда только что ткнули (#502).
+ *
+ * Конец связи в ответе несёт ещё и `section` с `fraction`, но сравниваются
+ * только имя и порт: кнопка «Драйв на in» адресует именно их, а точку на
+ * клетке подставляет сервер. Сравнивай мы всё четыре поля -- «тот же порт»
+ * перестал бы значить «тот же порт» в тот день, когда у клетки появятся
+ * ветви и драйв попросят вешать на них.
+ */
+function sameEnd(
+  target: { instance: string; port: string | null },
+  instance: string,
+  port: string | null,
+): boolean {
+  return target.instance === instance && (target.port ?? null) === port
+}
+
+/**
  * Куда положить следующий объект, чтобы он не лёг поверх соседа.
  *
  * Считаются и блоки, и клетки: место на холсте у них одно, и нумеровать их
@@ -666,9 +683,47 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     setCell: (object: string, type: string, params: Partial<PointModel>) =>
       act((id) => io.cell(id, object, type, params)),
 
-    /** Драйв и запись на конец связи: порт блока или точка клетки (`port: null`). */
-    stimulate: (instance: string, port: string | null) =>
-      act((id) => io.stimulate(id, { instance, port })),
+    /**
+     * Драйв на конец связи: порт блока или точку клетки (`port: null`).
+     *
+     * Созданный стимул сразу становится выбранным (#502). Прежде выделение не
+     * менялось вовсе: человек нажимал «Драйв на in», панель свойств
+     * продолжала показывать блок, холст не менялся ничем, и подтверждение
+     * приходило единственной строкой в другой вкладке, куда для этого надо
+     * переключиться. Теперь подтверждение приходит туда, куда человек
+     * смотрит, -- и на холсте, знаком у цели, и в панели, полями стимула.
+     *
+     * Второй драйв на ту же точку не заводится, а открывает первый. Это и
+     * есть «предложить поправить существующий» из карточки: кнопка нажимается
+     * дважды легко -- на холсте до сих пор ничего не менялось, -- и в проекте
+     * оказывались `drive1` и `drive2` на один порт, то есть вдвое больше
+     * входа, чем человек думал.
+     *
+     * Отказом это не сделано нарочно. Два стимула на одну точку язык
+     * принимает, и они осмысленны: пуассоновский фон плюс поезд на нём --
+     * обычный опыт. Запрети это сервер -- песочница стала бы строже файла,
+     * то есть завела бы схемы, которые можно написать, но нельзя собрать.
+     * Поэтому правило живёт там, где живёт кнопка: второй драйв заводят
+     * осознанно, из панели свойств уже выбранного стимула, а не случайным
+     * повтором щелчка.
+     */
+    async stimulate(instance: string, port: string | null): Promise<void> {
+      const project = store.getState().project
+      if (!project) return
+      const already = project.stimuli.find((one) => sameEnd(one.target, instance, port))
+      if (already) {
+        store.setState({ selected: { kind: 'stimulus', id: already.id } })
+        return
+      }
+      const had = new Set(project.stimuli.map((one) => one.id))
+      await act((id) => io.stimulate(id, { instance, port }))
+      const fresh = store
+        .getState()
+        .project?.stimuli.find((one) => !had.has(one.id))
+      // Имя выбирает сервер -- он один знает, что в проекте занято, -- поэтому
+      // свежий ищется по ответу, а не угадывается здесь заранее.
+      if (fresh) store.setState({ selected: { kind: 'stimulus', id: fresh.id } })
+    },
 
     setDrive: (stimulus: string, params: DriveParams) =>
       act((id) => io.driveParams(id, stimulus, params)),
@@ -709,8 +764,25 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
         return io.motor(id, { instance, port }, { position: free(project, view) })
       }),
 
-    record: (instance: string, port: string | null) =>
-      act((id) => io.record(id, { instance, port })),
+    /**
+     * Запись с точки. Созданная сразу становится выбранной -- как и драйв.
+     *
+     * Запрета на вторую запись с той же точки здесь нет, и это не забывчивость
+     * (#502). Второй драйв удваивает вход, то есть молча меняет опыт; вторая
+     * запись не меняет ничего -- она даёт вторую такую же дорожку. А вот `v` и
+     * `g_exc` с одной клетки нужны постоянно: величину у первой меняют и жмут
+     * ещё раз. Запрети это -- и второй величины с точки не снять вовсе.
+     */
+    async record(instance: string, port: string | null): Promise<void> {
+      const project = store.getState().project
+      if (!project) return
+      const had = new Set(project.recordings.map((one) => one.id))
+      await act((id) => io.record(id, { instance, port }))
+      const fresh = store
+        .getState()
+        .project?.recordings.find((one) => !had.has(one.id))
+      if (fresh) store.setState({ selected: { kind: 'recording', id: fresh.id } })
+    },
 
     setRecord: (recording: string, variable: RecordedVar) =>
       act((id) => io.recordVar(id, recording, variable)),

@@ -26,9 +26,10 @@ import { useEffect, useRef, useState } from 'react'
 
 import { objectCommand } from '../../lib/keys'
 import { CELLS, counted } from '../../lib/plural'
-import { driveHint } from '../../model/glossary'
+import { driveHint, receptorHint } from '../../model/glossary'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
 import type { CellState } from '../../model/sim'
+import type { Glossary } from '../../model/types'
 import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
 import { canChange, goToLogin, useSession } from '../../state/session'
@@ -842,10 +843,19 @@ export function SandboxScreen({
         </aside>
 
         <section className="sb-canvas">
+          <Legend glossary={glossary} />
           <Canvas
             blocks={project.blocks}
             neurons={project.neurons}
             links={project.links}
+            // Драйв и записи едут на холст наравне со связями (#502): это
+            // часть схемы, а не подробность её настройки. Длительность --
+            // ради окна работы драйва: короче прогона оно объясняет, почему
+            // растр пуст в начале, а равное прогону писать не о чем.
+            stimuli={project.stimuli}
+            recordings={project.recordings}
+            duration={project.run.duration}
+            glossary={glossary}
             cells={cells}
             palette={palette}
             selected={selected}
@@ -854,6 +864,10 @@ export function SandboxScreen({
             onPickBlock={(id) => control.select({ kind: 'block', id })}
             onPickNeuron={(id) => control.select({ kind: 'neuron', id })}
             onPickLink={(id) => control.select({ kind: 'link', id })}
+            // Знак на холсте открывает тот же объект, что строка в дереве:
+            // второй способ править стимул заводить не из чего.
+            onPickDrive={(id) => control.select({ kind: 'stimulus', id })}
+            onPickRecord={(id) => control.select({ kind: 'recording', id })}
             onPickEndpoint={(instance, port) =>
               void control.touchEndpoint(instance, port)
             }
@@ -1030,6 +1044,48 @@ function rows(
 ): Array<{ id: string; name: string }> {
   if (!list.some((row) => row.id === project.id)) return [project, ...list]
   return list.map((row) => (row.id === project.id ? { ...row, name: project.name } : row))
+}
+
+/**
+ * Легенда знаков над холстом -- как в макете (`Page MVP.dc.html`, SANDBOX).
+ *
+ * Схема говорит цветом и формой, и расшифровки у них не было нигде: красная
+ * линия с плашкой значит «торможение» только для того, кто это уже знает.
+ * Строка стоит над холстом, а не в панели справа: объясняет она холст, а
+ * панель показывает один выбранный объект.
+ *
+ * Пять знаков, а не четыре, как в макете: макет рисовался до того, как драйв
+ * и запись вообще появились на схеме (#502). «Паттерн» из макета сюда не
+ * переехал -- блок подписан своим именем прямо на коробке, и отдельная
+ * строчка про него объясняла бы то, что и так написано.
+ *
+ * Строка про драйв -- не подпись знака, а ответ на вопрос, который в
+ * карточке и назван главным: что такое драйв и почему его нет во вставленном
+ * блоке. Текст приходит с сервера (`protocols.STIMULUS_NOTE`) вместе со
+ * всеми прочими объяснениями: тот же вопрос задают наведением на сам знак, и
+ * два ответа на него разошлись бы.
+ */
+function Legend({ glossary }: { glossary: Glossary }) {
+  const marks: Array<{ kind: string; label: string; hint?: string }> = [
+    { kind: 'exc', label: 'возбуждение', hint: receptorHint(glossary, 'ampa') },
+    { kind: 'inh', label: 'торможение', hint: receptorHint(glossary, 'gaba_a') },
+    { kind: 'mod', label: 'модуляция', hint: glossary.port?.mod },
+    { kind: 'drive', label: 'драйв', hint: glossary.stimulus },
+    { kind: 'record', label: 'запись', hint: glossary.recording },
+  ]
+  return (
+    <div className="sb-legend">
+      {marks.map((mark) => (
+        <span key={mark.kind} className="sb-legend-item" title={mark.hint}>
+          <span className={`sb-legend-mark is-${mark.kind}`} />
+          {mark.label}
+        </span>
+      ))}
+      {glossary.stimulus ? (
+        <span className="sb-legend-note">{glossary.stimulus}</span>
+      ) : null}
+    </div>
+  )
 }
 
 function Row({

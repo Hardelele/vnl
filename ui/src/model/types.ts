@@ -149,6 +149,15 @@ export interface Glossary {
   contact: Record<string, string>
   port: Record<string, string>
   recorded: RecordedKind[]
+  /**
+   * Что такое драйв и что такое запись -- объяснения самих вещей (#502).
+   *
+   * Отдельно от `drive`: там сказано, чем роды драйва отличаются друг от
+   * друга, а это ответ на вопрос, который задают раньше, -- глядя на знак у
+   * клетки и не зная ещё самого слова.
+   */
+  stimulus: string
+  recording: string
   /** Что такое род драйва вообще -- объяснение самого поля (#553). */
   drive: string
   drives: DriveKindInfo[]

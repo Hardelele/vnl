@@ -727,3 +727,77 @@ describe('типы клеток самого проекта (#564)', () => {
     expect(addNeuronOfType).not.toHaveBeenCalled()
   })
 })
+
+describe('подтверждение драйва и записи приходит туда, куда смотрят (#502)', () => {
+  /** Проект с уже готовым стимулом и ответом, в котором появился второй. */
+  function withDrive(id: string, instance: string, port: string | null) {
+    const first = project().stimuli[0]!
+    return {
+      ...project(),
+      stimuli: [first, { ...first, id, target: { ...first.target, instance, port } }],
+    }
+  }
+
+  it('созданный стимул сразу становится выбранным', async () => {
+    // Прежде выделение не менялось вовсе: панель свойств продолжала
+    // показывать блок, холст не менялся ничем, и единственным
+    // подтверждением была строка в другой вкладке.
+    const stimulate = vi.fn().mockResolvedValue(withDrive('drive2', 'E', null))
+    const control = await opened({ stimulate })
+
+    await control.stimulate('E', null)
+
+    expect(stimulate).toHaveBeenCalledWith('s1', { instance: 'E', port: null })
+    expect(control.store.getState().selected).toEqual({
+      kind: 'stimulus',
+      id: 'drive2',
+    })
+  })
+
+  it('второй драйв на тот же порт не заводится, а открывает первый', async () => {
+    // Кнопка нажимается дважды легко -- на холсте до сих пор ничего не
+    // менялось, -- и в проекте оказывались два стимула на один порт, то есть
+    // вдвое больше входа, чем человек думал.
+    const stimulate = vi.fn()
+    const control = await opened({ stimulate })
+
+    await control.stimulate('ffi', 'in')
+
+    expect(stimulate).not.toHaveBeenCalled()
+    expect(control.store.getState().selected).toEqual({
+      kind: 'stimulus',
+      id: 'drive1',
+    })
+  })
+
+  it('драйв на соседний порт того же блока -- это другой драйв', async () => {
+    // Повтор ищется по точке, а не по объекту холста: у коробки портов
+    // пятеро, и драйв на каждый -- свой вход в схему.
+    const stimulate = vi.fn().mockResolvedValue(withDrive('drive2', 'ffi', 'tonic'))
+    const control = await opened({ stimulate })
+
+    await control.stimulate('ffi', 'tonic')
+
+    expect(stimulate).toHaveBeenCalledWith('s1', { instance: 'ffi', port: 'tonic' })
+    expect(control.store.getState().selected).toEqual({
+      kind: 'stimulus',
+      id: 'drive2',
+    })
+  })
+
+  it('созданная запись тоже становится выбранной', async () => {
+    const answer = {
+      ...project(),
+      recordings: [
+        ...project().recordings,
+        { id: 'r9', target: { instance: 'E', port: null, section: 'soma', fraction: 0.5 }, var: 'v' },
+      ],
+    } as unknown as SandboxState
+    const record = vi.fn().mockResolvedValue(answer)
+    const control = await opened({ record })
+
+    await control.record('E', null)
+
+    expect(control.store.getState().selected).toEqual({ kind: 'recording', id: 'r9' })
+  })
+})

@@ -13,6 +13,7 @@
  */
 
 import { request } from './catalog'
+import type { SandboxDrive } from './sandbox'
 import type {
   DriveKindInfo,
   DriveParam,
@@ -30,6 +31,8 @@ export const NO_GLOSSARY: Glossary = {
   contact: {},
   port: {},
   recorded: [],
+  stimulus: '',
+  recording: '',
   drive: '',
   drives: [],
   sensor: '',
@@ -73,7 +76,11 @@ export function receptorHint(glossary: Glossary, id: string): string | undefined
  * `ir.RECORDED`, придёт следующим ответом и перепишет подпись сам.
  */
 export function recordedName(glossary: Glossary, id: RecordedVar): string {
-  const variable = glossary.recorded.find((item) => item.id === id)
+  // `?? []` не формальность: ответ приходит от сервера, а сервер бывает
+  // старее страницы -- вкладку держат открытой неделями. Обращение к полю,
+  // которого в ответе нет, уронило бы не подпись, а весь экран (ср.
+  // `driveKinds`). С холста это спрашивают на каждой отрисовке (#502).
+  const variable = (glossary.recorded ?? []).find((item) => item.id === id)
   if (!variable) return id
   return variable.unit ? `${variable.name}, ${variable.unit}` : variable.name
 }
@@ -128,4 +135,62 @@ export function driveHint(glossary: Glossary, id: string): string | undefined {
   const kind = driveKind(glossary, id)
   if (!kind) return undefined
   return kind.note ? `${kind.name}. ${kind.note}` : kind.name
+}
+
+/**
+ * Драйв главными числами: «250 Гц · 1.5 нСм», «0.2 нА», «8 сп.» (#502).
+ *
+ * Для знака на холсте, где места на фразу нет. Слова протокола
+ * (`drive.protocol`) там не помещаются, а без чисел знак говорит только
+ * «что-то подаётся» -- ровно то, на что жаловались: человек не видит, что
+ * именно подаётся, и приписать неожиданно частые спайки ему нечему.
+ *
+ * Какие числа у рода главные, решает не этот файл, а реестр: поля рода
+ * приходят с сервера вместе с единицами (`DriveKindInfo.params`, #553).
+ * Список имён здесь -- `rate` у шума, `amplitude` у тока -- был бы третьим
+ * местом, где описан протокол, и новый род доезжал бы до панели свойств, но
+ * не доезжал до холста.
+ *
+ * Берутся те поля, у которых есть единица: число без неё -- шифр («8» у
+ * поезда это импульсы или герцы?), и расшифровать его на холсте нечем.
+ * Исключение -- моменты: их единица «мс» относится к каждому из них, а
+ * главное в них количество, и оно же и пишется. Полностью протокол называет
+ * подсказка -- она висит на самом знаке.
+ *
+ * Нули пропускаются: в протоколе ноль значит «этого в нём нет». У поезда
+ * есть и «тест восстановления», и «между эпизодами», и обычно они нулевые --
+ * без этого правила знак поезда читался бы «20 Гц · 0 мс · 0 мс · 1.5 нСм»,
+ * то есть тремя лишними числами про то, чего не происходит. Так же читает
+ * ноль и сервер, досыпая канонические числа рода (`protocols.defaults`).
+ */
+export function driveBrief(glossary: Glossary, drive: SandboxDrive): string {
+  const kind = driveKind(glossary, drive.kind)
+  // Рода нет в словаре -- врать про числа нельзя, но и молчать не надо:
+  // имя рода в проекте есть, и его видно.
+  if (!kind) return drive.kind
+  const parts: string[] = []
+  for (const param of kind.params ?? []) {
+    if (param.form === 'times') {
+      parts.push(`${(drive.times ?? []).length} сп.`)
+      continue
+    }
+    if (!param.unit) continue
+    const value = (drive as unknown as Record<string, unknown>)[param.name]
+    if (typeof value !== 'number' || value === 0) continue
+    parts.push(`${value} ${param.unit}`)
+  }
+  return parts.join(' · ') || kind.name
+}
+
+/**
+ * Окно работы драйва -- второй строкой и только если оно короче прогона.
+ *
+ * Драйв на весь прогон -- это умолчание, и писать про него нечего: он и так
+ * идёт всё время, которое есть. А вот драйв, включающийся на сотой
+ * миллисекунде, объясняет добрую половину растра, и узнать об этом надо на
+ * холсте.
+ */
+export function driveWindow(drive: SandboxDrive, duration: number): string | null {
+  if (drive.start <= 0 && drive.stop >= duration) return null
+  return `${drive.start}–${drive.stop} мс`
 }

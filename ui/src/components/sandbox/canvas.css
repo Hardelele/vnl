@@ -416,3 +416,181 @@
   cursor: default;
   opacity: 0.5;
 }
+
+/* Знак драйва и знак записи у своей цели (#502).
+ *
+ * Оба стоят снаружи схемы и начинаются ниоткуда: линия висит в воздухе за
+ * краем фигуры. Это и есть «внешний вход» и «взгляд снаружи» -- связь на
+ * холсте всегда соединяет две фигуры, а эти две не соединяют ничего.
+ *
+ * Линия тоньше связи: драйв не элемент схемы, а условие опыта, и спорить
+ * толщиной с настоящими связями ему незачем. */
+.cv-mark-wire {
+  stroke-width: 1.4;
+}
+
+/* Полоса попадания -- та же, что у связи: в линию в полтора пикселя мышью
+   не попасть, а знак обязан выбираться щелчком, как выбирается связь. */
+.cv-mark-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+}
+
+.cv-mark-name {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+/* Окно работы драйва -- второй строкой и тусклее: главное здесь числа, а
+   окно объясняет, почему растр пуст в начале прогона. */
+.cv-mark-sub {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--faint);
+  pointer-events: none;
+}
+
+/* Цвет драйва -- по цели и рецептору, теми же токенами, что у порта и у
+   связи: второй набор цветов означал бы, что «торможение» на холсте бывает
+   двух разных цветов в зависимости от того, кто его подаёт. */
+.cv-drive .cv-mark-wire {
+  stroke: var(--exc);
+}
+
+.cv-drive .cv-mark-cap {
+  fill: var(--exc);
+  stroke: none;
+}
+
+.cv-drive.is-inh .cv-mark-wire {
+  stroke: var(--inh);
+}
+
+.cv-drive.is-inh .cv-mark-cap {
+  fill: none;
+  stroke: var(--inh);
+  stroke-width: 2.4;
+}
+
+/* Модуляторная цель -- янтарная и пунктиром, как модуляторная связь: драйв
+   на `gate` у растормаживания делает не то же, что драйв на `in`. */
+.cv-drive.is-mod .cv-mark-wire {
+  stroke: var(--mod);
+  stroke-dasharray: 3 2;
+}
+
+.cv-drive.is-mod .cv-mark-cap {
+  fill: var(--mod);
+}
+
+/* Выбранный знак -- той же подсветкой, что выбранная связь: выбирают их
+   одинаково, значит и отзываться они обязаны одинаково. */
+.cv-drive.is-on .cv-mark-wire,
+.cv-record.is-on .cv-mark-wire {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+
+.cv-drive.is-on .cv-mark-name,
+.cv-record.is-on .cv-mark-name {
+  fill: var(--ink);
+}
+
+/* Запись -- щуп: кружок на конце ветки, а не остриё.
+ *
+ * Знак свой, и это не спор с общим словарём знаков (#554), а признание
+ * того, что вещь другая. Остриё и плашка говорят «сюда приходит сигнал»;
+ * запись же ничего не приносит и ни на что не влияет -- она смотрит.
+ * Поэтому и цвет у неё не рецепторный, а тусклый: физики в ней нет. */
+.cv-record .cv-mark-wire {
+  stroke: var(--line-strong);
+  stroke-dasharray: 2 2;
+}
+
+.cv-probe {
+  fill: var(--panel);
+  stroke: var(--line-strong);
+  stroke-width: 1.6;
+  pointer-events: none;
+}
+
+.cv-record.is-on .cv-probe {
+  stroke: var(--accent);
+}
+
+/* Легенда знаков над холстом -- как в макете (`Page MVP.dc.html`, SANDBOX).
+ *
+ * Схема говорит цветом и формой, и расшифровки у них до сих пор не было
+ * нигде: красная линия с плашкой значит «торможение» только для того, кто
+ * это уже знает. Строка стоит над холстом, а не в панели справа, потому что
+ * объясняет она холст, а панель показывает один выбранный объект. */
+.sb-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1) var(--space-1);
+  flex: none;
+}
+
+.sb-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+/* Значок легенды -- та же фигура и тот же цвет, что на схеме: кружок у
+   возбуждения, квадрат у торможения. Рисовать их здесь второй раз своими
+   числами пришлось бы всё равно -- знаки схемы живут в SVG, а легенда в
+   разметке, -- но форма и цвет обязаны совпадать. */
+.sb-legend-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--exc);
+  flex: none;
+}
+
+.sb-legend-mark.is-inh {
+  border-radius: 2px;
+  background: var(--inh);
+}
+
+.sb-legend-mark.is-mod {
+  background: var(--mod);
+}
+
+/* Драйв -- стрелка, а не заливка: в легенде он обязан выглядеть тем же
+   знаком, каким нарисован на схеме. */
+.sb-legend-mark.is-drive {
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  background: none;
+  border-top: 4.5px solid transparent;
+  border-bottom: 4.5px solid transparent;
+  border-left: 8px solid var(--exc);
+}
+
+.sb-legend-mark.is-record {
+  background: var(--panel);
+  border: 1.6px solid var(--line-strong);
+}
+
+/* Что такое драйв -- одной строкой, а не значком: это не знак схемы, а то,
+   без чего собранная сеть молчит, и сказать это надо словами. */
+.sb-legend-note {
+  font-size: 11px;
+  color: var(--faint);
+  min-width: 0;
+}
