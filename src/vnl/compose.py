@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field, replace
 
-from . import ir
+from . import ir, protocols
 from .patterns import (
     NESTED,
     Endpoint,
@@ -132,6 +132,19 @@ def compose(sandbox: Sandbox) -> Composition:
                 times=tuple(stim.times),
                 start=stim.start,
                 stop=stim.stop,
+                # Числа шаблона переносятся как есть, не разворачиваясь:
+                # собранная модель обязана уметь сказать «поезд, 8 импульсов,
+                # 20 Гц» так же, как проект, -- и отчёт прогона берёт слова
+                # оттуда же (#508). Список времён из них посчитает солвер.
+                n=stim.n,
+                freq=stim.freq,
+                isi=stim.isi,
+                duration=stim.duration,
+                bursts=stim.bursts,
+                burst_period=stim.burst_period,
+                repeats=stim.repeats,
+                period=stim.period,
+                recovery=stim.recovery,
             )
         )
 
@@ -177,6 +190,11 @@ def _warnings(model: ir.Model) -> list[str]:
             "до конца и промолчит. Повесьте драйв на вход блока или на клетку."
         )
     out.extend(_receptor_notes(model))
+    # Третий -- протокол, на котором движку верить нельзя (#508): пары чаще
+    # 25 Гц меряют у нас не то, что мерили бы в опыте. Условие знает
+    # `protocols`, а не эта функция: оно про правило пластичности, а не про
+    # сборку схемы, и вторая его копия разошлась бы с первой.
+    out.extend(protocols.cautions(model))
     return out
 
 

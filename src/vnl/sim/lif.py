@@ -40,7 +40,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import ir
+from .. import ir, protocols
 
 # Скорость пассивного распространения по дендриту, мкм/мс.
 DENDRITIC_SPEED = 200.0
@@ -262,6 +262,18 @@ class Simulator:
                 delay=max(self.dt, 0.1),
             )
 
+        # Моменты событийных стимулов -- одним списком и один раз, до прогона.
+        # Шаблон протокола (`train`, `tbs`, ...) разворачивается здесь в тот же
+        # кортеж времён, что написан руками у `spikes`: дальше солвер не знает,
+        # откуда список взялся, и написанный руками поезд даёт побитово тот же
+        # прогон, что шаблон с теми же числами (#508). Разворачивать на каждом
+        # шаге значило бы пересчитывать одно и то же `duration/dt` раз подряд.
+        self.stim_times: dict[str, tuple[float, ...]] = {
+            stim.id: protocols.spike_times(stim)
+            for stim in model.stimuli
+            if stim.kind in protocols.EVENT_KINDS
+        }
+
         self.pending: dict[int, list[tuple[_Synapse, float]]] = {}
         self.modulator_level: dict[str, float] = {m: 0.0 for m in model.modulators}
 
@@ -328,6 +340,21 @@ class Simulator:
 
     def _stimulate(self) -> None:
         for stim in self.model.stimuli:
+            if stim.kind in protocols.EVENT_KINDS:
+                # У событийного стимула окно меряется по самому импульсу, а не
+                # по часам. Разница видна ровно на границе: у поезда с
+                # `start = 50ms` первый импульс приходится на 50 мс, то есть
+                # на `start`, -- а `self.time` на этом шаге равен
+                # 50.000000000000007 (`500 * 0.1` в двоичных дробях), и
+                # сравнение с часами выбросило бы первый импульс поезда.
+                # Шаблон и написанный руками список тогда разошлись бы на
+                # первом же импульсе -- при одинаковых числах.
+                for spike_time in self.stim_times.get(stim.id, ()):
+                    if not stim.start <= spike_time < stim.stop:
+                        continue
+                    if 0.0 <= spike_time - self.time < self.dt:
+                        self._schedule(self.stim_synapses[stim.id], stim.amplitude)
+                continue
             if not stim.start <= self.time < stim.stop:
                 continue
             if stim.kind == "current":
@@ -335,10 +362,6 @@ class Simulator:
             elif stim.kind == "poisson":
                 if self.rng.random() < stim.rate * self.dt / 1000.0:
                     self._schedule(self.stim_synapses[stim.id], stim.amplitude)
-            elif stim.kind == "spikes":
-                for spike_time in stim.times:
-                    if 0.0 <= spike_time - self.time < self.dt:
-                        self._schedule(self.stim_synapses[stim.id], stim.amplitude)
 
     def _deliver(self, step: int) -> None:
         for synapse, _ in self.pending.pop(step, []):

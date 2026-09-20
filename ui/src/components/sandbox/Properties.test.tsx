@@ -42,6 +42,100 @@ const GLOSSARY: Glossary = {
   cell: { tauM: 'За сколько мембрана забывает заряд.' },
   contact: { receptor: 'Чем контакт действует на цель.', weight: 'Сила контакта.' },
   port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
+  // Роды драйва -- те же, что отдаёт сервер: панель рисует поля по ним (#508).
+  drive: 'Чем гонят схему. От рода зависит, повторится ли картина растра.',
+  drives: [
+    {
+      id: 'poisson',
+      name: 'пуассоновский',
+      note: 'Случайные моменты со средней частотой: 100 Гц -- это в среднем 10 мс.',
+      receptor: true,
+      template: false,
+      params: [
+        {
+          name: 'rate',
+          label: 'Средняя частота',
+          unit: 'Гц',
+          default: 250,
+          step: 10,
+          form: 'number',
+          note: 'Средняя частота событий.',
+        },
+        {
+          name: 'amplitude',
+          label: 'Вес',
+          unit: 'нСм',
+          default: 1.5,
+          step: 0.1,
+          form: 'number',
+          note: 'Сколько проводимости открывает один импульс.',
+        },
+      ],
+    },
+    {
+      id: 'spikes',
+      name: 'список спайков',
+      note: 'Ровно заданные моменты: картина повторяется всегда.',
+      receptor: true,
+      template: false,
+      params: [
+        {
+          name: 'times',
+          label: 'Моменты',
+          unit: 'мс',
+          default: 0,
+          step: 1,
+          form: 'times',
+          note: 'Моменты импульсов через пробел или запятую.',
+        },
+        {
+          name: 'amplitude',
+          label: 'Вес',
+          unit: 'нСм',
+          default: 1.5,
+          step: 0.1,
+          form: 'number',
+          note: 'Сколько проводимости открывает один импульс.',
+        },
+      ],
+    },
+    {
+      id: 'train',
+      name: 'поезд',
+      note: 'Ровный гребень: n импульсов через равные промежутки.',
+      receptor: true,
+      template: true,
+      params: [
+        {
+          name: 'n',
+          label: 'Импульсов',
+          unit: '',
+          default: 8,
+          step: 1,
+          form: 'int',
+          note: 'Сколько импульсов в поезде.',
+        },
+        {
+          name: 'freq',
+          label: 'Частота',
+          unit: 'Гц',
+          default: 20,
+          step: 1,
+          form: 'number',
+          note: 'Частота внутри поезда.',
+        },
+        {
+          name: 'amplitude',
+          label: 'Вес',
+          unit: 'нСм',
+          default: 1.5,
+          step: 0.1,
+          form: 'number',
+          note: 'Сколько проводимости открывает один импульс.',
+        },
+      ],
+    },
+  ],
   recorded: [
     { id: 'v', name: 'мембранный потенциал', unit: 'мВ' },
     { id: 'g_exc', name: 'возбуждающая проводимость', unit: 'нСм' },
@@ -467,5 +561,153 @@ describe('подписи расшифровываются подсказкой (
       'возбуждающая проводимость',
     ])
     expect(select.value).toBe('g_exc')
+  })
+})
+
+describe('род драйва и его поля (#508)', () => {
+  /** Драйв в проекте: род и числа задаются тестом, остальное -- как у сервера. */
+  function withDrive(drive: Record<string, unknown>): SandboxState {
+    return {
+      ...PROJECT,
+      stimuli: [
+        {
+          id: 'drive1',
+          target: { instance: 'X', port: null },
+          kind: 'poisson',
+          receptor: 'ampa',
+          rate: 250,
+          amplitude: 1.5,
+          times: [],
+          protocol: 'пуассоновский, в среднем 250 Гц',
+          start: 0,
+          stop: 500,
+          n: 0,
+          freq: 0,
+          isi: 0,
+          duration: 0,
+          bursts: 0,
+          burst_period: 0,
+          repeats: 1,
+          period: 0,
+          recovery: 0,
+          ...drive,
+        },
+      ],
+    } as unknown as SandboxState
+  }
+
+  async function mountDrive(drive: Record<string, unknown> = {}): Promise<void> {
+    await mount({
+      selection: { kind: 'stimulus', id: 'drive1' },
+      project: withDrive(drive),
+    })
+  }
+
+  it('список родов приходит с сервера, а не из списка в коде', async () => {
+    await mountDrive()
+
+    const select = host.querySelector('select') as HTMLSelectElement
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      'пуассоновский',
+      'список спайков',
+      'поезд',
+    ])
+    expect(select.value).toBe('poisson')
+  })
+
+  it('род объясняется подсказкой, как рецептор и мембрана', async () => {
+    await mountDrive()
+
+    const select = host.querySelector('select') as HTMLSelectElement
+    expect(select.title).toContain('в среднем')
+  })
+
+  it('объяснён и сам род, и поле, в котором его выбирают (#553)', async () => {
+    // Два разных вопроса: «что значит пуассоновский» и «что вообще такое род
+    // драйва». Один ответ на оба оставил бы без ответа тот, который задают
+    // чаще: в закрытом списке видно одно значение.
+    await mountDrive()
+
+    const label = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'Род',
+    )
+    expect(label?.querySelector('span')?.getAttribute('title')).toContain(
+      'повторится ли картина растра',
+    )
+  })
+
+  it('каждый род в списке объяснён своим текстом, а не общим', async () => {
+    await mountDrive()
+
+    // Первый список в панели -- род; второй, рецептор, объяснён своим (#541).
+    const select = host.querySelector('select') as HTMLSelectElement
+    const options = [...select.options]
+    expect(options.map((option) => option.title)).toEqual([
+      expect.stringContaining('в среднем'),
+      expect.stringContaining('повторяется всегда'),
+      expect.stringContaining('Ровный гребень'),
+    ])
+  })
+
+  it('число протокола объясняется так же, как параметр мембраны', async () => {
+    await mountDrive({ kind: 'train', n: 8, freq: 20, protocol: 'поезд, 8 импульсов, 20 Гц' })
+
+    const field = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'Импульсов',
+    ) as HTMLElement
+    expect(field.title).toContain('Сколько импульсов')
+  })
+
+  it('у пуассоновского драйва частота названа средней', async () => {
+    await mountDrive()
+
+    expect(fields()).toContain('Средняя частота, Гц')
+    expect(fields()).not.toContain('Частота, Гц')
+  })
+
+  it('поля поезда -- те, что у поезда, а не те, что у шума', async () => {
+    await mountDrive({ kind: 'train', n: 8, freq: 20, protocol: 'поезд, 8 импульсов, 20 Гц' })
+
+    expect(fields()).toContain('Импульсов')
+    expect(fields()).toContain('Частота, Гц')
+    expect(fields()).not.toContain('Средняя частота, Гц')
+  })
+
+  it('шаблон печатает себя списком моментов', async () => {
+    await mountDrive({
+      kind: 'train',
+      n: 50,
+      freq: 100,
+      times: [0, 10, 20, 30, 40, 50, 60, 70, 80, 490],
+      protocol: 'поезд, 50 импульсов, 100 Гц',
+    })
+
+    const said = host.textContent ?? ''
+    expect(said).toContain('поезд, 50 импульсов, 100 Гц')
+    expect(said).toContain('10 моментов: 0, 10, 20, 30, 40, 50, 60, 70 … 490 мс')
+  })
+
+  it('у списка спайков моменты правятся, а не показываются дважды', async () => {
+    await mountDrive({
+      kind: 'spikes',
+      times: [10, 20],
+      protocol: 'список, 2 импульса',
+    })
+
+    // Поле моментов у этого рода есть -- значит вторая, только читаемая
+    // строка с теми же числами была бы спором панели с самой собой.
+    expect(fields()).toContain('Моменты, мс')
+    expect(host.textContent).not.toContain('2 момента: 10, 20 мс')
+  })
+
+  it('род, которого нет в словаре, всё равно виден в поле', async () => {
+    // Панель показывает то, что в проекте: `select` с чужим значением
+    // показал бы вместо него первый пункт, то есть соврал бы про род, а
+    // следующая правка молча перевела бы драйв на него.
+    await mountDrive({ kind: 'tbs', protocol: 'theta-burst, 10 пачек' })
+
+    const select = host.querySelector('select') as HTMLSelectElement
+    expect(select.value).toBe('tbs')
+    expect([...select.options].map((option) => option.textContent)[0]).toBe('tbs')
   })
 })

@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from . import ir
+from . import ir, protocols
 from .render_util import esc, is_inhibitory, nice_step
 from .sim import SimResult
 
@@ -163,17 +163,15 @@ def track_svg(model: ir.Model, result: SimResult, name: str) -> str:
         start, stop = at(stim.start), at(min(stim.stop, duration))
         if stop - start < 0.5:
             continue
-        detail = (
-            f"{stim.rate:g} Гц"
-            if stim.kind == "poisson"
-            else f"{len(stim.times)} импульсов"
-            if stim.kind == "spikes"
-            else f"{stim.amplitude:g} нА"
-        )
+        # Протокол словами, а не списком чисел: «поезд, 8 импульсов, 20 Гц,
+        # тест восстановления через 500 мс» -- это то, чем эксперимент зовут,
+        # а пятьдесят моментов в подписи всё равно не читаются (#508). Слова
+        # считает реестр протоколов: вторая их сборка здесь разошлась бы с
+        # первой, и разошлась бы молча.
         parts.append(
             f'<rect class="na-stim" x="{start:.1f}" y="0" '
             f'width="{stop - start:.1f}" height="{height:.0f}">'
-            f"<title>{esc(stim.id)}: {esc(stim.kind)}, {esc(detail)}, "
+            f"<title>{esc(stim.id)}: {esc(protocols.describe(stim))}, "
             f"{stim.start:g}–{min(stim.stop, duration):g} мс</title></rect>"
         )
 

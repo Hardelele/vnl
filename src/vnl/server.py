@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import __version__, api, auth, cells, ir
+from . import __version__, api, auth, cells, ir, protocols
 from .catalog import Query
 from .compose import compose
 from .index import Index, IndexUnavailable
@@ -656,7 +656,14 @@ class Api:
     def stimulus_params(
         self, sandbox_id: str, stimulus_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:
-        """Правка драйва: создавался он с числами по умолчанию, а не навсегда."""
+        """Правка драйва: создавался он с числами по умолчанию, а не навсегда.
+
+        Числа шаблонов протоколов перечислены не здесь, а в реестре
+        (`protocols`): какие поля есть у `tbs`, знает он, и он же прислал их
+        интерфейсу в ответе `/api/glossary`. Свой список имён здесь был бы
+        третьим местом с тем же знанием -- и новый протокол доезжал бы до
+        панели свойств, но не доезжал до проекта (#508).
+        """
         params: dict[str, Any] = {}
         for key in ("rate", "amplitude", "start", "stop"):
             if body.get(key) is not None:
@@ -666,10 +673,16 @@ class Api:
                 params[key] = str(body[key])
         if body.get("times") is not None:
             params["times"] = tuple(float(time) for time in body["times"])
+        for name, canonical in protocols.SHAPE.items():
+            if body.get(name) is not None:
+                params[name] = (
+                    int(body[name]) if isinstance(canonical, int) else float(body[name])
+                )
         if not params:
             raise PatternError(
                 "нечего менять: ожидались kind, receptor, rate, amplitude, "
-                "times, start или stop"
+                "times, start, stop или числа протокола "
+                f"({', '.join(protocols.SHAPE)})"
             )
         project = self._project(sandbox_id)
         project.set_stimulus(stimulus_id, **params)

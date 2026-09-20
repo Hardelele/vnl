@@ -18,9 +18,9 @@
  * трёхсотмиллисекундном прогоне -- это не окно, а повтор длительности.
  */
 
-import { MOMENTS, counted } from '../../lib/plural'
 import { siteText } from '../../lib/site'
-import { receptorHint, recordedName } from '../../model/glossary'
+import { momentWords } from '../../lib/times'
+import { driveHint, driveKind, receptorHint, recordedName } from '../../model/glossary'
 import type { DemoRun, Glossary, Stimulus } from '../../model/types'
 
 export interface DemoProps {
@@ -93,13 +93,19 @@ function DriveRow({
   glossary: Glossary
 }) {
   const rest = details(stim, duration)
-  const receptor = stim.kind !== 'current'
+  const receptor = synaptic(stim, glossary)
   return (
     <div className="row pat-fact">
       <span className="pat-fact-head">
         <span className="row-arrow">→</span>
         <span className="mono row-path">{siteText(stim.target)}</span>
-        <span>{driveWords(stim)}</span>
+        {/* Род драйва объясняется так же, как рецептор строкой ниже (#553).
+            «Пуассоновский» -- такой же шифр, как `gaba_a`, и цена непонимания
+            у него выше: от рода зависит, повторится картина или нет, и человек
+            тратит время, разглядывая случайность как поломку. Шаблоны из #508
+            объясняются здесь же: новый род без объяснения стал бы таким же
+            шифром, каким было слово «пуассоновский». */}
+        <span title={driveHint(glossary, stim.kind)}>{driveWords(stim, glossary)}</span>
       </span>
       {receptor || rest ? (
         <span className="row-dim">
@@ -122,24 +128,44 @@ function DriveRow({
 /**
  * Чем бьют -- одной строкой.
  *
- * У каждого рода стимула своё число: шум задаётся частотой, ток -- амплитудой,
- * список спайков -- временами. Показать все три значило бы сказать про
- * пуассоновский драйв «моментов: 0», хотя моментов у него не бывает вовсе.
+ * Протокол словами приходит с сервера (`protocols.describe`): у каждого рода
+ * своё число -- шум задаётся средней частотой, ток амплитудой, поезд числом
+ * импульсов и частотой, -- и знает об этом реестр родов, а не карточка. Своя
+ * сборка этой строки была второй правдой о драйве и уже расходилась: карточка
+ * звала пуассоновский шум просто «шумом N Гц», умалчивая, что частота средняя
+ * (#508, #553).
+ *
+ * Вес приписывается здесь: он есть у всех родов, кроме тока, и в словах
+ * протокола ему делать нечего -- протокол это про моменты, а не про силу.
  */
-function driveWords(stim: Stimulus): string {
-  if (stim.kind === 'poisson') {
-    return `пуассоновский шум ${stim.rate} Гц, вес ${stim.amplitude} нСм`
-  }
-  if (stim.kind === 'current') return `постоянный ток ${stim.amplitude} нА`
-  return `список спайков, вес ${stim.amplitude} нСм`
+function driveWords(stim: Stimulus, glossary: Glossary): string {
+  return synaptic(stim, glossary)
+    ? `${stim.protocol}, вес ${stim.amplitude} нСм`
+    : stim.protocol
+}
+
+/**
+ * Входит ли драйв в клетку через синапс.
+ *
+ * От этого зависит сразу двое: есть ли у драйва вес в наносименсах и есть ли
+ * у него рецептор. Вопрос один и тот же -- ток входит в клетку помимо синапса,
+ * и ни того, ни другого у него нет, -- поэтому и ответ один, из реестра родов
+ * (#553). Пока ответа сервера нет, держимся единственного рода, который и без
+ * реестра точно не синаптический: соврать про «вес 0.2 нСм» у тока хуже, чем
+ * подождать словарь.
+ */
+function synaptic(stim: Stimulus, glossary: Glossary): boolean {
+  return driveKind(glossary, stim.kind)?.receptor ?? stim.kind !== 'current'
 }
 
 /** Моменты спайков и окно -- вторая строка: длинные, а читают их после рода. */
 function details(stim: Stimulus, duration: number): string {
   const said: string[] = []
-  if (stim.kind === 'spikes' && stim.times.length) {
-    said.push(`${counted(stim.times.length, MOMENTS)}: ${stim.times.join(', ')} мс`)
-  }
+  // Моменты -- у всех родов, где они есть: и у списка, набранного руками, и у
+  // шаблона протокола, который сервер развернул в такой же список (#508).
+  // У пуассоновского драйва их нет заранее вовсе, и строка не появляется.
+  const moments = momentWords(stim.times)
+  if (moments) said.push(moments)
   const window = windowWords(stim, duration)
   if (window) said.push(window)
   return said.join(' · ')

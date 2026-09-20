@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from . import ir
+from . import ir, protocols
 from .morphology import Morphology, Section
 from .units import looks_like_quantity, parse_quantity
 
@@ -282,6 +282,10 @@ class PendingStimulus:
     start: float
     stop: float
     receptor: str
+    #: Числа шаблона протокола: те же имена, что у полей `ir.Stimulus`.
+    #: Словарём, потому что на этом шаге род ещё не проверен -- разбирать
+    #: `train` как `tbs` парсер не должен, он только записывает написанное.
+    shape: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -482,6 +486,28 @@ class Parser:
             else _parse_flat_params(cur)
         )
         times = str(params.get("times", ""))
+        # Числа шаблона: написанные перекрывают канонические. Канонические
+        # берутся из реестра, а не пишутся здесь, потому что «поезд по
+        # умолчанию -- 8 импульсов на 20 Гц» -- предметное знание, и второе
+        # его место разошлось бы с первым (#508). Неизвестный род сюда не
+        # доедет: о нём скажет резолвер, а `defaults` до тех пор пусто.
+        #
+        # Только шаблоны: у `poisson` частоту по умолчанию не подставляем
+        # нарочно. `poisson` без `rate` -- это недописанный стимул, и молча
+        # выданные 250 Гц спрятали бы описку, которую сегодня видно отказом.
+        # У шаблона же готовые числа -- половина смысла: протокол на то и
+        # протокол, что его канонические значения известны.
+        shape = protocols.defaults(kind) if kind in protocols.TEMPLATES else {}
+        for key, canonical in list(shape.items()):
+            if key in params:
+                # Счётное остаётся счётным: `n = 8` -- это восемь импульсов, а
+                # не 8.0, и в хранилище оно обязано лечь тем же типом, каким
+                # объявлено в `ir.Stimulus`.
+                shape[key] = (
+                    int(params[key])
+                    if isinstance(canonical, int)
+                    else float(params[key])
+                )
         self.stimuli.append(
             PendingStimulus(
                 id=name,
@@ -493,6 +519,7 @@ class Parser:
                 start=float(params.get("start", 0.0)),
                 stop=float(params.get("stop", float("inf"))),
                 receptor=str(params.get("receptor", "ampa")),
+                shape=shape,
             )
         )
 

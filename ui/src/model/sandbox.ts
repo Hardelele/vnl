@@ -112,7 +112,15 @@ export interface SandboxLink {
   delay: number
 }
 
-export type DriveKind = 'current' | 'poisson' | 'spikes'
+/**
+ * Род драйва -- строка, а не перечисление из трёх слов.
+ *
+ * Перечисление здесь означало бы, что браузер знает список родов; он его не
+ * знает и знать не должен -- список приходит с сервера вместе с объяснениями
+ * и полями (`Glossary.drives`, #553). Новый протокол (#508) иначе появлялся бы
+ * в симуляторе и не появлялся в поле выбора.
+ */
+export type DriveKind = string
 
 export interface SandboxDrive {
   id: string
@@ -121,10 +129,29 @@ export interface SandboxDrive {
   receptor: string
   rate: number
   amplitude: number
-  /** Моменты спайков для `kind: 'spikes'`; у остальных родов пусто. */
+  /**
+   * Моменты импульсов. У списка спайков -- набранные руками, у шаблона
+   * протокола -- развёрнутые сервером: шаблон обязан уметь напечатать себя
+   * списком времён, и печатает его сервер (#508).
+   */
   times: number[]
+  /** Протокол словами: «поезд, 8 импульсов, 20 Гц». Считает сервер. */
+  protocol: string
   start: number
   stop: number
+  // Числа шаблонов протоколов. Имена -- ровно те, что у полей стимула на
+  // сервере, и с подчёркиванием: они приходят в реестре родов и уходят
+  // обратно правкой как есть. Таблица перевода имён была бы третьим местом,
+  // где протокол описан, и разошлась бы молча.
+  n: number
+  freq: number
+  isi: number
+  duration: number
+  bursts: number
+  burst_period: number
+  repeats: number
+  period: number
+  recovery: number
 }
 
 export interface SandboxRecording {

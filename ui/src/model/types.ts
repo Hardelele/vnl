@@ -115,6 +115,42 @@ export interface Glossary {
   contact: Record<string, string>
   port: Record<string, string>
   recorded: RecordedKind[]
+  /** Что такое род драйва вообще -- объяснение самого поля (#553). */
+  drive: string
+  drives: DriveKindInfo[]
+}
+
+/**
+ * Род драйва из реестра сервера (`protocols.DRIVE_KINDS`).
+ *
+ * Своего списка родов в браузере нет по той же причине, что и списка
+ * рецепторов: новый протокол появляется в симуляторе и обязан появиться в поле
+ * выбора сам, а не вторым списком, который однажды забудут дописать (#553).
+ * Вместе с родом едут и его поля: что у `tbs` есть «пачек» и «между пачками»,
+ * а у `train` -- «тест восстановления», знает тот же реестр.
+ */
+export interface DriveKindInfo {
+  id: string
+  name: string
+  note: string
+  /** Нужен ли роду рецептор. У тока его нет: он входит помимо синапса. */
+  receptor: boolean
+  /** Шаблон ли это -- то есть считается ли список моментов из чисел. */
+  template: boolean
+  params: DriveParam[]
+}
+
+/** Поле рода драйва: как подписать, в чём мерить и как набирать. */
+export interface DriveParam {
+  /** Имя поля стимула; оно же ключ правки. Приходит с сервера как есть. */
+  name: string
+  label: string
+  unit: string
+  default: number
+  step: number
+  /** number -- дробное, int -- счётное, times -- список моментов. */
+  form: 'number' | 'int' | 'times'
+  note: string
 }
 
 /**
@@ -173,11 +209,18 @@ export interface Modulator {
 export interface Stimulus {
   id: string
   target: Site
-  kind: 'current' | 'poisson' | 'spikes'
+  kind: string
   receptor: string
   amplitude: number
   rate: number
+  /**
+   * Моменты импульсов. У шаблона протокола -- развёрнутые: считает их сервер
+   * (`protocols.spike_times`), и это ровно тот список, который идёт в солвер
+   * (#508). Второй арифметики протокола в браузере нет.
+   */
   times: number[]
+  /** Протокол словами: «поезд, 8 импульсов, 20 Гц». Тоже считает сервер. */
+  protocol: string
   start: number
   stop: number
 }

@@ -12,7 +12,14 @@
  */
 
 import { CELLS, LINKS, counted } from '../../lib/plural'
-import { NO_GLOSSARY, receptorNote } from '../../model/glossary'
+import { momentWords } from '../../lib/times'
+import {
+  NO_GLOSSARY,
+  driveKind,
+  driveKinds,
+  driveParamLabel,
+  receptorNote,
+} from '../../model/glossary'
 import type { CellState } from '../../model/sim'
 import type {
   DriveKind,
@@ -27,6 +34,7 @@ import type {
 } from '../../model/sandbox'
 import type {
   CellKind,
+  DriveParam,
   Glossary,
   PatternPort,
   PointModel,
@@ -642,6 +650,70 @@ function ContactGroup({
   )
 }
 
+/**
+ * Список родов драйва для поля выбора.
+ *
+ * Как и у рецепторов: своего списка здесь нет -- он приходит с сервера вместе
+ * с объяснениями (`Glossary.drives`, #553). Пока ответа нет, в списке стоит
+ * один текущий род: поле обязано показывать то, что в проекте, а выдуманный
+ * здесь выбор был бы хуже, чем отсутствие выбора.
+ */
+function driveOptions(
+  glossary: Glossary,
+  value: string,
+): Array<{ id: string; name: string; note?: string }> {
+  const known = driveKinds(glossary).map((item) => ({
+    id: item.id,
+    name: item.name,
+    note: item.note,
+  }))
+  // Текущий род обязан быть в списке, даже если реестр о нём не знает: `select`
+  // с чужим значением показывает вместо него первый пункт, то есть панель
+  // соврала бы про род, а следующая правка молча перевела бы драйв на него.
+  if (known.some((item) => item.id === value)) return known
+  return [{ id: value, name: value }, ...known]
+}
+
+/**
+ * Поле числа протокола: подпись, единица и объяснение -- из реестра сервера.
+ *
+ * Считанное число `form` решает, счётное поле или дробное: у «импульсов» шаг
+ * ровно единица, а у частоты -- десятые, и решает это тот, кто протокол
+ * описал, а не панель.
+ */
+function DriveParamField({
+  drive,
+  param,
+}: {
+  drive: SandboxDrive
+  param: DriveParam
+}) {
+  const control = sandboxController
+  if (param.form === 'times') {
+    return (
+      <TextField
+        label={driveParamLabel(param)}
+        value={drive.times.join(', ')}
+        onChange={(text) => void control.setDrive(drive.id, { times: moments(text) })}
+      />
+    )
+  }
+  const value = Number((drive as unknown as Record<string, number>)[param.name] ?? 0)
+  return (
+    <NumberField
+      label={driveParamLabel(param)}
+      hint={param.note}
+      step={param.form === 'int' ? 1 : param.step}
+      value={value}
+      onChange={(next) =>
+        void control.setDrive(drive.id, {
+          [param.name]: param.form === 'int' ? Math.round(next) : next,
+        })
+      }
+    />
+  )
+}
+
 function DriveProps({
   drive,
   glossary,
@@ -650,46 +722,47 @@ function DriveProps({
   glossary: Glossary
 }) {
   const control = sandboxController
-  // Пуассоновский шум задаётся частотой, ток -- амплитудой, список спайков --
-  // временами. Показывать все три сразу значило бы предлагать править то, что
-  // при этом роде стимула никуда не идёт.
+  // Поля рисуются по реестру родов, а не перечислены здесь. Пуассоновский шум
+  // задаётся частотой, ток -- амплитудой, поезд -- числом импульсов и
+  // частотой, theta-burst -- ещё и пачками: показывать все сразу значило бы
+  // предлагать править то, что при этом роде никуда не идёт, а перечислять
+  // здесь -- держать в браузере вторую копию того, что знает сервер (#508).
+  const kind = driveKind(glossary, drive.kind)
+  const params = kind?.params ?? []
   return (
     <>
       <Head title="Стимул" note={drive.id} />
       <div className="row">
         <span className="mono row-path">→ {where(drive.target)}</span>
       </div>
+      {/* На подписи -- что это за поле вообще, на самом списке -- что значит
+          выбранный род: это два разных вопроса, и один ответ на оба оставил
+          бы без ответа тот, который задают чаще (#553). */}
       <SelectField<DriveKind>
         label="Род"
+        hint={glossary.drive || undefined}
         value={drive.kind}
-        options={[
-          { id: 'poisson', name: 'пуассоновский' },
-          { id: 'current', name: 'ток' },
-          { id: 'spikes', name: 'список спайков' },
-        ]}
-        onChange={(kind) => void control.setDrive(drive.id, { kind })}
+        options={driveOptions(glossary, drive.kind)}
+        onChange={(next) => void control.setDrive(drive.id, { kind: next })}
       />
-      {drive.kind === 'poisson' ? (
-        <NumberField
-          label="Частота, Гц"
-          step={10}
-          value={drive.rate}
-          onChange={(rate) => void control.setDrive(drive.id, { rate })}
-        />
+      {/* Род словами и моменты, в которые придут импульсы. Шаблон обязан
+          уметь напечатать себя списком времён -- вот он и печатает, прямо
+          здесь: без этого «поезд» остаётся таким же словом на веру, каким был
+          «пуассоновский». У пуассоновского драйва моментов заранее нет вовсе,
+          и строка с ними не показывается -- врать про «0 моментов» незачем.
+
+          Строкой, а не полем, -- у тех родов, у которых поля моментов нет:
+          у списка спайков они правятся, и показывать их второй раз значило бы
+          спорить с самим собой. Какому роду поле положено, знает реестр, а не
+          этот файл: имя рода здесь было бы последней его копией в браузере. */}
+      {drive.protocol ? <p className="sb-note">{drive.protocol}</p> : null}
+      {drive.times.length && !params.some((param) => param.form === 'times') ? (
+        <p className="sb-note mono">{momentWords(drive.times)}</p>
       ) : null}
-      {drive.kind === 'spikes' ? (
-        <TextField
-          label="Моменты, мс"
-          value={drive.times.join(', ')}
-          onChange={(text) => void control.setDrive(drive.id, { times: moments(text) })}
-        />
-      ) : null}
-      <NumberField
-        label={drive.kind === 'current' ? 'Ток, нА' : 'Вес, нСм'}
-        value={drive.amplitude}
-        onChange={(amplitude) => void control.setDrive(drive.id, { amplitude })}
-      />
-      {drive.kind === 'current' ? null : (
+      {params.map((param) => (
+        <DriveParamField key={param.name} drive={drive} param={param} />
+      ))}
+      {kind && !kind.receptor ? null : (
         <SelectField
           label="Рецептор"
           hint={glossary.contact.receptor}

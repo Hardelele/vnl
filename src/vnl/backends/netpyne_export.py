@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .. import ir
+from .. import ir, protocols
 
 _SAFE = re.compile(r"[^0-9A-Za-z_]+")
 
@@ -194,10 +194,15 @@ def _stim_params(model: ir.Model) -> tuple[dict, dict, list[str]]:
                 "noise": 1.0,
                 "start": stim.start,
             }
-        else:  # spikes
+        else:  # список моментов: написанный руками или развёрнутый из шаблона
+            # Шаблон протокола экспортируется тем же `VecStim`, что и явный
+            # `spikes`: в NetPyNE «поезда» нет, а есть список времён, и это
+            # ровно тот список, который считает наш солвер. Разворачивать его
+            # здесь во второй раз значило бы завести вторую арифметику
+            # протокола -- и разойтись с прогоном на округлении (#508).
             sources[stim.id] = {
                 "type": "VecStim",
-                "spkTimes": list(stim.times),
+                "spkTimes": list(protocols.spike_times(stim)),
             }
         targets[f"{stim.id}_to"] = {
             "source": stim.id,

@@ -444,15 +444,38 @@ class Modulator:
 
 @dataclass
 class Stimulus:
+    """Драйв: чем по схеме бьют.
+
+    Поля шаблонов протоколов (`n` … `recovery`) лежат здесь плоско, рядом с
+    `times`, а не отдельным словарём параметров. Плоско -- потому что тогда
+    поле объявлено ровно один раз, с типом, и его само по себе сохраняет
+    хранилище, принимает `Project.set_stimulus` и проверяет резолвер. Словарь
+    `params: dict[str, float]` не дал бы ни типа, ни проверки «такого
+    параметра нет»: опечатка в имени молча осела бы в проекте.
+
+    Какие поля у какого рода осмысленны -- знает реестр `protocols.DRIVE_KINDS`,
+    он же разворачивает шаблон в `times`. Здесь только хранение.
+    """
+
     id: str
     target: Site
-    kind: str = "current"        # current | poisson | spikes
-    amplitude: float = 0.0       # нА для current, нСм для poisson
-    rate: float = 0.0            # Гц для poisson
+    kind: str = "current"        # см. protocols.KINDS
+    amplitude: float = 0.0       # нА для current, нСм для остальных
+    rate: float = 0.0            # Гц для poisson (средняя)
     times: tuple[float, ...] = () # мс для spikes
     start: float = 0.0
     stop: float = float("inf")
     receptor: str = "ampa"
+    # --- параметры шаблонов протоколов (#508) ---
+    n: int = 0                   # импульсов в группе (поезд, пачка, пары)
+    freq: float = 0.0            # Гц внутри группы
+    isi: float = 0.0             # мс между посылками пары
+    duration: float = 0.0        # мс, длительность тетануса
+    bursts: int = 0              # пачек в эпизоде (theta-burst)
+    burst_period: float = 0.0    # мс между началами пачек
+    repeats: int = 1             # повторов эпизода
+    period: float = 0.0          # мс между началами эпизодов
+    recovery: float = 0.0        # мс до тестового импульса; 0 -- теста нет
 
 
 @dataclass
