@@ -310,7 +310,9 @@ export function PatternScreen({ id, onBack, onToSandbox }: PatternScreenProps) {
               что в песочнице (#504). */}
           <div className="panel-head">
             <span className="panel-title">Активность сети</span>
-            <span className="mono panel-note">{TIMELINE_HINT}</span>
+            <span className="mono panel-note" title={TIMELINE_HINT}>
+              {TIMELINE_HINT}
+            </span>
           </div>
           <Timeline
             duration={duration || (pattern.demo?.run.duration ?? 1)}

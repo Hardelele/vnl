@@ -99,7 +99,13 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* Заголовок не переносится и не сжимается: он короткий и опознаёт панель.
+   Сжать его первым -- значит разорвать «Активность сети» на две строки и
+   втиснуть между ними пояснение, что и случилось, когда строка про жесты
+   стала длиннее (#548). */
 .panel-title {
+  flex: none;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: var(--weight-medium);
   letter-spacing: 0.06em;
@@ -107,7 +113,15 @@
   color: var(--muted);
 }
 
+/* Пояснение рядом с заголовком уступает место и обрезается многоточием.
+   Полный текст остаётся в `title`: строка одна на весь интерфейс, и заводить
+   её короткую копию значило бы держать две правды о том, что делает мышь. */
 .panel-note {
+  min-width: 0;
+  margin-left: var(--space-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11px;
   color: var(--faint);
 }

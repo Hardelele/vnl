@@ -131,7 +131,13 @@ export function ActivityPanel({ summary, children }: ActivityPanelProps) {
         <span className="mono ap-sum">{summary}</span>
         {/* Жесты названы словами: на вид они одинаковы, а щелчок откатывает
             сессию. Строка одна на весь интерфейс -- `TIMELINE_HINT`. */}
-        {open ? <span className="ap-hint">{TIMELINE_HINT}</span> : null}
+        {open ? (
+          // Полный текст в `title`: на узкой панели строка обрезается
+          // многоточием, и прочесть её надо уметь и тогда.
+          <span className="ap-hint" title={TIMELINE_HINT}>
+            {TIMELINE_HINT}
+          </span>
+        ) : null}
       </header>
 
       {open ? <div className="ap-body">{children}</div> : null}
