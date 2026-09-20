@@ -425,12 +425,14 @@ def test_a_rewind_forwards_does_not_leave_an_old_discharge_glowing():
 
         payload = item.update(since=0)
         cells = payload["cells"]
-        # `A` разрядилась на 50.4 мс и с тех пор молчит: к 105 мс она на покое.
-        assert payload["spikes"]["A"] == [50.4]
+        # `A` разрядилась на 51.0 мс и с тех пор молчит: к 105 мс она на покое.
+        # Было 50.4: до #568 событийный стимул доставлялся дважды, и клетка
+        # добирала до порога вдвое быстрее написанного.
+        assert payload["spikes"]["A"] == [51.0]
         assert cells["A"]["spiked"] is False
         assert cells["A"]["peak"] == cells["A"]["charge"]
         assert cells["A"]["charge"] == pytest.approx(0.0, abs=0.01)
-        # `B` разрядилась на 100.4 мс -- тоже до этого момента, а не в нём.
+        # `B` разрядилась на 101.0 мс -- тоже до этого момента, а не в нём.
         assert cells["B"]["spiked"] is False
         # А `X` за порог так и не вышла: её доля -- настоящая, и её видно.
         assert cells["X"]["spiked"] is False
@@ -447,8 +449,13 @@ def test_a_rewind_forwards_does_not_leave_an_old_discharge_glowing():
 # прыжок -- не кадр, шаг назад -- состояние, а не событие.
 #
 # Схема `synaptic_delay` выбрана за известные наперёд моменты разрядов: `NEAR`
-# разряжается на 23.8 мс (шапка паттерна обещает то же число), `FAR` -- на 9 мс
-# позже. Значит шаг с 23.0 на 24.0 накрывает разряд, а следующий -- уже нет.
+# разряжается на 24.4 мс (шапка паттерна обещает то же число), `FAR` -- на 9 мс
+# позже. Значит шаг с 24.0 на 25.0 накрывает разряд, а следующий -- уже нет.
+#
+# Было 23.8 и шаг с 23.0: после #568 импульс стимула перестал приходить
+# дважды, клетка добирает до порога на 0.6 мс дольше, и разряд переехал в
+# соседнюю миллисекунду. Проверяется здесь различие «шаг -- кадр, прыжок -- не
+# кадр», а не само число, поэтому окно сдвинуто вслед за разрядом.
 
 
 def delayed() -> Session:
@@ -465,14 +472,14 @@ def test_a_step_forward_shows_the_discharge_inside_it():
     """
     item = delayed()
     try:
-        item.seek(23.0)
+        item.seek(24.0)
         before = item.update(since=0)["cells"]["NEAR"]
         assert before["spiked"] is False, "разряд ещё не случился"
 
         item.step(1.0)
         inside = item.update(since=0)
-        assert inside["time"] == pytest.approx(24.0, abs=item.dt)
-        assert inside["spikes"]["NEAR"] == [23.8], "разряд и правда внутри шага"
+        assert inside["time"] == pytest.approx(25.0, abs=item.dt)
+        assert inside["spikes"]["NEAR"] == [24.4], "разряд и правда внутри шага"
         assert inside["cells"]["NEAR"]["spiked"] is True
         assert inside["cells"]["NEAR"]["peak"] >= 1.0
 
@@ -494,13 +501,13 @@ def test_a_step_back_shows_the_state_not_the_event():
     """
     item = delayed()
     try:
-        item.seek(23.0)
+        item.seek(24.0)
         item.step(1.0)
         assert item.update(since=0)["cells"]["NEAR"]["spiked"] is True
 
         item.step(-1.0)
         back = item.update(since=0)
-        assert back["time"] == pytest.approx(23.0, abs=item.dt)
+        assert back["time"] == pytest.approx(24.0, abs=item.dt)
         cells = back["cells"]["NEAR"]
         assert cells["spiked"] is False
         assert cells["peak"] == cells["charge"]
@@ -519,8 +526,8 @@ def test_a_jump_of_the_same_size_is_still_not_a_frame():
     """
     item = delayed()
     try:
-        item.seek(23.0)
         item.seek(24.0)
+        item.seek(25.0)
 
         cells = item.update(since=0)["cells"]["NEAR"]
         assert cells["spiked"] is False

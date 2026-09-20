@@ -49,43 +49,57 @@ def run(name: str):
 #: чтобы по упавшему тесту было видно, что именно разъехалось; отпечаток --
 #: чтобы разъехаться не могло молча: сдвиг одного спайка на шаг счёт не меняет.
 #: Числа сняты прогоном до правки, а не переписаны из шапок.
+#:
+#: Пересняты после #568, и вот чем это законно. До правки событийный стимул
+#: доставлялся дважды: написанный импульс 0.5 нСм клал на клетку 0.928 нСм, а
+#: поезд из восьми давал шестнадцать доставок. То есть отпечатки держали не
+#: «как считалось раньше», а «как считалось при вдвое большем драйве, чем
+#: написано в схеме», -- и сохранять их значило бы закреплять ошибку.
+#:
+#: Разъехались 14 записей из 23, и разъехались одинаково: клетка под прямым
+#: событийным драйвом добирается до порога на 0.6 мс дольше, и весь прогон за
+#: ней сдвигается на те же 0.6 мс. Счёт спайков уцелел везде, кроме `VTA` в
+#: `disinhibition`: четыре написанных импульса подкрепления давали шесть
+#: разрядов, теперь дают четыре -- столько, сколько написано. Девять записей
+#: не изменились вовсе: там драйв пуассоновский или токовый, а его доставка
+#: правкой не затронута.
 BEFORE_ADEX: dict[str, tuple[dict[str, int], str]] = {
-    "depression": ({"DEP": 0, "FAC": 0, "IN": 8}, "698dea2037f138a3"),
+    "depression": ({"DEP": 0, "FAC": 0, "IN": 8}, "31f9db0bbf9902ff"),
     "disinhibition": (
-        {"IN": 85, "PYR": 25, "SST": 60, "VIP": 36, "VTA": 6},
-        "00d187a7221d0a3f",
+        {"IN": 85, "PYR": 25, "SST": 60, "VIP": 36, "VTA": 4},
+        "6de07493ccc8b737",
     ),
     "ffi": ({"E": 6, "I": 45, "IN": 45}, "59f1dfbcce92d6b7"),
     "library/convergent_excitation": (
         {"A": 3, "B": 3, "C": 1, "X": 2},
-        "a024858377108875",
+        "31ca542328deaa9b",
     ),
     "library/disinhibition": (
-        {"IN": 85, "PYR": 25, "SST": 60, "VIP": 36, "VTA": 6},
-        "00d187a7221d0a3f",
+        {"IN": 85, "PYR": 25, "SST": 60, "VIP": 36, "VTA": 4},
+        "6de07493ccc8b737",
     ),
     "library/divergent_excitation": (
         {"A": 8, "B": 8, "C": 8, "D": 8},
-        "e86d06b5b8138e72",
+        "78b03d25f0e2b139",
     ),
     "library/ei_loop": ({"E1": 24, "E2": 20, "I": 60}, "9e1566da6e515d3d"),
     "library/eligibility_trace": (
         {"E_LONG": 9, "E_SHORT": 9, "IN": 19, "VTA": 4},
-        "830d94069bb1df4f",
+        "7e00bff649d85509",
     ),
-    "library/excitatory_synapse": ({"E": 8, "IN": 8}, "284e186893b74aa0"),
+    "library/excitatory_synapse": ({"E": 8, "IN": 8}, "9439851d774724a7"),
     "library/feedback_inhibition": (
         {"E": 16, "I": 32, "IN": 37},
         "32d6225f2fee529e",
     ),
     "library/feedforward_excitation": (
         {"A": 8, "B": 8, "C": 8},
-        "e548eca1c6153d02",
+        "96a5b8e6e3a57000",
     ),
     "library/ffi": ({"E": 6, "I": 45, "IN": 45}, "59f1dfbcce92d6b7"),
     "library/hyperpolarizing_inhibition": (
         {"E": 12, "I": 37, "IN": 20},
-        "8de5b103fe363853",
+        "4a50107f270ce3f4",
     ),
     "library/lateral_inhibition": (
         {"I1": 12, "I2": 68, "I3": 10, "P1": 6, "P2": 35, "P3": 5},
@@ -98,7 +112,7 @@ BEFORE_ADEX: dict[str, tuple[dict[str, int], str]] = {
     "library/mutual_inhibition": ({"A": 42, "B": 7}, "dc42288fe43469cd"),
     "library/neuromodulated_plasticity": (
         {"E": 14, "IN": 29, "VTA": 4},
-        "4e256457ed59d5aa",
+        "1f86f7fb0b5d9b9d",
     ),
     "library/recurrent_excitation": (
         {"A": 26, "B": 26, "IN": 9},
@@ -110,17 +124,17 @@ BEFORE_ADEX: dict[str, tuple[dict[str, int], str]] = {
     ),
     "library/short_term_depression": (
         {"DEP": 0, "IN": 8, "REF": 0},
-        "e3f9bfd4064a062a",
+        "59a24e0fc4a1065a",
     ),
     "library/short_term_facilitation": (
         {"FAC": 0, "IN": 8, "REF": 0},
-        "fc30e81972a7d910",
+        "744c5f9307610129",
     ),
     "library/spike_frequency_adaptation": (
         {"ADAPT": 21, "IN": 77, "PLAIN": 77},
-        "028af0d811697d16",
+        "0f5fc34b85480cea",
     ),
-    "library/synaptic_delay": ({"FAR": 8, "IN": 8, "NEAR": 8}, "b66e5a2a689b6a9e"),
+    "library/synaptic_delay": ({"FAR": 8, "IN": 8, "NEAR": 8}, "9d7b78e3910a25c9"),
 }
 
 
