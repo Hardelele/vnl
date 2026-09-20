@@ -141,6 +141,45 @@ describe('настройки блока', () => {
   })
 })
 
+describe('раскладка (#543)', () => {
+  it('отправляет места всех объектов одной операцией', async () => {
+    // Одной, а не по сдвигу на узел: раскладка -- одно действие человека, и
+    // «Отменить» обязано возвращать прежние места целиком.
+    const arrange = vi.fn().mockResolvedValue(project({ dirty: true }))
+    const move = vi.fn()
+    const control = await opened({ arrange, move })
+
+    await control.arrange(async () => ({ ffi: [12, 30], x: [252, 30] }))
+
+    expect(arrange).toHaveBeenCalledWith('s1', { ffi: [12, 30], x: [252, 30] })
+    expect(move).not.toHaveBeenCalled()
+    expect(control.store.getState().project?.dirty).toBe(true)
+  })
+
+  it('пустую раскладку до сервера не доводит', async () => {
+    const arrange = vi.fn()
+    const control = await opened({ arrange })
+
+    await control.arrange(async () => ({}))
+
+    expect(arrange).not.toHaveBeenCalled()
+    expect(control.store.getState().busy).toBe(false)
+  })
+
+  it('несчитанная раскладка -- обычный отказ, а не зависшая занятость', async () => {
+    const arrange = vi.fn()
+    const control = await opened({ arrange })
+
+    await control.arrange(async () => {
+      throw new Error('ELK не загрузился')
+    })
+
+    expect(arrange).not.toHaveBeenCalled()
+    expect(control.store.getState().busy).toBe(false)
+    expect(control.store.getState().error).toBe('ELK не загрузился')
+  })
+})
+
 describe('разбор блока (#532)', () => {
   it('снимает выделение и раскрытие: блока с этим именем больше нет', async () => {
     const ungroup = vi.fn().mockResolvedValue(project({ blocks: [] }))

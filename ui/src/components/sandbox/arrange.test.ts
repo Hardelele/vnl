@@ -1,0 +1,123 @@
+/**
+ * Что холст отдаёт раскладке и что делает с её ответом (#543).
+ *
+ * ELK подменён: в jsdom он не грузится, а проверяется здесь не он. Важно
+ * другое -- какие размеры узлов он получает (раскрытый блок вчетверо больше
+ * клетки, и одинаковые квадраты дали бы раскладку не этой схемы) и как его
+ * ответ превращается в места объектов: у блока место -- левый верхний угол, у
+ * клетки -- середина фигуры.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { arrangement } from './arrange'
+import { placeBoxes, type LaidGraph, type LayoutBox, type LayoutEdge } from '../../lib/place'
+import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
+
+vi.mock('../../lib/place', () => ({
+  placeBoxes: vi.fn(),
+}))
+
+const laid = vi.mocked(placeBoxes)
+
+/** Ответ движка: узлы в том же порядке, поставленные в ряд от нуля. */
+function answer(boxes: LayoutBox[]): LaidGraph {
+  let x = 0
+  const out = boxes.map((box) => {
+    const placed = { ...box, x, y: 0 }
+    x += box.width + 90
+    return placed
+  })
+  return { width: x, height: 0, boxes: out, edges: [] }
+}
+
+function block(id: string): SandboxBlock {
+  return {
+    id,
+    patternId: 'ffi',
+    label: id,
+    position: [0, 0],
+    ports: [],
+    counts: { neurons: 3, contacts: 3 },
+    scheme: { neurons: [], edges: [] },
+    cells: [],
+    contacts: [],
+  }
+}
+
+function neuron(id: string): SandboxNeuron {
+  return { id, cellType: 'relay', position: [0, 0], inhibitory: false, pointModel: null }
+}
+
+function link(id: string, from: string, to: string): SandboxLink {
+  return {
+    id,
+    source: { instance: from, port: null, section: 'soma', fraction: 0.5 },
+    target: { instance: to, port: null, section: 'soma', fraction: 0.5 },
+    receptor: 'ampa',
+    inhibitory: false,
+    weight: 1,
+    delay: 1,
+  }
+}
+
+function boxes(): LayoutBox[] {
+  return laid.mock.calls[0]?.[0] ?? []
+}
+
+function edges(): LayoutEdge[] {
+  return laid.mock.calls[0]?.[1] ?? []
+}
+
+beforeEach(() => {
+  laid.mockReset()
+  laid.mockImplementation((given) => Promise.resolve(answer(given)))
+})
+
+describe('что уходит в раскладку', () => {
+  it('размер узла -- настоящий размер фигуры на холсте', async () => {
+    await arrangement([block('ffi'), block('ffi2')], [neuron('x')], [], ['ffi2'])
+
+    // Свёрнутый блок, раскрытый и клетка -- три разных габарита. ELK разводит
+    // узлы по ним, и одинаковые квадраты значили бы раскладку не этой схемы.
+    expect(boxes()).toEqual([
+      { id: 'ffi', width: 150, height: 62 },
+      { id: 'ffi2', width: 236, height: 152 },
+      { id: 'x', width: 74, height: 38 },
+    ])
+  })
+
+  it('связь во внутренний узел блока считается связью с блоком (#530)', async () => {
+    await arrangement(
+      [block('ffi')],
+      [neuron('x')],
+      [link('l1', 'x', 'ffi/I')],
+      ['ffi'],
+    )
+
+    // По холсту двигается блок целиком, а не его внутренний узел.
+    expect(edges()).toEqual([{ id: 'l1', from: 'x', to: 'ffi' }])
+  })
+
+  it('связь объекта на себя слоя не добавляет и в раскладку не идёт', async () => {
+    await arrangement([], [neuron('x')], [link('l1', 'x', 'x')], [])
+
+    expect(edges()).toEqual([])
+  })
+})
+
+describe('что раскладка возвращает', () => {
+  it('у блока место -- угол, у клетки -- середина фигуры', async () => {
+    const places = await arrangement([block('ffi')], [neuron('x')], [], [])
+
+    // Холст рисует коробку блока от места, а фигуру клетки -- вокруг него.
+    // Отступ общий: `viewBox` начинается с нуля, и прижатая к краю схема
+    // потеряла бы и обводку, и надпись о заряде над клеткой.
+    expect(places).toEqual({ ffi: [12, 30], x: [12 + 240 + 37, 30 + 19] })
+  })
+
+  it('пустой холст раскладывать нечего -- и движок не зовётся', async () => {
+    expect(await arrangement([], [], [], [])).toEqual({})
+    expect(laid).not.toHaveBeenCalled()
+  })
+})

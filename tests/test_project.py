@@ -17,7 +17,7 @@ from vnl.patterns import (
 )
 from vnl.project import Project
 from vnl.resolve import load
-from vnl.store import Store
+from vnl.store import Store, to_plain
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
@@ -158,6 +158,70 @@ def test_moving_a_block_does_not_stale_the_result(project, ffi):
 
     assert not project.run_is_stale
     assert project.dirty, "но сохранить проект всё же нужно"
+
+
+# --- раскладка (#543) ------------------------------------------------------
+
+
+def test_arranging_is_one_step_of_undo(project, ffi):
+    """«Отменить» возвращает прежние места целиком, а не по одному узлу."""
+    project.insert_pattern(ffi, instance_id="a", position=(60.0, 60.0))
+    project.insert_pattern(ffi, instance_id="b", position=(280.0, 60.0))
+    project.add_neuron("x", ir.CellType("relay"), position=(60.0, 200.0))
+    steps = len(project.history)
+
+    project.arrange({"a": (12.0, 30.0), "b": (252.0, 30.0), "x": (492.0, 49.0)})
+
+    assert [project.sandbox.instance("a").position] == [(12.0, 30.0)]
+    assert project.sandbox.neurons["x"].position == (492.0, 49.0)
+    assert len(project.history) == steps + 1, "раскладка -- одно действие"
+
+    project.undo()
+
+    assert project.sandbox.instance("a").position == (60.0, 60.0)
+    assert project.sandbox.instance("b").position == (280.0, 60.0)
+    assert project.sandbox.neurons["x"].position == (60.0, 200.0)
+
+
+def test_arranging_does_not_stale_the_result(project, ffi):
+    """Место на физику не влияет: прогон от раскладки стареть не должен."""
+    running_project(project, ffi).run()
+    before = project.fingerprint()
+
+    project.arrange({"a": (12.0, 30.0)})
+
+    assert project.fingerprint() == before
+    assert not project.run_is_stale
+    assert project.dirty, "но сохранить проект всё же нужно"
+
+
+def test_arranging_only_moves_what_is_on_the_canvas(project, ffi):
+    """Имя не с холста -- отказ, и без следа в истории."""
+    project.insert_pattern(ffi, instance_id="a", position=(60.0, 60.0))
+    steps = len(project.history)
+
+    with pytest.raises(PatternError, match="нет объектов"):
+        project.arrange({"a": (10.0, 10.0), "нетакого": (20.0, 20.0)})
+
+    assert project.sandbox.instance("a").position == (60.0, 60.0)
+    assert len(project.history) == steps, "отказ не оставляет шага отмены"
+
+
+def test_arranging_touches_nothing_but_places(project, ffi):
+    """Раскладка не трогает ни связей, ни параметров, ни стимулов."""
+    running_project(project, ffi)
+    project.insert_pattern(ffi, instance_id="b")
+    project.connect(Endpoint("a", "out"), Endpoint("b", "in"), link_id="x")
+    before = to_plain(project.sandbox)
+
+    project.arrange({"a": (12.0, 30.0), "b": (252.0, 30.0)})
+    after = to_plain(project.sandbox)
+
+    for block in after["instances"]:
+        block["position"] = dict(zip("xy", (0, 0)))
+    for block in before["instances"]:
+        block["position"] = dict(zip("xy", (0, 0)))
+    assert after == before
 
 
 # --- операции -------------------------------------------------------------

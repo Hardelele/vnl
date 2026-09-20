@@ -1,5 +1,10 @@
 /**
- * Раскладка схемы для карточки паттерна.
+ * Раскладка схемы для карточки паттерна -- и для холста песочницы (#543).
+ *
+ * Граф у них разный: на карточке это клетки паттерна, на холсте -- объекты
+ * проекта, блоки и клетки вперемешку. Движок и настройки одни и те же
+ * (`placeBoxes`): две настройки разошлись бы незаметно. Разница в том, что
+ * карточка раскладку показывает, а песочница записывает её в проект.
  *
  * Считает ELK -- тот же движок, что и у статической страницы прогона, и с теми
  * же настройками. Своя послойная расстановка (`miniature`) для карточки не
@@ -81,57 +86,121 @@ export function builtinPlacement(scheme: Scheme): Placement {
   }
 }
 
+/**
+ * Узел раскладки: имя и размер той фигуры, которая на самом деле нарисована.
+ *
+ * Размер обязателен и настоящий. ELK раздвигает узлы по их габаритам, и
+ * одинаковые квадраты вместо фигур дали бы раскладку не этой схемы: раскрытый
+ * блок вчетверо больше клетки и обязан занимать вчетверо больше места.
+ */
+export interface LayoutBox {
+  id: string
+  width: number
+  height: number
+}
+
+export interface LayoutEdge {
+  id: string
+  from: string
+  to: string
+}
+
+/** Место, посчитанное ELK: левый верхний угол фигуры. */
+export interface LaidBox extends LayoutBox {
+  x: number
+  y: number
+}
+
+export interface LaidGraph {
+  width: number
+  height: number
+  boxes: LaidBox[]
+  edges: Array<{ id: string; points: Array<{ x: number; y: number }> }>
+}
+
+/**
+ * Раскладка графа из прямоугольников -- одна на всех, кто её просит.
+ *
+ * Схема карточки и холст песочницы раскладывают разные графы (клетки паттерна
+ * и объекты проекта), но одним движком и с одними настройками: две настройки
+ * разошлись бы незаметно, и один и тот же блок читался бы в витрине цепочкой,
+ * а в рабочем месте развилкой.
+ */
+export async function placeBoxes(
+  boxes: LayoutBox[],
+  edges: LayoutEdge[],
+): Promise<LaidGraph> {
+  const { default: ELK } = await import('elkjs/lib/elk.bundled.js')
+  const known = new Set(boxes.map((box) => box.id))
+  const laid = await new ELK().layout({
+    id: 'root',
+    layoutOptions: OPTIONS,
+    children: boxes.map((box) => ({ ...box })),
+    edges: edges
+      // Связь в исчезнувший узел ELK принимает за ошибку графа и бросает
+      // целиком, а на холсте такая связь бывает видна.
+      .filter((edge) => known.has(edge.from) && known.has(edge.to))
+      .map((edge) => ({ id: edge.id, sources: [edge.from], targets: [edge.to] })),
+  })
+  return {
+    width: laid.width ?? 0,
+    height: laid.height ?? 0,
+    boxes: (laid.children ?? []).map((child) => ({
+      id: child.id,
+      x: child.x ?? 0,
+      y: child.y ?? 0,
+      width: child.width ?? 0,
+      height: child.height ?? 0,
+    })),
+    edges: (laid.edges ?? []).flatMap((edge) => {
+      const section = edge.sections?.[0]
+      if (!section) return []
+      return [
+        {
+          id: edge.id,
+          points: [
+            section.startPoint,
+            ...(section.bendPoints ?? []),
+            section.endPoint,
+          ].map((point) => ({ x: point.x, y: point.y })),
+        },
+      ]
+    }),
+  }
+}
+
 export async function placeScheme(scheme: Scheme): Promise<Placement> {
   if (!scheme.neurons.length) return builtinPlacement(scheme)
 
-  const { default: ELK } = await import('elkjs/lib/elk.bundled.js')
   const inhibitory = new Map(scheme.neurons.map((n) => [n.id, n.inhibitory]))
   const kinds = new Map(scheme.edges.map((edge) => [edge.id, edge.kind]))
 
-  const graph = {
-    id: 'root',
-    layoutOptions: OPTIONS,
-    children: scheme.neurons.map((neuron) => ({
+  const laid = await placeBoxes(
+    scheme.neurons.map((neuron) => ({
       id: neuron.id,
       width: nodeWidth(neuron.id) + 12,
       height: NODE_HEIGHT,
     })),
-    edges: scheme.edges
-      .filter((edge) => inhibitory.has(edge.from) && inhibitory.has(edge.to))
-      .map((edge) => ({ id: edge.id, sources: [edge.from], targets: [edge.to] })),
-  }
-
-  const laid = await new ELK().layout(graph)
-  const nodes: PlacedNode[] = (laid.children ?? []).map((child) => ({
-    id: child.id,
-    inhibitory: inhibitory.get(child.id) ?? false,
-    // ELK отдаёт левый верхний угол, а рисуем мы от центра.
-    x: (child.x ?? 0) + (child.width ?? 0) / 2,
-    y: (child.y ?? 0) + (child.height ?? 0) / 2,
-    width: child.width ?? 0,
-    height: child.height ?? 0,
-  }))
-
-  const edges: PlacedEdge[] = []
-  for (const edge of laid.edges ?? []) {
-    const section = edge.sections?.[0]
-    if (!section) continue
-    edges.push({
-      id: edge.id,
-      kind: kinds.get(edge.id) ?? 'exc',
-      points: [
-        section.startPoint,
-        ...(section.bendPoints ?? []),
-        section.endPoint,
-      ].map((point) => ({ x: point.x, y: point.y })),
-    })
-  }
+    scheme.edges.map((edge) => ({ id: edge.id, from: edge.from, to: edge.to })),
+  )
 
   return {
-    width: laid.width ?? BOX.width,
-    height: laid.height ?? BOX.height,
-    nodes,
-    edges,
+    width: laid.width || BOX.width,
+    height: laid.height || BOX.height,
+    // ELK отдаёт левый верхний угол, а рисуем мы от центра.
+    nodes: laid.boxes.map((box) => ({
+      id: box.id,
+      inhibitory: inhibitory.get(box.id) ?? false,
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2,
+      width: box.width,
+      height: box.height,
+    })),
+    edges: laid.edges.map((edge) => ({
+      id: edge.id,
+      kind: kinds.get(edge.id) ?? 'exc',
+      points: edge.points,
+    })),
     engine: 'elk',
   }
 }

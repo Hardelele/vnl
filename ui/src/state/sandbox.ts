@@ -22,6 +22,7 @@ import {
   addNeuron,
   addRecording,
   addStimulus,
+  arrangeObjects,
   connect,
   createSandbox,
   listSandboxes,
@@ -42,6 +43,7 @@ import {
   type ContactParams,
   type DriveParams,
   type PatternDraft,
+  type Places,
   type SandboxRow,
   type SandboxState,
 } from '../model/sandbox'
@@ -135,6 +137,7 @@ const EMPTY: SandboxView = {
 
 export interface SandboxPorts {
   list: typeof listSandboxes
+  arrange: typeof arrangeObjects
   create: typeof createSandbox
   open: typeof openSandbox
   addBlock: typeof addBlock
@@ -161,6 +164,7 @@ export interface SandboxPorts {
 
 const DEFAULT_PORTS: SandboxPorts = {
   list: listSandboxes,
+  arrange: arrangeObjects,
   create: createSandbox,
   open: openSandbox,
   addBlock,
@@ -367,6 +371,34 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     move: (object: string, position: [number, number]) =>
       act((id) => io.move(id, object, position)),
+
+    /**
+     * Разложить схему (#543).
+     *
+     * По требованию, а не на каждую вставку: человек расставил объекты по
+     * смыслу, и новая клетка, перетасовавшая бы всю схему, отняла бы у него
+     * эту работу. Кнопка -- его решение.
+     *
+     * Места приходят посчитанными: их считает холст, который один знает
+     * размеры фигур и то, какие блоки сейчас раскрыты. Применяются они одной
+     * операцией проекта -- иначе «Отменить» возвращало бы схему по одному
+     * узлу, -- и сервер, как на любую операцию песочницы, отвечает состоянием
+     * целиком.
+     */
+    async arrange(compute: () => Promise<Places>): Promise<void> {
+      if (!store.getState().project) return
+      store.setState({ busy: true })
+      try {
+        const places = await compute()
+        if (!Object.keys(places).length) {
+          store.setState({ busy: false })
+          return
+        }
+        await act((id) => io.arrange(id, places))
+      } catch (reason) {
+        fail(reason)
+      }
+    },
 
     setParams: (link: string, params: ContactParams) =>
       act((id) => io.params(id, link, params)),

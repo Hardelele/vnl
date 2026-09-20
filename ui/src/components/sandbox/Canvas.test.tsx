@@ -87,6 +87,9 @@ const LINK: SandboxLink = {
   delay: 1,
 }
 
+/** Возврат: та же пара клеток, но связь идёт справа налево. */
+const BACK: SandboxLink = { ...LINK, id: 'l3', source: LINK.target, target: LINK.source }
+
 let root: Root | null = null
 let host: HTMLElement
 
@@ -189,6 +192,32 @@ describe('клетка на холсте', () => {
     // Прежний холст умел вести линию только между портами и на клетках молча
     // не рисовал ничего.
     expect(host.querySelectorAll('.cv-link .cv-wire')).toHaveLength(1)
+  })
+
+  it('связь справа налево уходит слева и приходит справа', async () => {
+    // Клетки стоят на 120 и 360, фигура шириной 74. Прежде сторона была
+    // прибита к роли конца -- провод выходил справа от `I` (397) и приходил
+    // слева к `E` (83), то есть огибал обе клетки снаружи (#542).
+    await mount({ links: [BACK] })
+
+    const drawn = host.querySelector('.cv-link .cv-wire')?.getAttribute('d') ?? ''
+    expect(drawn.startsWith('M 323 100 ')).toBe(true)
+    expect(drawn.endsWith(' 157 100')).toBe(true)
+  })
+
+  it('связь слева направо уходит справа и приходит слева', async () => {
+    await mount({ links: [LINK] })
+
+    const drawn = host.querySelector('.cv-link .cv-wire')?.getAttribute('d') ?? ''
+    expect(drawn.startsWith('M 157 100 ')).toBe(true)
+    expect(drawn.endsWith(' 323 100')).toBe(true)
+  })
+
+  it('полоса попадания мышью -- та же кривая, что видимая', async () => {
+    await mount({ links: [BACK] })
+
+    const hit = host.querySelector('.cv-link .cv-hit')?.getAttribute('d')
+    expect(hit).toBe(host.querySelector('.cv-link .cv-wire')?.getAttribute('d'))
   })
 
   it('пустой холст зовёт положить клетку, а не только вставить паттерн', async () => {

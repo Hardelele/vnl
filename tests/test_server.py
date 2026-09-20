@@ -794,6 +794,45 @@ def test_moving_a_block_is_not_a_change_of_physics(base):
     assert moved["problems"] == moved["problems"]
 
 
+def test_arranging_moves_everything_in_one_step(base):
+    """«Разложить»: места приходят готовыми, а «Отменить» возвращает их все.
+
+    Считает раскладку интерфейс -- размеры фигур и раскрытие блока живут
+    только там, -- а сервер отвечает, как на любую операцию песочницы, полным
+    состоянием проекта.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    before = {block["id"]: block["position"] for block in project["blocks"]}
+
+    status, laid = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/arrange",
+        {"places": {first: [12, 30], second: [252, 30]}},
+    )
+    assert status == 200
+    assert {block["id"]: block["position"] for block in laid["blocks"]} == {
+        first: [12, 30],
+        second: [252, 30],
+    }
+    assert laid["fingerprint"] == project["fingerprint"], "место физику не меняет"
+    assert laid["dirty"] is True
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert {block["id"]: block["position"] for block in undone["blocks"]} == before
+
+
+def test_arranging_an_unknown_object_says_what_is_wrong(base):
+    sandbox = sandbox_with_two_blocks(base)
+    status, answer = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/arrange", {"places": {"нетакого": [0, 0]}}
+    )
+    assert status == 400
+    assert "нет объектов" in answer["error"]
+
+
 def test_the_payload_carries_the_fingerprint_of_the_built_network(base):
     """Открытая сессия считает модель на момент запуска.
 

@@ -28,6 +28,7 @@ import { Thumbnail } from '../catalog/Thumbnail'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { ActivityPanel } from './ActivityPanel'
+import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { Properties, RunFields, where } from './Properties'
 import { SavePattern } from './SavePattern'
@@ -218,6 +219,23 @@ export function SandboxScreen() {
           onReset={() => void sim.reset()}
         />
 
+        {/* Раскладка -- по требованию, а не на каждую вставку: человек
+            расставил объекты по смыслу, и новая клетка, перетасовавшая бы всю
+            схему, отняла бы у него эту работу (#543). Места считает холст: он
+            один знает размеры фигур и то, какие блоки сейчас раскрыты. */}
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={keeping || (!project.blocks.length && !project.neurons.length)}
+          title="Расставить объекты по слоям"
+          onClick={() =>
+            void control.arrange(() =>
+              arrangement(project.blocks, project.neurons, project.links, opened),
+            )
+          }
+        >
+          Разложить
+        </button>
         <button
           type="button"
           className="btn-secondary"
