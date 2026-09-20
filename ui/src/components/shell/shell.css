@@ -12,6 +12,13 @@
   overflow: auto;
 }
 
+/* Экран-окно: своей прокрутки у страницы нет, скроллятся внутренности
+   панелей. Так живёт песочница -- см. `sandbox.css`. */
+.shell-screen.is-window {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .bar {
   flex: none;
   height: 48px;

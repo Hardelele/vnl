@@ -11,9 +11,17 @@
  * Два разных действия мышью. Наведение показывает значения под указателем и
  * ничего не меняет. Щелчок ставит время симуляции на выбранный момент -- это
  * уже не просмотр, а откат: сессия восстанавливает состояние и встаёт на паузу.
+ * Оба названы словами (`TIMELINE_HINT`), потому что необратим из них ровно
+ * один, а на вид они одинаковы (#504).
+ *
+ * Своей шапки у таймлайна нет: заголовок и объяснение жестов даёт панель,
+ * внутри которой он стоит («Активность сети» в песочнице, `panel-head` на
+ * карточке паттерна). Второй заголовок под первым съедал бы строку в панели,
+ * высота которой и так спорная, а время под указателем показывается там, где
+ * оно и нужно -- подписью на самой шкале, у волоска.
  */
 
-import { useCallback, useMemo, useState, type PointerEvent } from 'react'
+import { useCallback, useMemo, useState, type PointerEvent, type ReactNode } from 'react'
 
 import { ticks } from '../../lib/analysis'
 import './timeline.css'
@@ -21,6 +29,16 @@ import './timeline.css'
 /** Внутренняя ширина дорожки: тянется по месту, важна только пропорция. */
 const TRACK = 1000
 const LANE = 100
+
+/**
+ * Что делает мышь на поле дорожек.
+ *
+ * Строка одна на все экраны: жесты у таймлайна общие, и разойтись их описания
+ * не должны. Стоит она в шапке панели и в подсказке самого поля -- прочесть её
+ * надо до щелчка, а не после.
+ */
+export const TIMELINE_HINT =
+  'наведение показывает значения, щелчок перематывает время и ставит на паузу'
 
 export interface TimelineProps {
   duration: number
@@ -87,53 +105,35 @@ export function Timeline({
 
   return (
     <div className="tl">
-      <div className="tl-head">
-        <span className="panel-title">Активность сети</span>
-        <span className="mono tl-hover">
-          {hover === null ? '' : `${hover.toFixed(1)} мс`}
-        </span>
-      </div>
-
       <div className="tl-body">
         <div className="tl-scale">
-          <span className="tl-name" />
+          <span className="tl-corner" />
           <span className="tl-marks">
             {grid.map((moment) => (
               <span key={moment} className="mono tl-mark" style={{ left: `${share(moment)}%` }}>
                 {moment}
               </span>
             ))}
+            {/* Время под указателем стоит у самого волоска, а не в углу панели:
+                читают его вместе со значениями на дорожках, и глазами ходить
+                за ним через весь экран незачем. */}
+            {hover === null ? null : (
+              <span className="mono tl-now" style={{ left: `${share(hover)}%` }}>
+                {hover.toFixed(1)} мс
+              </span>
+            )}
           </span>
         </div>
 
         {lanes.map((item) => (
           <div className={`tl-lane${selected === item.name ? ' is-on' : ''}`} key={item.name}>
-            <button
-              type="button"
-              className="tl-name"
-              onClick={() => onSelect?.(item.name)}
-              // Имя всё равно обрезается: у клеток собранной схемы общая
-              // приставка блока, и шесть дорожек различаются её хвостом.
-              title={onSelect ? `${item.name} — показать в инспекторе` : item.name}
-            >
-              {/* Имя клетки вперёд, блок следом: в собранной схеме приставка
-                  у дорожек общая, и обрезать надо её, а не то, чем они
-                  различаются. Полное имя -- в подсказке. */}
-              <span className="tl-title">
-                <span className={`tl-dot${item.inhibitory ? ' is-inh' : ''}`} />
-                <span className="tl-cell">{cellOf(item.name)}</span>
-                {ownerOf(item.name) ? (
-                  <span className="tl-owner">{ownerOf(item.name)}</span>
-                ) : null}
-              </span>
-              <span className="mono tl-stat">
-                {item.spikes.length} сп. · {item.rate.toFixed(0)} Гц
-              </span>
-              <span className="mono tl-value">{valueAt(item, hover, dt)}</span>
-            </button>
+            <LaneName item={item} value={valueAt(item, hover, dt)} onSelect={onSelect} />
 
             <div
               className={`tl-field${disabled ? ' is-off' : ''}`}
+              // Подсказка на самом поле, а не только в шапке: щелчок здесь
+              // откатывает сессию, и узнать об этом надо до него.
+              title={disabled ? undefined : TIMELINE_HINT}
               onPointerMove={(event) => setHover(at(event))}
               onPointerLeave={() => setHover(null)}
               onPointerDown={(event) => {
@@ -180,6 +180,64 @@ export function Timeline({
         ))}
       </div>
     </div>
+  )
+}
+
+/**
+ * Подпись дорожки.
+ *
+ * Кнопкой она становится только там, где щелчку есть что открыть: в песочнице
+ * инспектора клетки нет, `onSelect` не передают, и кнопка с подсветкой обещала
+ * бы действие, которого на этом экране не существует (#504).
+ *
+ * Имя клетки и приставка блока -- в двух строках, а не в одну: в собранной
+ * схеме приставка у дорожек общая (`ffi/E`, `ffi/I`), различаются они как раз
+ * хвостом, и обрезать в одной строке пришлось бы его. Полное имя всегда в
+ * подсказке, и передан `onSelect` или нет -- на это не влияет.
+ */
+function LaneName({
+  item,
+  value,
+  onSelect,
+}: {
+  item: Lane
+  value: string
+  onSelect?: (name: string) => void
+}) {
+  const inside: ReactNode = (
+    <>
+      <span className="tl-title">
+        <span className={`tl-dot${item.inhibitory ? ' is-inh' : ''}`} />
+        <span className="tl-cell">{cellOf(item.name)}</span>
+      </span>
+      <span className="mono tl-value">{value}</span>
+      {/* У положенной руками клетки приставки нет -- и пустой строки под
+          именем тоже: место в панели не тратится на прочерк. */}
+      {ownerOf(item.name) ? (
+        <span className="mono tl-owner">{ownerOf(item.name)}</span>
+      ) : null}
+      <span className="mono tl-stat">
+        {item.spikes.length} сп. · {item.rate.toFixed(0)} Гц
+      </span>
+    </>
+  )
+
+  if (!onSelect) {
+    return (
+      <span className="tl-name" title={item.name}>
+        {inside}
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      className="tl-name is-pick"
+      onClick={() => onSelect(item.name)}
+      title={`${item.name} — показать в инспекторе`}
+    >
+      {inside}
+    </button>
   )
 }
 

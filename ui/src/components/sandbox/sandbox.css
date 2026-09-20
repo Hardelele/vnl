@@ -1,19 +1,45 @@
-/* Песочница: панель, три колонки, таймлайн под холстом. */
+/* Песочница: окно IDE -- панель сверху, три колонки посередине, активность
+   сети прибита снизу.
+
+   Экран ровно в высоту окна, и прокрутки у него нет: скроллятся внутренности
+   панелей. Иначе таймлайн уезжает ниже края вместе с транспортом, и «смотреть
+   спайки» и «остановить прогон» оказываются двумя положениями скролла (#504).
+   Вариант «страница скроллится, панель прибита поверх» отвергнут на интервью:
+   холст всё равно уезжал бы под панель. */
 
 .sb {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   height: 100%;
-  padding: var(--space-3) var(--space-4) var(--space-4);
   min-height: 0;
+  overflow: hidden;
 }
 
 .sb-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  flex: none;
   gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* Полоса сообщений и форм. Своей высоты не навязывает, но и холст не съедает:
+   выше трети окна не растёт, а внутри прокручивается. */
+.sb-notes {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: var(--space-2);
+  max-height: 34%;
+  overflow: auto;
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.sb-notes:empty {
+  display: none;
 }
 
 .sb-pick-project {
@@ -67,6 +93,7 @@
   gap: var(--space-3);
   flex: 1;
   min-height: 0;
+  padding: var(--space-3) var(--space-4);
 }
 
 @media (max-width: 1100px) {
@@ -88,10 +115,109 @@
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: var(--space-2);
+}
+
+/* Холст занимает всю колонку: таймлайн уехал в нижнюю панель, и делить с ним
+   высоту больше не с кем. */
+.sb-canvas > .canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+/* --- нижняя панель «Активность сети» ---------------------------------------
+   Прибита снизу, тянется за верхнюю границу, сворачивается в полоску. Высота
+   помнится браузером (`state/desk`): она про экран человека, а не про схему. */
+
+.ap {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.ap.is-folded {
+  height: auto;
+}
+
+/* Граница-ручка. Тонкая полоса поверх верхнего края: курсор говорит, что её
+   тянут, а подсветка -- что тянут именно сейчас. */
+.ap-grip {
+  flex: none;
+  height: 6px;
+  margin-bottom: -1px;
+  cursor: row-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.ap-grip:hover,
+.ap-grip.is-live,
+.ap-grip:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.ap-head {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.ap-fold {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ap-fold:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+
+.ap-sum {
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+/* Названные жесты. Уходят первыми, когда места нет: это объяснение, а не
+   управление, и в подсказке самого поля оно есть всегда. */
+.ap-hint {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  .ap-hint {
+    display: none;
+  }
+}
+
+/* Прокручиваются дорожки, а не экран. */
+.ap-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .sb-tabs {

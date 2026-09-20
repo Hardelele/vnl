@@ -4,23 +4,14 @@
    вертикали в каждой дорожке, на шкале и под курсором. */
 
 .tl {
-  --tl-name: 150px;
+  /* Колонка имён шире прежних 150px: в ней теперь две строки -- имя клетки и
+     приставка блока, -- и обрезать одну из них значило бы вернуть `ffi/E` с
+     многоточием, из-за которого дорожки и не читались (#504). */
+  --tl-name: 176px;
   --tl-lane: 64px;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-}
-
-.tl-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3) 0;
-}
-
-.tl-hover {
-  font-size: 11px;
-  color: var(--muted);
 }
 
 .tl-body {
@@ -38,7 +29,7 @@
 }
 
 .tl-scale {
-  height: 14px;
+  height: 16px;
 }
 
 .tl-marks {
@@ -53,10 +44,24 @@
   white-space: nowrap;
 }
 
+/* Время под указателем. Поверх подписей шкалы и с подложкой: иначе оно
+   складывается с ближайшим тиком в нечитаемую кашу. */
+.tl-now {
+  position: absolute;
+  z-index: 1;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--selected);
+  color: var(--accent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .tl-name {
   display: grid;
-  grid-template-rows: auto auto;
   grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
   align-content: center;
   gap: 2px var(--space-2);
   padding: 0 var(--space-2) 0 0;
@@ -65,11 +70,16 @@
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
   border-radius: 6px;
 }
 
-.tl-name:hover {
+/* Подсветка и палец -- только у кнопки. Без `onSelect` имя ничего не
+   открывает, и выглядеть нажимаемым оно не должно (#504). */
+.tl-name.is-pick {
+  cursor: pointer;
+}
+
+.tl-name.is-pick:hover {
   background: var(--subtle);
 }
 
@@ -77,32 +87,32 @@
   background: var(--selected);
 }
 
-/* Имя занимает всю ширину колонки: рядом со счётчиком спайков на него
-   оставалось восемь знаков, а у клеток собранной схемы общая приставка. */
 .tl-title {
-  grid-column: 1 / -1;
+  grid-area: 1 / 1;
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+}
+
+.tl-cell {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tl-cell {
-  flex: none;
-}
-
-/* Приставка блока: она у дорожек общая, поэтому и обрезается она. */
+/* Приставка блока -- второй строкой: в одной строке с именем она отбирала бы
+   у него место, а различаются дорожки именно именем. */
 .tl-owner {
+  grid-area: 2 / 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: var(--font-mono);
+  white-space: nowrap;
   font-size: 10px;
-  font-weight: var(--weight-regular);
   color: var(--faint);
 }
 
@@ -127,19 +137,25 @@
   white-space: nowrap;
 }
 
+.tl-stat {
+  grid-area: 2 / 2;
+  text-align: right;
+}
+
 .tl-value {
-  grid-column: 2;
-  grid-row: 1;
+  grid-area: 1 / 2;
   color: var(--muted);
   text-align: right;
   min-width: 64px;
 }
 
+/* Курсор перекрестья: наведение показывает значения. Прежний `ew-resize`
+   читался как «тяни», а тянуть здесь нечего -- щелчок перематывает (#504). */
 .tl-field {
   position: relative;
   height: var(--tl-lane);
   border-bottom: 1px solid var(--line);
-  cursor: ew-resize;
+  cursor: crosshair;
 }
 
 .tl-field.is-off {
