@@ -9,17 +9,20 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { TIMELINE_HINT, Timeline } from './Timeline'
+import { TIMELINE_HINT, Timeline, momentAt } from './Timeline'
 
 const ORDER = ['short_term_depression2/DEP', 'E2']
 const SPIKES: Record<string, number[]> = { 'short_term_depression2/DEP': [10, 30], E2: [] }
 
 let root: Root | null = null
 let host: HTMLElement
+let seeks: number[] = []
 
-async function mount(extra: { onSelect?: (name: string) => void } = {}): Promise<void> {
+async function mount(
+  extra: { onSelect?: (name: string) => void; onSeek?: (time: number) => void } = {},
+): Promise<void> {
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -33,7 +36,7 @@ async function mount(extra: { onSelect?: (name: string) => void } = {}): Promise
         spikes={SPIKES}
         traces={{}}
         inhibitory={{ E2: false }}
-        onSeek={() => undefined}
+        onSeek={(moment) => seeks.push(moment)}
         {...extra}
       />,
     )
@@ -48,6 +51,8 @@ afterEach(() => {
   act(() => root?.unmount())
   host.remove()
   root = null
+  seeks = []
+  vi.restoreAllMocks()
 })
 
 describe('дорожка таймлайна', () => {
@@ -86,5 +91,138 @@ describe('дорожка таймлайна', () => {
 
     const field = host.querySelector('.tl-field')
     expect(field?.getAttribute('title')).toBe(TIMELINE_HINT)
+  })
+})
+
+/**
+ * Масштаб времени (#536).
+ *
+ * Главное здесь одно: щелчок обязан попадать в момент под курсором при
+ * текущем масштабе и прокрутке. Это единственное место, где масштаб меняет не
+ * показ, а поведение, -- остальное можно увидеть глазами, а промах перемотки
+ * выглядит как исправная перемотка не туда.
+ */
+describe('масштаб времени', () => {
+  it('момент считается по геометрии поля, а не по доле видимой ширины', () => {
+    // Панель 700 px, прогон 400 мс, приближение 8x, прокручено на 1400 px:
+    // поле шириной 5600 px уехало влево, и его левый край -- за экраном.
+    const box = { left: -1400, width: 5600 }
+
+    expect(momentAt(350, box, 400)).toBeCloseTo(125, 6)
+    // Доля от видимой ширины дала бы 200 мс -- ровно та ошибка, ради которой
+    // геометрию и берут у самого поля.
+    expect((350 / 700) * 400).toBe(200)
+
+    // Края не выпускают за прогон: указатель может стоять и левее начала.
+    expect(momentAt(-2000, box, 400)).toBe(0)
+    expect(momentAt(9000, box, 400)).toBe(400)
+  })
+
+  it('щелчок при масштабе и прокрутке перематывает в момент под курсором', async () => {
+    await mount()
+
+    const field = host.querySelector('.tl-field') as HTMLElement
+    // Поле в 8 раз шире панели и уехало влево на 1400 px -- как после
+    // приближения колесом и прокрутки вправо.
+    vi.spyOn(field, 'getBoundingClientRect').mockReturnValue({
+      left: -1400,
+      width: 5600,
+      top: 0,
+      bottom: 64,
+      right: 4200,
+      height: 64,
+      x: -1400,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    act(() => {
+      field.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 350 }))
+    })
+
+    expect(seeks).toHaveLength(1)
+    expect(seeks[0]).toBeCloseTo(125, 6)
+  })
+
+  /**
+   * Геометрия панели как в браузере: колонка имён 176 px, поле 1264 px.
+   * В jsdom все прямоугольники нулевые, а колесу надо знать, над чем оно.
+   */
+  function geometry(): void {
+    const box = (left: number, width: number): DOMRect =>
+      ({
+        left,
+        width,
+        right: left + width,
+        top: 0,
+        bottom: 20,
+        height: 20,
+        x: left,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect
+    vi.spyOn(host.querySelector('.tl-corner') as HTMLElement, 'getBoundingClientRect')
+      .mockReturnValue(box(0, 176))
+    vi.spyOn(host.querySelector('.tl-marks') as HTMLElement, 'getBoundingClientRect')
+      .mockReturnValue(box(176, 1264))
+  }
+
+  function wheel(deltaY: number, clientX: number): void {
+    act(() => {
+      ;(host.querySelector('.tl') as HTMLElement).dispatchEvent(
+        new WheelEvent('wheel', { deltaY, clientX, bubbles: true, cancelable: true }),
+      )
+    })
+  }
+
+  it('над колонкой имён колесо листает дорожки, а не приближает', async () => {
+    await mount()
+    geometry()
+
+    wheel(-240, 100)
+
+    // Двенадцать дорожек иначе было бы нечем пройти: панель низкая, а колесо
+    // -- единственный способ их прокрутить.
+    expect((host.querySelector('.tl-zoom') as HTMLButtonElement).textContent).toBe('целиком')
+  })
+
+  it('колесо приближает, кнопка возвращает прогон целиком', async () => {
+    await mount()
+
+    const zoom = () => host.querySelector('.tl-zoom') as HTMLButtonElement
+    const body = () => host.querySelector('.tl-body') as HTMLElement
+    expect(zoom().textContent).toBe('целиком')
+    expect(zoom().disabled).toBe(true)
+    expect(body().style.width).toBe('')
+
+    act(() => {
+      ;(host.querySelector('.tl') as HTMLElement).dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, clientX: 200, bubbles: true, cancelable: true }),
+      )
+    })
+
+    expect(zoom().textContent?.startsWith('×1.2')).toBe(true)
+    expect(zoom().disabled).toBe(false)
+    // Поле стало шире панели, колонка имён -- нет: она прибита слева.
+    expect(body().style.width).toContain('var(--tl-name)')
+
+    act(() => zoom().dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(zoom().textContent).toBe('целиком')
+    expect(body().style.width).toBe('')
+  })
+
+  it('подписи шкалы густеют с приближением -- иначе их не было бы в окне', async () => {
+    await mount()
+    const marks = () => host.querySelectorAll('.tl-mark').length
+    const before = marks()
+
+    act(() => {
+      ;(host.querySelector('.tl') as HTMLElement).dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -600, clientX: 200, bubbles: true, cancelable: true }),
+      )
+    })
+
+    expect(marks()).toBeGreaterThan(before)
   })
 })
