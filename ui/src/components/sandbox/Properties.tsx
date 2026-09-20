@@ -422,9 +422,21 @@ function BlockProps({
         >
           Разобрать на клетки
         </button>
+        {/* Копия блока -- со своим снимком: правленые пороги и задержки
+            уезжают в неё, а дальше два экземпляра расходятся свободно. За это
+            снимок и хранится (#563). */}
         <button
           type="button"
           className="btn-secondary"
+          title="Ещё один такой же блок рядом — со своим снимком, без связей (Ctrl+D)"
+          onClick={() => void control.duplicate(block.id)}
+        >
+          Дублировать блок
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          title="Убрать вместе со связями, стимулами и записями (Delete)"
           onClick={() => void control.remove(block.id)}
         >
           Убрать блок
@@ -472,6 +484,17 @@ function NeuronProps({
   return (
     <>
       <Head title="Клетка" note={neuron.id} />
+      {/* Имя клетки правится здесь же, где и всё остальное, и это то же самое
+          поле, что «Название» у блока, -- но правит оно другое. У блока это
+          подпись на коробке, у клетки -- её имя в собранной сети: им подписан
+          столбец растра и за него держатся связи, стимулы и записи. Ссылки
+          чинит сервер одной операцией, поэтому и «Отменить» на неё одно
+          (#563). */}
+      <TextField
+        label="Имя"
+        value={neuron.id}
+        onChange={(name) => void control.renameNeuron(neuron.id, name)}
+      />
       <div className="row" title={about}>
         <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
         <span className="mono row-dim">{neuron.cellType}</span>
@@ -528,9 +551,23 @@ function NeuronProps({
         >
           Записывать {neuron.id}
         </button>
+        {/* Копия ложится рядом, со своим именем и тем же типом -- значит с
+            теми же параметрами мембраны, и правка порога задевает обеих
+            (тип в IR один на всех своих клеток). Связей и драйва копия не
+            получает: связь без второго конца бессмысленна, а второй драйв
+            удвоил бы вход в схему, которую ещё собирают (#563). */}
         <button
           type="button"
           className="btn-secondary"
+          title="Ещё одна такая же клетка рядом — без связей и драйва (Ctrl+D)"
+          onClick={() => void control.duplicate(neuron.id)}
+        >
+          Дублировать клетку
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          title="Убрать вместе со связями, стимулами и записями (Delete)"
           onClick={() => void control.remove(neuron.id)}
         >
           Убрать клетку
@@ -809,6 +846,36 @@ function RecordProps({
         onChange={(value) => void control.setRecord(record.id, value)}
       />
       <Remove what="запись" id={record.id} />
+    </>
+  )
+}
+
+/**
+ * Имя проекта (#563).
+ *
+ * Здесь, рядом с параметрами прогона, а не выделением: это свойство самого
+ * проекта, и снимать ради него выделение с блока незачем -- ровно по той же
+ * причине, по которой тут стоят длительность и зерно.
+ *
+ * Не в верхней панели, где проект выбирают: там `select`, и превращать список
+ * в поле ввода значило бы держать одно место в двух видах -- «выбираю» и
+ * «правлю», -- между которыми надо ещё переключаться. Панель свойств для
+ * правки и существует.
+ *
+ * Имя человеческое: идентификатор проекта отдельный (`sandbox.id`), и за него
+ * держатся файл в хранилище и открытая сессия симуляции. Поэтому чинить после
+ * переименования нечего -- в отличие от имени клетки.
+ */
+export function ProjectFields({ name }: { name: string }) {
+  const control = sandboxController
+  return (
+    <>
+      <Section title="Проект" />
+      <TextField
+        label="Название"
+        value={name}
+        onChange={(next) => void control.renameProject(next)}
+      />
     </>
   )
 }

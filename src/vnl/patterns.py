@@ -709,6 +709,162 @@ def _around(centre: tuple[float, float], count: int) -> list[tuple[float, float]
     return places
 
 
+#: Куда ложится копия относительно оригинала (#563).
+#:
+#: Вправо-вниз, а не точно поверх: копия, легшая ровно на оригинал, выглядит
+#: как отсутствие результата -- человек жмёт «дублировать» второй раз и
+#: получает три фигуры в одной точке. Шаг чуть больше половины фигуры клетки
+#: (74x38 в холсте), поэтому копия читается отдельной фигурой и остаётся
+#: рядом, а не уезжает искать себя за краем окна.
+DUPLICATE_OFFSET = (40.0, 30.0)
+
+
+def rename_neuron(sandbox: Sandbox, neuron_id: str, new_id: str) -> SandboxNeuron:
+    """Переименовать отдельную клетку вместе со всем, что на неё ссылается.
+
+    Развилка, названная в #563, решена здесь: у клетки остаётся одно имя, и
+    переименование -- операция, которая чинит ссылки, а не вторая подпись
+    рядом с адресом.
+
+    Почему не `label`, как у блока. Блока в собранной сети нет вовсе: в неё
+    разворачиваются его нейроны (`ffi/E`), а сам он -- коробка на холсте, и
+    подпись на коробке ничему не адрес. У отдельной клетки наоборот: её имя и
+    есть имя нейрона в собранной сети -- им подписан столбец растра, им зовётся
+    трасса, по нему `Vitals` находит её потенциал. Заведи мы ей вторую,
+    «человеческую» подпись -- и панель свойств звала бы клетку «Вход», а растр
+    под тем же экраном `relay2`; два имени одной вещи на одном экране хуже, чем
+    одно неудобное.
+
+    Цена решения честная и названа в карточке: каждое место, где имя записано,
+    приходится обойти, и забытое всплывёт потерянным стимулом. Мест этих
+    ровно столько, сколько их у `remove`, -- связи, стимулы, записи и источники
+    модулятора, -- и перечислены они здесь рядом, чтобы следующее такое место
+    заводили сразу в обоих.
+
+    Имена сравниваются точно, а не через `owner_of`: приставка (`ffi/I`) бывает
+    только у блока, у клетки внутренностей нет, и спрашивать владельца значило
+    бы объявить, что у клетки может быть вложенное имя.
+    """
+    chosen = new_id.strip()
+    if not chosen:
+        raise PatternError("имя клетки не может быть пустым")
+    if NESTED in chosen:
+        raise PatternError(
+            f"в имени клетки не бывает {NESTED!r}: им разделены блок и его "
+            "нейрон в собранной сети"
+        )
+    neuron = sandbox.neurons.get(neuron_id)
+    if neuron is None:
+        known = ", ".join(sandbox.neurons) or "клеток нет"
+        raise PatternError(f"в песочнице нет клетки {neuron_id!r} ({known})")
+    if chosen == neuron_id:
+        return neuron
+    if chosen in sandbox.taken_ids():
+        raise PatternError(f"имя {chosen!r} на холсте уже занято")
+
+    # Словарь пересобирается на месте, а не «удалить и дописать в конец»: его
+    # порядок -- это порядок клеток в дереве объектов и на холсте, и клетка,
+    # прыгнувшая в конец списка от переименования, выглядела бы новой.
+    sandbox.neurons = {
+        (chosen if name == neuron_id else name): item
+        for name, item in sandbox.neurons.items()
+    }
+    neuron.id = chosen
+    for link in sandbox.links:
+        link.source = _renamed(link.source, neuron_id, chosen)
+        link.target = _renamed(link.target, neuron_id, chosen)
+    for stimulus in sandbox.stimuli:
+        stimulus.target = _renamed(stimulus.target, neuron_id, chosen)
+    for recording in sandbox.recordings:
+        recording.target = _renamed(recording.target, neuron_id, chosen)
+    for modulator in sandbox.modulators.values():
+        modulator.sources = tuple(
+            chosen if name == neuron_id else name for name in modulator.sources
+        )
+    sandbox.updated_at = _now()
+    return neuron
+
+
+def _renamed(endpoint: Endpoint, old: str, new: str) -> Endpoint:
+    """Конец связи после переименования клетки. Чужой возвращается как есть."""
+    if endpoint.instance != old:
+        return endpoint
+    return replace(endpoint, instance=new)
+
+
+def duplicate_object(
+    sandbox: Sandbox,
+    object_id: str,
+    offset: tuple[float, float] = DUPLICATE_OFFSET,
+) -> str:
+    """Повторить объект холста: вторая такая же клетка или такой же блок.
+
+    Один вход на оба рода нарочно: человек просит «дублировать выбранное», а
+    что именно выбрано -- блок или клетка, -- он в этот момент не
+    формулирует. Две операции пришлось бы разводить тому, кто жмёт сочетание
+    клавиш, и он выбирал бы между ними по тому, что подсвечено на холсте.
+
+    Чего копия не получает -- связей, стимулов и записей. Связь без второго
+    конца бессмысленна, а связь с тем же вторым концом -- это уже другая сеть:
+    два синапса вместо одного, а просили одну клетку. Стимул по той же
+    причине: у него ровно одна цель (#565), и копия драйва означала бы
+    удвоенный вход в схему, которую ещё не собрали. Копия ложится молчащей и
+    несвязанной -- ровно так же, как клетка из палитры, и это то же самое
+    действие, только параметры берутся у соседа.
+
+    Клетка берёт существующий тип, а не его копию: параметры мембраны в IR
+    висят на типе, и копия типа означала бы, что правка порога у одной из двух
+    одинаковых клеток задевает не обеих. Блок -- наоборот, копию снимка: за
+    снимок экземпляра и держатся, чтобы два блока одного паттерна расходились
+    свободно.
+
+    Возвращает имя, которое получила копия.
+    """
+    neuron = sandbox.neurons.get(object_id)
+    if neuron is not None:
+        chosen = sandbox.free_id(_stem(object_id))
+        sandbox.neurons[chosen] = SandboxNeuron(
+            id=chosen,
+            cell_type=neuron.cell_type,
+            tags=tuple(neuron.tags),
+            position=_beside(neuron.position, offset),
+        )
+        sandbox.updated_at = _now()
+        return chosen
+
+    block = sandbox.instance(object_id)  # проверка до первой правки
+    chosen = sandbox.free_id(_stem(object_id))
+    sandbox.instances.append(
+        PatternInstance(
+            id=chosen,
+            pattern_id=block.pattern_id,
+            label=block.label,
+            snapshot=copy.deepcopy(block.snapshot),
+            position=_beside(block.position, offset),
+        )
+    )
+    sandbox.updated_at = _now()
+    return chosen
+
+
+def _stem(object_id: str) -> str:
+    """Имя без хвостового номера -- с него `free_id` начинает подбор.
+
+    Без этого копия `relay2` звалась бы `relay22`, а её копия `relay222`:
+    `free_id` дописывает номер к тому, что ему дали. Отбросив номер, получаем
+    привычный ряд `relay`, `relay2`, `relay3`. Имя из одних цифр остаётся как
+    есть -- пустое начало подбора дало бы клетку с именем `2`.
+    """
+    stem = object_id.rstrip("0123456789")
+    return stem or object_id
+
+
+def _beside(
+    position: tuple[float, float], offset: tuple[float, float]
+) -> tuple[float, float]:
+    return (position[0] + offset[0], position[1] + offset[1])
+
+
 def _point(site: ir.Site, names: dict[str, str]) -> Endpoint:
     """Точка внутри снимка -> конец связи песочницы. Порта у неё нет.
 

@@ -435,6 +435,19 @@ class Api:
     def sandbox(self, sandbox_id: str) -> dict[str, Any]:
         return api.sandbox_payload(self._project(sandbox_id))
 
+    def sandbox_params(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Имя проекта (#563). Идентификатор при этом остаётся прежним.
+
+        Тем же путём, что и чтение проекта, а не своим `/rename`: имя --
+        свойство песочницы, а не действие над ней, и правится оно так же, как
+        правятся параметры прогона или подпись блока.
+        """
+        if body.get("name") is None:
+            raise PatternError('нечего менять: ожидалось {"name": "Опыт 3"}')
+        project = self._project(sandbox_id)
+        project.rename_project(str(body["name"]))
+        return api.sandbox_payload(project)
+
     def add_block(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """Вставить паттерн блоком. В проект кладётся снимок, а не ссылка.
 
@@ -485,6 +498,33 @@ class Api:
             chosen.type,
             position=(float(position[0]), float(position[1])),
         )
+        return api.sandbox_payload(project)
+
+    def neuron_params(
+        self, sandbox_id: str, neuron_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Имя отдельной клетки (#563).
+
+        Поле зовётся `id`, а не `label`, нарочно: у клетки правится адрес, а
+        не подпись рядом с ним. Тот же запрос к блоку (`/blocks/<id>`) меняет
+        `label` и ничего в сети не трогает -- разные поля в разных телах и
+        говорят, что это две разные операции, а не одна с двумя дорогами.
+        """
+        if body.get("id") is None:
+            raise PatternError('нечего менять: ожидалось {"id": "вход"}')
+        project = self._project(sandbox_id)
+        project.rename_neuron(neuron_id, str(body["id"]))
+        return api.sandbox_payload(project)
+
+    def duplicate_object(self, sandbox_id: str, object_id: str) -> dict[str, Any]:
+        """Ещё один такой же объект холста -- клетка или блок (#563).
+
+        Путь говорит «объект» по той же причине, что и у мембраны: копируют и
+        блок, и клетку, а маршрут, врущий о том, что принимает, однажды
+        заставит завести второй такой же.
+        """
+        project = self._project(sandbox_id)
+        project.duplicate(object_id)
         return api.sandbox_payload(project)
 
     def connect(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -896,6 +936,14 @@ def routes(service: Api) -> list[Route]:
             ok=201,
         ),
         Route("GET", re.compile(r"^/api/sandboxes/([^/]+)$"), service.sandbox),
+        # Имя проекта правится там же, где проект читается: это его свойство,
+        # а не отдельное действие над ним (#563).
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)$"),
+            service.sandbox_params,
+            wants="body",
+        ),
         Route(
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/blocks$"),
@@ -915,6 +963,15 @@ def routes(service: Api) -> list[Route]:
             service.add_neuron,
             wants="body",
             ok=201,
+        ),
+        # Имя клетки -- её адрес, и правится оно как адрес: у блока по тому же
+        # месту меняется `label`, и разные поля в теле говорят, что это две
+        # разные операции (#563).
+        Route(
+            "PATCH",
+            re.compile(r"^/api/sandboxes/([^/]+)/neurons/([^/]+)$"),
+            service.neuron_params,
+            wants="body",
         ),
         # Путь говорит «объект», а не «блок»: мембрану правят и у блока, и у
         # отдельной клетки, а маршрут, врущий о том, что принимает, однажды
@@ -1002,6 +1059,14 @@ def routes(service: Api) -> list[Route]:
             re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/ungroup$"),
             service.ungroup,
             wants="body",
+        ),
+        # Дублирование -- POST рядом с разбором: оба не меняют названный
+        # объект, а добавляют к нему в проект что-то ещё (#563).
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/duplicate$"),
+            service.duplicate_object,
+            ok=201,
         ),
         Route(
             "DELETE",

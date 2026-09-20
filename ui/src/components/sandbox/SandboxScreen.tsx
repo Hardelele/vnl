@@ -24,6 +24,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+import { objectCommand } from '../../lib/keys'
 import { CELLS, counted } from '../../lib/plural'
 import { driveHint } from '../../model/glossary'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
@@ -38,7 +39,7 @@ import { ActivityPanel } from './ActivityPanel'
 import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
-import { Properties, RunFields, where } from './Properties'
+import { ProjectFields, Properties, RunFields, where } from './Properties'
 import { SavePattern } from './SavePattern'
 import './sandbox.css'
 
@@ -232,6 +233,44 @@ export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
   }, [picker])
+
+  /**
+   * Клавиши над выбранным объектом: `Delete` убирает, Ctrl+D дублирует (#563).
+   *
+   * Слушатель здесь, а не на холсте, хотя жалоба была именно про холст.
+   * Выбирают не только там: та же клетка выбирается строкой в дереве
+   * объектов, а стимул и запись выбираются только в нём, -- и клавиша обязана
+   * работать над выбранным, откуда бы его ни выбрали. Холст, знающий про
+   * выделение лишь то, что ему передали сверху, второй такой же обработчик
+   * держал бы для половины случаев.
+   *
+   * Подтверждения нет намеренно: «Отменить» одношаговое и возвращает объект
+   * вместе со всем, что на нём висело, -- вопрос «точно?» стоил бы нажатия на
+   * каждое удаление ради того, что и так отменяется одним.
+   *
+   * Какая клавиша что значит, решает `lib/keys`: правила там не механические
+   * (раскладка, Backspace вместо Delete, что дублируется, а что нет), и
+   * проверять их прямо честнее, чем через отрисованный экран. Здесь остаётся
+   * только исполнить решённое.
+   */
+  useEffect(() => {
+    const key = (event: KeyboardEvent): void => {
+      // Пока открыта форма сохранения, экран занят ею: удалять из-под неё то,
+      // что она как раз собирается записать, -- не то, о чём просят.
+      if (saving) return
+      const chosen = control.store.getState().selected
+      const command = objectCommand(event, chosen?.kind ?? null)
+      if (!command || !chosen) return
+      // Иначе Backspace уводит страницу назад по истории браузера, а Ctrl+D
+      // открывает «добавить в закладки».
+      event.preventDefault()
+      void (command === 'remove'
+        ? control.remove(chosen.id)
+        : control.duplicate(chosen.id))
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [control, saving])
 
   if (!allowed) {
     // Браузер уже уходит на вход; строка стоит на время перехода, чтобы экран
@@ -713,6 +752,7 @@ export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
             glossary={glossary}
             palette={palette}
           />
+          <ProjectFields name={project.name} />
           <RunFields run={project.run} />
         </aside>
       </div>
@@ -826,12 +866,22 @@ function nextName(list: Array<{ name: string }>): string {
   return `Проект ${number}`
 }
 
-/** Список для выпадающего меню: открытый проект в нём есть всегда. */
+/**
+ * Список для выпадающего меню: открытый проект в нём есть всегда и зовётся
+ * своим именем.
+ *
+ * Именно своим, а не тем, что стоит в списке. Список читается из хранилища, а
+ * переименование (#563) живёт в открытом проекте, пока его не сохранили, -- и
+ * строка меню показывала бы прежнее имя рядом с панелью свойств, где уже
+ * новое. Правда об открытом проекте одна, и она в нём самом; остальные строки
+ * остаются такими, какими лежат на диске.
+ */
 function rows(
   list: Array<{ id: string; name: string }>,
   project: { id: string; name: string },
 ): Array<{ id: string; name: string }> {
-  return list.some((row) => row.id === project.id) ? list : [project, ...list]
+  if (!list.some((row) => row.id === project.id)) return [project, ...list]
+  return list.map((row) => (row.id === project.id ? { ...row, name: project.name } : row))
 }
 
 function Row({

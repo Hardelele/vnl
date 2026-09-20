@@ -42,7 +42,9 @@ from .patterns import (
     SandboxStimulus,
     adopt_demo,
     cell_type_at,
+    duplicate_object,
     extract_pattern,
+    rename_neuron,
     suggest_ports,
     touches,
     ungroup_block,
@@ -152,9 +154,19 @@ class Project:
 
         Считается по модели, а не по песочнице: сдвиг блока на холсте физику
         не меняет и результат устаревшим не делает.
+
+        Имя и происхождение модели из подсчёта выброшены (#563). `compose`
+        переносит в них имя песочницы и её идентификатор -- это подписи на
+        результате, а не сеть: переименовав проект, человек получил бы «схема
+        изменилась, прогон прежней» на той же самой схеме с теми же самыми
+        числами. Выкидывать их именно здесь, а не в `compose`: имя нужно
+        отчёту и экспорту, и отнимать его у модели ради отпечатка значило бы
+        чинить не там, где сломано.
         """
-        model = compose(self.sandbox).model
-        payload = json.dumps(to_plain(model), ensure_ascii=False, sort_keys=True)
+        model = to_plain(compose(self.sandbox).model)
+        for label in ("name", "source"):
+            model.pop(label, None)
+        payload = json.dumps(model, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     @property
@@ -166,9 +178,22 @@ class Project:
     # --- история ----------------------------------------------------------
 
     def _remember(self, label: str) -> None:
+        self._keep(label, copy.deepcopy(self.sandbox))
+
+    def _keep(self, label: str, before: Sandbox) -> None:
+        """Готовый снимок -- в историю.
+
+        Отдельно от `_remember` ради операций, которые сперва делают, а потом
+        отчитываются: `rename_neuron` и `duplicate` проверяют всё до первой
+        правки и при отказе не трогают проект вовсе, поэтому снимок им удобно
+        снять заранее, а положить в историю -- только на удаче. Иначе отказ
+        оставлял бы за собой шаг отмены, который ничего не отменяет, а
+        повторять их проверки здесь значило бы завести вторую копию правил
+        именования.
+        """
         if self._batch is not None:
             return  # внутри пакета снимок уже сделан
-        self.history.append(Step(label=label, before=copy.deepcopy(self.sandbox)))
+        self.history.append(Step(label=label, before=before))
         del self.history[:-HISTORY_LIMIT]
 
     @contextmanager
@@ -335,6 +360,58 @@ class Project:
         block.label = chosen
         return block
 
+    def rename_neuron(self, neuron_id: str, new_id: str) -> SandboxNeuron:
+        """Имя отдельной клетки -- её же адрес (#563).
+
+        Не то же, что `rename` выше, и не её обобщение. У блока правится
+        подпись, которой в сети нет вовсе; здесь правится имя нейрона
+        собранной сети -- то самое, за которое держатся связи, стимулы и
+        записи, и которым подписан столбец растра. Одна операция на два этих
+        случая означала бы, что «переименовать» иногда безобидно, а иногда
+        переписывает пол-проекта, и по вызову не видно, что именно.
+
+        Сама перепись ссылок живёт в `patterns.rename_neuron` -- там же, где
+        `free_id` и `ungroup_block`: имена холста раздаются и меняются в одном
+        месте, иначе второе решило бы «свободно ли имя» по-своему.
+        """
+        before = copy.deepcopy(self.sandbox)
+        neuron = rename_neuron(self.sandbox, neuron_id, new_id)
+        self._keep(f"переименована клетка {neuron_id}", before)
+        return neuron
+
+    def rename_project(self, name: str) -> Sandbox:
+        """Имя проекта -- человеческое, идентификатор отдельный.
+
+        Поэтому тут и нечего чинить: за `sandbox.id` держатся файл в
+        хранилище и открытая сессия, а `name` не адресует ничего. Ради этого
+        `Sandbox.empty` и разводит их с самого начала.
+
+        Отпечаток собираемой сети от переименования не меняется -- за это
+        отвечает `fingerprint`, который имени проекта не считает.
+        """
+        chosen = name.strip()
+        if not chosen:
+            raise PatternError("у проекта должно быть имя")
+        self._remember(f"переименован проект «{self.sandbox.name}»")
+        self.sandbox.name = chosen
+        self.sandbox.updated_at = _now()
+        return self.sandbox
+
+    def duplicate(self, object_id: str) -> str:
+        """Ещё один такой же объект холста: клетка или блок (#563).
+
+        Один шаг отмены на всю копию -- и потому, что человек сделал одно
+        действие, и потому, что копия блока это не только коробка, а ещё и её
+        снимок с правлеными порогами.
+
+        Что именно копируется и чего копия не получает, разбирает
+        `patterns.duplicate_object`: там же лежит и раздача имён.
+        """
+        before = copy.deepcopy(self.sandbox)
+        chosen = duplicate_object(self.sandbox, object_id)
+        self._keep(f"дублирован {object_id}", before)
+        return chosen
+
     def set_cell(
         self, target_id: str, type_id: str | None = None, **params: Any
     ) -> ir.CellType:
@@ -494,14 +571,26 @@ class Project:
                 self.move(object_id, position)
 
     def remove(self, object_id: str) -> None:
-        """Убрать блок, нейрон или связь вместе со всем, что на них висело.
+        """Убрать объект песочницы вместе со всем, что на нём висело.
 
-        «На них» -- это и внутренние узлы блока: связь ведут прямо в `ffi/I`, и
-        после удаления `ffi` она указывала бы в никуда. Сравнивать имена
-        напрямую нельзя -- `ffi/I` не равно `ffi`, -- поэтому спрашивается
-        владелец (`patterns.touches`). Иначе удалённый блок оставлял бы за
-        собой висящие связи, а песочница переставала считаться с жалобой
-        «источник в сети отсутствует» на объект, которого уже не видно.
+        Объект любой: блок, клетка, связь, стимул, запись. Один вход на все
+        пять -- потому что так звучит просьба: «убрать выбранное». Что именно
+        выбрано, человек в этот момент не формулирует, а `Delete` (#563) тем
+        более не спрашивает; развести это на пять маршрутов значило бы
+        заставить выбирать между ними того, кто нажал одну клавишу.
+
+        «Вместе со всем» -- это и внутренние узлы блока: связь ведут прямо в
+        `ffi/I`, и после удаления `ffi` она указывала бы в никуда. Сравнивать
+        имена напрямую нельзя -- `ffi/I` не равно `ffi`, -- поэтому
+        спрашивается владелец (`patterns.touches`). Иначе удалённый блок
+        оставлял бы за собой висящие связи, а песочница переставала считаться
+        с жалобой «источник в сети отсутствует» на объект, которого уже не
+        видно.
+
+        Стимул и запись убираются двумя способами сразу: по собственному
+        имени (`drive1`) и вместе с целью. Первого раньше не было вовсе, и
+        кнопка «Убрать стимул» в панели свойств молча не делала ничего --
+        `touches` спрашивает про цель, а `drive1` ничьей целью не является.
         """
         self._remember(f"удалён {object_id}")
         sandbox = self.sandbox
@@ -515,10 +604,14 @@ class Project:
             and not touches(link.target, object_id)
         ]
         sandbox.stimuli = [
-            s for s in sandbox.stimuli if not touches(s.target, object_id)
+            s
+            for s in sandbox.stimuli
+            if s.id != object_id and not touches(s.target, object_id)
         ]
         sandbox.recordings = [
-            r for r in sandbox.recordings if not touches(r.target, object_id)
+            r
+            for r in sandbox.recordings
+            if r.id != object_id and not touches(r.target, object_id)
         ]
 
     def ungroup(

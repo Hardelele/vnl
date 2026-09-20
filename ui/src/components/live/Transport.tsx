@@ -21,6 +21,7 @@
 
 import { useEffect } from 'react'
 
+import { handled, typing } from '../../lib/keys'
 import type { SimState } from '../../model/sim'
 import './transport.css'
 
@@ -59,14 +60,6 @@ const STATE_WORD: Record<SimState, string> = {
   finished: 'дошла до конца',
 }
 
-/** Набирают ли сейчас текст: тогда стрелки принадлежат полю, а не времени. */
-function typing(target: EventTarget | null): boolean {
-  const node = target as HTMLElement | null
-  if (!node || !node.tagName) return false
-  if (node.isContentEditable) return true
-  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)
-}
-
 export function Transport({
   state,
   time,
@@ -100,7 +93,7 @@ export function Transport({
    */
   useEffect(() => {
     const key = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return
+      if (handled(event) || event.ctrlKey || event.metaKey) return
       if (typing(event.target)) return
       const back = event.key === 'ArrowLeft'
       if (!back && event.key !== 'ArrowRight') return

@@ -1129,3 +1129,205 @@ def test_the_brought_demo_runs_the_same_as_the_card(project, ffi):
 
     assert card, "на карточке сеть спайкает -- иначе сверять нечего"
     assert {name.split("/", 1)[-1]: count for name, count in yard.items()} == card
+
+
+# --- имя, копия и удаление выбранного (#563) -------------------------------
+
+
+def wired(project: Project, ffi: Pattern) -> Project:
+    """Клетка `X` со связью, стимулом и записью -- и блок рядом."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+    project.connect(Endpoint("X"), Endpoint("a", "in"), link_id="l1")
+    project.stimulate(SandboxStimulus(id="drive", target=Endpoint("X"), rate=250.0))
+    project.record(SandboxRecording(id="r1", target=Endpoint("X")))
+    return project
+
+
+def test_renaming_a_cell_keeps_its_links_drives_and_recordings(project, ffi):
+    """Приёмка #563: имя клетки правится, а всё, что на неё смотрело, остаётся.
+
+    Развилка решена в пользу переименования-операции: имя клетки -- её адрес в
+    собранной сети, и вторая, «человеческая» подпись разошлась бы с тем, чем
+    клетка подписана на растре.
+    """
+    wired(project, ffi)
+
+    project.rename_neuron("X", "вход")
+
+    sandbox = project.sandbox
+    assert set(sandbox.neurons) == {"вход"}
+    assert sandbox.neurons["вход"].id == "вход"
+    assert sandbox.links[0].source.instance == "вход"
+    assert sandbox.stimuli[0].target.instance == "вход"
+    assert sandbox.recordings[0].target.instance == "вход"
+    assert project.check() == [], "сеть после переименования собирается"
+
+
+def test_renaming_a_cell_leaves_the_neighbouring_block_alone(project, ffi):
+    """`a/I` -- имя нейрона блока, и клеткой `a` оно не становится."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+    project.connect(Endpoint("X"), Endpoint("a/I"), link_id="inside")
+
+    project.rename_neuron("X", "Y")
+
+    assert project.sandbox.links[0].target.instance == "a/I"
+
+
+def test_renaming_a_cell_is_one_step_of_undo(project, ffi):
+    wired(project, ffi)
+
+    project.rename_neuron("X", "вход")
+    project.undo()
+
+    assert set(project.sandbox.neurons) == {"X"}
+    assert project.sandbox.links[0].source.instance == "X"
+
+
+def test_a_cell_cannot_take_a_name_that_is_already_on_the_canvas(project, ffi):
+    """Отказ не оставляет за собой шага отмены, который нечего отменять."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+    steps = len(project.history)
+
+    with pytest.raises(PatternError, match="занято"):
+        project.rename_neuron("X", "a")
+
+    assert set(project.sandbox.neurons) == {"X"}
+    assert len(project.history) == steps
+
+
+def test_a_cell_name_has_no_block_separator_in_it(project):
+    """`ffi/E` -- имя нейрона внутри блока, и придумать его клетке нельзя."""
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+
+    with pytest.raises(PatternError, match="не бывает"):
+        project.rename_neuron("X", "a/I")
+
+
+def test_renaming_the_project_keeps_the_fingerprint(project, ffi):
+    """Имя проекта -- подпись, а не сеть: прогон от него не стареет."""
+    project.insert_pattern(ffi, instance_id="a")
+    before = project.fingerprint()
+
+    project.rename_project("Опыт 3")
+
+    assert project.sandbox.name == "Опыт 3"
+    assert project.sandbox.id == "s1", "идентификатор остаётся адресом"
+    assert project.fingerprint() == before
+
+
+def test_an_empty_project_name_is_refused(project):
+    with pytest.raises(PatternError, match="имя"):
+        project.rename_project("   ")
+
+
+def test_duplicating_a_cell_gives_a_second_one_of_the_same_type(project, ffi):
+    """Приёмка #563: копия со своим именем и теми же параметрами мембраны.
+
+    Тип у копии тот же самый, а не его двойник: параметры мембраны висят на
+    типе, и правка порога обязана задевать обеих.
+    """
+    wired(project, ffi)
+    project.set_cell("X", "relay", v_threshold=-44.0)
+
+    chosen = project.duplicate("X")
+
+    assert chosen == "X2"
+    assert project.sandbox.neurons[chosen].cell_type == "relay"
+    assert project.sandbox.cell_types["relay"].point_model.v_threshold == -44.0
+    assert project.sandbox.neurons[chosen].position != project.sandbox.neurons["X"].position
+
+    project.set_cell(chosen, "relay", v_threshold=-40.0)
+    assert project.sandbox.cell_types["relay"].point_model.v_threshold == -40.0
+
+
+def test_a_copy_gets_neither_links_nor_drives(project, ffi):
+    """Связь без второго конца бессмысленна, а драйв удвоил бы вход в схему."""
+    wired(project, ffi)
+
+    chosen = project.duplicate("X")
+
+    assert [link.id for link in project.sandbox.links] == ["l1"]
+    assert [stim.target.instance for stim in project.sandbox.stimuli] == ["X"]
+    assert [rec.target.instance for rec in project.sandbox.recordings] == ["X"]
+    assert chosen not in {stim.target.instance for stim in project.sandbox.stimuli}
+
+
+def test_duplicating_changes_the_network(project, ffi):
+    """Сеть другая: клеток стало больше, и прежний прогон уже не про неё."""
+    wired(project, ffi)
+    before = project.fingerprint()
+
+    project.duplicate("X")
+
+    assert project.fingerprint() != before
+
+
+def test_duplicating_a_block_copies_its_snapshot_and_not_the_library(project, ffi):
+    """У копии блока снимок свой: два экземпляра расходятся свободно."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.set_cell("a", "pyr_l5", v_threshold=-44.0)
+
+    chosen = project.duplicate("a")
+
+    assert chosen == "a2"
+    assert project.sandbox.instance(chosen).snapshot.body.cell_types[
+        "pyr_l5"
+    ].point_model.v_threshold == -44.0
+
+    project.set_cell(chosen, "pyr_l5", v_threshold=-40.0)
+    assert project.sandbox.instance("a").snapshot.body.cell_types[
+        "pyr_l5"
+    ].point_model.v_threshold == -44.0, "сосед не поехал"
+
+
+def test_a_copy_of_a_numbered_cell_continues_the_row(project):
+    """`relay2` даёт `relay3`, а не `relay22`."""
+    project.add_neuron("relay", ir.CellType(id="relay", tags=("excitatory",)))
+    project.add_neuron("relay2", ir.CellType(id="relay", tags=("excitatory",)))
+
+    assert project.duplicate("relay2") == "relay3"
+
+
+def test_duplicating_is_one_step_of_undo(project, ffi):
+    wired(project, ffi)
+
+    project.duplicate("X")
+    project.undo()
+
+    assert set(project.sandbox.neurons) == {"X"}
+
+
+def test_duplicating_something_that_is_not_there_is_refused(project):
+    steps = len(project.history)
+
+    with pytest.raises(PatternError):
+        project.duplicate("нет такого")
+
+    assert len(project.history) == steps
+
+
+def test_a_drive_is_removed_by_its_own_name(project, ffi):
+    """«Убрать стимул» убирает стимул, а не то, во что он бьёт.
+
+    Раньше `remove` спрашивал только цель (`touches`), и кнопка в панели
+    свойств молча не делала ничего: `drive` ничьей целью не является.
+    """
+    wired(project, ffi)
+
+    project.remove("drive")
+
+    assert project.sandbox.stimuli == []
+    assert set(project.sandbox.neurons) == {"X"}, "цель осталась на месте"
+    assert [rec.id for rec in project.sandbox.recordings] == ["r1"]
+
+
+def test_a_recording_is_removed_by_its_own_name(project, ffi):
+    wired(project, ffi)
+
+    project.remove("r1")
+
+    assert project.sandbox.recordings == []
+    assert [stim.id for stim in project.sandbox.stimuli] == ["drive"]

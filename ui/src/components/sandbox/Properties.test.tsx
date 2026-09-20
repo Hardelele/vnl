@@ -711,3 +711,39 @@ describe('род драйва и его поля (#508)', () => {
     expect([...select.options].map((option) => option.textContent)[0]).toBe('tbs')
   })
 })
+
+describe('имя и копия объекта в панели свойств (#563)', () => {
+  it('у клетки правится имя -- то самое, которым она зовётся в сети', async () => {
+    // Не «подпись» рядом с адресом, а сам адрес: им подписан столбец растра,
+    // и вторая, человеческая подпись разошлась бы с ним на том же экране.
+    await mount({ selection: { kind: 'neuron', id: 'X' } })
+
+    expect(fields()).toContain('Имя')
+    const input = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'Имя',
+    )?.querySelector('input')
+    expect(input?.value).toBe('X')
+  })
+
+  it('клетку можно продублировать и убрать прямо отсюда', async () => {
+    await mount({ selection: { kind: 'neuron', id: 'X' } })
+
+    expect(actions()).toEqual([
+      'Драйв на X',
+      'Записывать X',
+      'Дублировать клетку',
+      'Убрать клетку',
+    ])
+  })
+
+  it('у блока правится подпись, а не адрес, и копия у него тоже есть', async () => {
+    // Подпись и адрес -- разные вещи: подпись правят, за адрес держатся связи.
+    // Поэтому у блока поле зовётся «Название», а у клетки «Имя».
+    await mount()
+
+    expect(fields()).toContain('Название')
+    expect(fields()).not.toContain('Имя')
+    expect(actions()).toContain('Дублировать блок')
+    expect(actions()).toContain('Убрать блок')
+  })
+})
