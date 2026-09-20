@@ -684,16 +684,32 @@ class Api:
         project.set_recording(recording_id, str(body["var"]))
         return api.sandbox_payload(project)
 
-    def ungroup(self, sandbox_id: str, object_id: str) -> dict[str, Any]:
+    def ungroup(
+        self, sandbox_id: str, object_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
         """Разобрать блок на клетки, связи и типы (#532).
 
-        Тела у запроса нет: разбирать блок можно только целиком, и выбирать
-        тут нечего -- ни имён, ни мест. Имена раздаёт `free_id` на сервере: он
-        один знает, что в проекте уже занято, а столкновение всплыло бы иначе
-        только на запуске.
+        Выбирать нечего: блок разбирается целиком. Имена раздаёт `free_id` на
+        сервере -- он один знает, что в проекте уже занято, а столкновение
+        всплыло бы иначе только на запуске.
+
+        А места приходят из тела, как и у `arrange`: клетки обязаны встать так
+        же, как стояли внутри коробки, а как они там стояли, знает только
+        интерфейс -- он их и нарисовал (#554). Ключи -- имена клеток внутри
+        паттерна. Тело необязательно: без мест сервер расставит клетки сам,
+        и старый клиент продолжает работать.
         """
+        raw = body.get("places")
+        places = (
+            {
+                str(name): (float(position[0]), float(position[1]))
+                for name, position in raw.items()
+            }
+            if isinstance(raw, dict)
+            else None
+        )
         project = self._project(sandbox_id)
-        project.ungroup(object_id)
+        project.ungroup(object_id, places)
         return api.sandbox_payload(project)
 
     def remove_object(self, sandbox_id: str, object_id: str) -> dict[str, Any]:
@@ -972,6 +988,7 @@ def routes(service: Api) -> list[Route]:
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/objects/([^/]+)/ungroup$"),
             service.ungroup,
+            wants="body",
         ),
         Route(
             "DELETE",

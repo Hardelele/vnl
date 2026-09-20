@@ -504,7 +504,11 @@ class Project:
             r for r in sandbox.recordings if not touches(r.target, object_id)
         ]
 
-    def ungroup(self, block_id: str) -> list[str]:
+    def ungroup(
+        self,
+        block_id: str,
+        places: dict[str, tuple[float, float]] | None = None,
+    ) -> list[str]:
         """Разобрать блок: вместо коробки -- его клетки, связи и типы (#532).
 
         Операция обратная вставке паттерна и симметричная `extract`: та
@@ -521,10 +525,15 @@ class Project:
         и `extract_pattern`: имена холста раздаются там же, где раздаются имена
         блокам и клеткам, и второе место, решающее «свободно ли имя», разошлось
         бы с первым.
+
+        `places` -- места клеток по именам внутри паттерна. Приходят готовыми,
+        как и у `arrange`: раскладку считает тот, кто схему нарисовал, а место
+        на холсте физику не меняет, и отпечаток собранной сети от него не
+        зависит (#554).
         """
         self.sandbox.instance(block_id)  # проверка до снимка истории
         self._remember(f"разобран {block_id}")
-        return ungroup_block(self.sandbox, block_id)
+        return ungroup_block(self.sandbox, block_id, places)
 
     def stimulate(self, stimulus: SandboxStimulus) -> SandboxStimulus:
         self._remember(f"стимул {stimulus.id}")

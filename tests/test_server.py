@@ -859,6 +859,23 @@ def test_a_block_is_taken_apart_into_cells_and_links(base):
     assert undone["fingerprint"] == before["fingerprint"], "отмена вернула ту же сеть"
 
 
+def test_ungroup_puts_the_cells_where_the_ui_drew_them(base):
+    """Места приходят от холста: схема после разбора стоит как стояла (#554)."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+
+    status, after = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/objects/{first}/ungroup",
+        {"places": {"IN": [10, 20], "I": [130, 20], "E": [250, 20]}},
+    )
+    assert status == 200
+    places = {item["id"]: item["position"] for item in after["neurons"]}
+    assert places == {"IN": [10, 20], "I": [130, 20], "E": [250, 20]}
+
+
 def test_ungroup_refuses_what_is_not_a_block(base):
     sandbox = sandbox_with_two_blocks(base)
     ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr"})

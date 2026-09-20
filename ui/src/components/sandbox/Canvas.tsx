@@ -29,11 +29,27 @@
  * узел блока -- то же самое, только имя у него сетевое: `ffi/I`. Фиктивный
  * порт «сома» пришлось бы поддерживать и на сервере, где его нет.
  *
- * Сторону, с которой провод отходит от фигуры и с которой подходит к ней,
- * выбирает `lib/wire` по взаимному расположению концов: место клетки на холсте
- * задаёт человек, и связь справа налево не обязана обходить оба узла снаружи
- * только потому, что выход нарисован справа (#542). Порт -- исключение: он
- * нарисован кружком на своём краю коробки, и провод обязан прийти туда.
+ * Схема у проекта одна, и вид у неё должен быть один (#554). Изображений её
+ * было три -- строка библиотеки, холст и карточка паттерна, -- и они разошлись
+ * во всём: места клеток, форма кривой, знаки на концах. Заметил это владелец:
+ * «в библиотеке то норм, а вот в песочнице раскладка не та», «там выравнивание
+ * блоков как будто другое», «и стрелки по-другому нарисованы». Эталоном он
+ * назвал библиотеку, и холст подогнан под неё, а не наоборот:
+ *
+ * - **места**. Разбор блока (`ungroup`) больше не раздаёт клеткам сетку «лишь
+ *   бы не в кучу»: места считает интерфейс той же послойной раскладкой,
+ *   которой нарисована начинка коробки (`layeredPlaces`), и уезжают они вместе
+ *   с запросом. Человек видел схему слоями -- слоями она и остаётся;
+ * - **кривая**. Провод рисует `lib/wire`, а тот -- библиотечную дугу `arc` из
+ *   `lib/miniature`: изгиб подбирается так, чтобы обойти чужие фигуры и не
+ *   уехать за схему. Прежняя беда #542 (связь справа налево уходила петлёй
+ *   вокруг всей схемы) этим решается сама: выбирать сторону дуге не из чего;
+ * - **знаки**. Остриё и плашка описаны один раз (`lib/marker`) и всюду
+ *   одинаковы. У возбуждения на холсте стоял кружок -- он симметричен и о
+ *   направлении не говорит.
+ *
+ * Порт при этом по-прежнему получает провод ровно в свой кружок: у него
+ * фигура вырождается в точку, и граница такой фигуры -- она сама.
  *
  * Подсветка: у свёрнутого блока светится коробка -- внутри кто-то разрядился;
  * у раскрытого светится сам разрядившийся узел, потому что теперь видно кто.
@@ -104,9 +120,17 @@ import {
 } from 'react'
 
 import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
-import { edgePath, miniature, type MiniEdge, type Miniature } from '../../lib/miniature'
+import { capLine, tipPoints } from '../../lib/marker'
+import {
+  edgePath,
+  miniature,
+  type ArcBox,
+  type ArcField,
+  type MiniEdge,
+  type Miniature,
+} from '../../lib/miniature'
 import { CELLS, LINKS, counted } from '../../lib/plural'
-import { wire, type Point, type WireEnd } from '../../lib/wire'
+import { schemeField, wire, type Point, type WireEnd, type WirePlace } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
 import type { CellKind } from '../../model/types'
@@ -130,9 +154,6 @@ const HEADER = 26
 const INNER = { width: OPEN.width, height: OPEN.height - HEADER, padding: 42 }
 /** Фигура клетки. Уже блока: у неё нет ни портов, ни счётчиков внутри. */
 const DOT = { width: 74, height: 38 }
-/** Длина острия и половина плашки на конце внутренней связи -- как в миниатюре. */
-const TIP = 6
-const CAP = 4
 /**
  * Плашка действия блока: «▾ 3 кл. · 2 св.», «▴ свернуть», «разобрать на клетки».
  *
@@ -297,6 +318,16 @@ export function innerRef(
 }
 
 /**
+ * Чья фигура на холсте держит этот конец связи.
+ *
+ * У порта и у внутреннего узла (`ffi/I`) это коробка блока: по холсту двигают
+ * её, и обходить её собственной связи незачем -- связь из неё и выходит.
+ */
+export function ownerOf(instance: string, blocks: SandboxBlock[]): string {
+  return innerRef(instance, blocks)?.block.id ?? instance
+}
+
+/**
  * К чему связь крепится: у блока -- его порт или внутренний узел, у клетки --
  * её фигура.
  *
@@ -306,9 +337,10 @@ export function innerRef(
  * линия, упирающаяся в середину фигуры, перечёркивает подпись, а знак на её
  * конце пропадает под заливкой.
  *
- * У порта сторона задана жёстко: порт нарисован кружком на своём краю коробки
- * (входы слева, выходы справа), и провод, подошедший с другой стороны,
- * оторвался бы от него.
+ * У порта фигура вырождается в точку: порт нарисован кружком на своём краю
+ * коробки (входы слева, выходы справа), и провод обязан прийти ровно туда.
+ * Отдельной ветки это не требует -- точка на границе фигуры нулевого размера
+ * есть она сама.
  *
  * У свёрнутого блока внутреннего узла на холсте нет, и связь приводится к
  * коробке. Не прятать: связь в схеме есть и считается, а исчезнувшая линия
@@ -352,13 +384,7 @@ export function endpointEnd(
       insides.has(block.id),
     )
     if (!point) return null
-    const port = block.ports.find((item) => item.name === endpoint.port)
-    return {
-      ...point,
-      halfWidth: 0,
-      halfHeight: 0,
-      side: port?.direction === 'in' ? 'left' : 'right',
-    }
+    return { ...point, halfWidth: 0, halfHeight: 0 }
   }
   const neuron = neurons.find((item) => item.id === endpoint.instance)
   if (!neuron) return null
@@ -547,6 +573,99 @@ export function Canvas({
   const positionOf = (id: string, fallback: [number, number]): [number, number] =>
     drag && drag.id === id ? drag.position : fallback
 
+  /**
+   * Фигуры холста прямоугольниками -- то, мимо чего связь обязана пройти.
+   *
+   * Ключ -- имя объекта, за который фигуру таскают: у порта и у внутреннего
+   * узла это блок целиком. Своя фигура из препятствий исключается в самой
+   * связи: обходить коробку, из которой вышел, незачем.
+   */
+  const figures = useMemo(() => {
+    const map = new Map<string, ArcBox>()
+    for (const block of blocks) {
+      const [x, y] = positionOf(block.id, block.position)
+      const box = blockBox(insides.has(block.id))
+      map.set(block.id, {
+        x: x + box.width / 2,
+        y: y + box.height / 2,
+        width: box.width,
+        height: box.height,
+      })
+    }
+    for (const neuron of neurons) {
+      const [x, y] = positionOf(neuron.id, neuron.position)
+      map.set(neuron.id, { x, y, width: DOT.width, height: DOT.height })
+    }
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks, neurons, insides, drag])
+
+  /**
+   * Поле для дуг -- общий прямоугольник схемы.
+   *
+   * У миниатюры поле задано макетом карточки, а здесь фигуры кладёт человек, и
+   * «за пределы» значит «за пределы того, что он разложил». Это же и приёмка
+   * #542: провод не уходит от схемы дальше собственного изгиба.
+   */
+  const field = useMemo<ArcField | undefined>(() => {
+    const boxes = [...figures.values()]
+    return boxes.length ? schemeField(boxes) : undefined
+  }, [figures])
+
+  /**
+   * Развод одинаковых ходов: сколько связей уже шло этим путём и одинока ли
+   * связь между парой концов.
+   *
+   * То же самое, что миниатюра считает для встречных связей (#524): `A⊣B` и
+   * `B⊣A` прямыми легли бы одна на другую, и взаимное торможение выглядело бы
+   * одной линией неизвестно куда. Пара считается по концам, а не по фигурам:
+   * два провода из разных портов одной коробки и так выходят из разных точек.
+   */
+  const routing = useMemo(() => {
+    const key = (end: { instance: string; port: string | null }): string =>
+      `${end.instance}|${end.port ?? ''}`
+    const pair = (link: SandboxLink): string => {
+      const one = key(link.source)
+      const other = key(link.target)
+      return one < other ? `${one} ${other}` : `${other} ${one}`
+    }
+    const pairSize = new Map<string, number>()
+    for (const link of links) pairSize.set(pair(link), (pairSize.get(pair(link)) ?? 0) + 1)
+
+    const seen = new Map<string, number>()
+    const map = new Map<string, { sameWay: number; alone: boolean }>()
+    for (const link of links) {
+      const way = `${key(link.source)} -> ${key(link.target)}`
+      const sameWay = seen.get(way) ?? 0
+      seen.set(way, sameWay + 1)
+      map.set(link.id, { sameWay, alone: (pairSize.get(pair(link)) ?? 1) <= 1 })
+    }
+    return map
+  }, [links])
+
+  /**
+   * Что окружает связь: чужие фигуры и поле.
+   *
+   * Свои фигуры из препятствий убраны -- связь из них и выходит, обходить их
+   * незачем. Кроме одного случая: когда оба конца на одной фигуре (выход блока
+   * в его же вход, связь между двумя узлами одной коробки), она перестаёт быть
+   * своей. Иначе провод лёг бы отрезком по самой коробке и пропал бы на ней.
+   */
+  const placeOf = (link: SandboxLink): WirePlace => {
+    const mine = new Set([
+      ownerOf(link.source.instance, blocks),
+      ownerOf(link.target.instance, blocks),
+    ])
+    const shelter = mine.size > 1 ? mine : new Set<string>()
+    return {
+      others: [...figures.entries()]
+        .filter(([id]) => !shelter.has(id))
+        .map(([, box]) => box),
+      field,
+      ...(routing.get(link.id) ?? {}),
+    }
+  }
+
   const startDrag = (
     event: PointerEvent<SVGGElement>,
     id: string,
@@ -701,6 +820,7 @@ export function Canvas({
           neurons={neurons}
           insides={insides}
           positionOf={positionOf}
+          place={placeOf(link)}
           selected={selected?.kind === 'link' && selected.id === link.id}
           onPick={() => onPickLink(link.id)}
         />
@@ -1125,28 +1245,13 @@ export function Canvas({
  * торможение -- плашка.
  */
 function InnerEdge({ edge }: { edge: MiniEdge }) {
-  const ux = edge.tip.x
-  const uy = edge.tip.y
   return (
     <g className={`cv-in-link is-${edge.kind}`}>
       <path className="cv-in-wire" d={edgePath(edge)} fill="none" />
       {edge.kind === 'inh' ? (
-        <line
-          className="cv-in-cap"
-          x1={edge.end.x - uy * CAP}
-          y1={edge.end.y + ux * CAP}
-          x2={edge.end.x + uy * CAP}
-          y2={edge.end.y - ux * CAP}
-        />
+        <line className="cv-in-cap" {...capLine(edge.end, edge.tip)} />
       ) : (
-        <polygon
-          className="cv-in-cap"
-          points={[
-            `${edge.end.x},${edge.end.y}`,
-            `${edge.end.x - ux * TIP - uy * 2.5},${edge.end.y - uy * TIP + ux * 2.5}`,
-            `${edge.end.x - ux * TIP + uy * 2.5},${edge.end.y - uy * TIP - ux * 2.5}`,
-          ].join(' ')}
-        />
+        <polygon className="cv-in-cap" points={tipPoints(edge.end, edge.tip)} />
       )}
     </g>
   )
@@ -1158,6 +1263,7 @@ function Link({
   neurons,
   insides,
   positionOf,
+  place,
   selected,
   onPick,
 }: {
@@ -1166,6 +1272,7 @@ function Link({
   neurons: SandboxNeuron[]
   insides: Insides
   positionOf: (id: string, fallback: [number, number]) => [number, number]
+  place: WirePlace
   selected: boolean
   onPick: () => void
 }) {
@@ -1173,10 +1280,10 @@ function Link({
   const to = endpointEnd(link.target, blocks, neurons, positionOf, insides)
   if (!from || !to) return null
 
-  // Связь ведётся кривой: две прямые между соседними блоками сливаются, и
-  // какая куда идёт -- уже не разобрать. Сторону выхода и входа выбирает
-  // `wire` по взаимному расположению концов (#542).
-  const line = wire(from, to)
+  // Связь ведётся дугой -- той же, что в миниатюре (`arc`, #554). Две прямые
+  // между соседними блоками сливаются, и какая куда идёт -- уже не разобрать;
+  // изгиб же подбирается так, чтобы обойти чужие фигуры и не уехать за схему.
+  const line = wire(from, to, place)
   const { end, tip } = line
 
   return (
@@ -1188,18 +1295,13 @@ function Link({
           связь стало бы не выбрать там, где она нарисована. */}
       <path className="cv-hit" d={line.path} fill="none" />
       <path className="cv-wire" d={line.path} fill="none" />
+      {/* Знаки общие на весь проект (`lib/marker`): торможение -- плашка
+          поперёк хода, возбуждение -- остриё. Остриё, а не точка: точка
+          симметрична, и `A→B` с `B→A` выглядели по ней одинаково (#524). */}
       {link.inhibitory ? (
-        // Плашка поперёк хода связи -- как на схеме паттерна и в миниатюре.
-        // Прежде она стояла всегда вертикально: провод и входил всегда слева.
-        <line
-          className="cv-cap"
-          x1={end.x - tip.y * 6}
-          y1={end.y + tip.x * 6}
-          x2={end.x + tip.y * 6}
-          y2={end.y - tip.x * 6}
-        />
+        <line className="cv-cap" {...capLine(end, tip)} />
       ) : (
-        <circle className="cv-cap" cx={end.x} cy={end.y} r={3} />
+        <polygon className="cv-cap" points={tipPoints(end, tip)} />
       )}
     </g>
   )

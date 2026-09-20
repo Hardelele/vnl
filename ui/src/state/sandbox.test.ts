@@ -189,10 +189,44 @@ describe('разбор блока (#532)', () => {
 
     await control.ungroup('ffi')
 
-    expect(ungroup).toHaveBeenCalledWith('s1', 'ffi')
+    expect(ungroup).toHaveBeenCalledWith('s1', 'ffi', {})
     expect(control.store.getState().selected).toBeNull()
     expect(control.store.getState().opened).toEqual([])
     expect(control.store.getState().project?.blocks).toEqual([])
+  })
+
+  it('места клеткам считает интерфейс -- слоями, а не сеткой (#554)', async () => {
+    // Человек видел внутри коробки схему слоями; сетка «лишь бы не в кучу»
+    // ставила бы ту же схему иначе, и он читал бы две разные картинки.
+    const ungroup = vi.fn().mockResolvedValue(project({ blocks: [] }))
+    const laid = project()
+    const [block] = laid.blocks
+    if (!block) throw new Error('нет блока')
+    block.position = [400, 200]
+    block.scheme = {
+      neurons: [
+        { id: 'IN', inhibitory: false },
+        { id: 'E', inhibitory: false },
+        { id: 'I', inhibitory: true },
+      ],
+      edges: [
+        { id: 'c1', from: 'IN', to: 'E', kind: 'exc' },
+        { id: 'c2', from: 'IN', to: 'I', kind: 'exc' },
+        { id: 'c3', from: 'I', to: 'E', kind: 'inh' },
+      ],
+    }
+    const control = await opened({ ungroup, open: vi.fn().mockResolvedValue(laid) })
+
+    await control.ungroup('ffi')
+
+    const places = vi.mocked(ungroup).mock.calls[0]?.[2] as
+      | Record<string, [number, number]>
+      | undefined
+    if (!places) throw new Error('места не отправлены')
+    // IN -> I -> E: три слоя, три столбца слева направо и вокруг места блока.
+    expect(places.IN?.[0]).toBeLessThan(places.I?.[0] ?? 0)
+    expect(places.I?.[0]).toBeLessThan(places.E?.[0] ?? 0)
+    expect(places.I).toEqual([400, 200])
   })
 })
 

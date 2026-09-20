@@ -27,6 +27,25 @@
  * каждого считается штраф (задел за чужую фигуру, выход за поле, лишняя
  * кривизна), побеждает наименьший. Это десяток проб на связь на одной
  * арифметике -- дешевле, чем разметка текста рядом, и синхронно.
+ *
+ * Тот же подбор рисует теперь и провода холста песочницы (`lib/wire`, #554).
+ * Раскладок «как выглядит эта схема» в проекте было три, и они разошлись:
+ * человек видел внутри коробки схему слоями, жал «разобрать на клетки» и
+ * получал ту же схему сеткой, да ещё и другими кривыми с другими знаками на
+ * концах. Владелец выбрал направление переноса прямо: в библиотеке хорошо,
+ * значит на холсте должно стать как в библиотеке, а не наоборот. Поэтому
+ * подбор изгиба вынесен сюда одной функцией (`arc`) и зовётся из обоих мест,
+ * а не переписан на холсте во второй раз.
+ *
+ * Отсюда же две мелочи, которых миниатюре одной не требовалось:
+ *
+ * - поле (`ArcField`) задаётся прямоугольником, а не размером. У миниатюры оно
+ *   начинается в нуле, у холста -- это общий прямоугольник схемы, и он стоит
+ *   где угодно;
+ * - шаг отклонения считается от роста самой высокой фигуры на пути, а не берётся
+ *   числом. Прежнее число 34 подобрано под клетку миниатюры высотой 20 -- ровно
+ *   то, что даёт эта формула, -- но на холсте клетка 38, а коробка блока 62, и
+ *   дуга с отклонением 17 обошла бы их насквозь.
  */
 
 import type { EdgeKind, Scheme } from '../model/types'
@@ -75,6 +94,42 @@ export interface MiniatureBox {
   padding: number
 }
 
+/**
+ * Фигура, из которой связь выходит, в которую входит или мимо которой идёт.
+ *
+ * Центр и размер, а не углы: линия выходит на границе прямоугольника, и
+ * считается эта точка от центра. У порта блока размеры нулевые -- порт
+ * нарисован кружком на своём краю коробки, и связь обязана прийти ровно туда.
+ */
+export interface ArcBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Поле, за которое дуге лучше не выходить.
+ *
+ * Прямоугольник, а не размер: у миниатюры поле начинается в нуле, а у холста
+ * это общий прямоугольник схемы -- он стоит там, где стоят фигуры.
+ */
+export interface ArcField {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Дуга связи: где начинается, где кончается и как изогнута. */
+export interface Arc {
+  start: MiniPoint
+  end: MiniPoint
+  control: MiniPoint
+  bow: number
+  tip: MiniPoint
+}
+
 /** Поле макета: карточка отводит миниатюре 240x120. */
 export const DEFAULT_BOX: MiniatureBox = { width: 240, height: 120, padding: 30 }
 
@@ -86,8 +141,8 @@ const CHAR_WIDTH = 5.8
 
 /** Зазор, с которым связь обходит чужую фигуру: меньше -- линия её задевает. */
 const CLEARANCE = 4
-/** Шаг отклонения: при 34 дуга обходит клетку высотой 20 с этим зазором. */
-const BOW_STEP = 34
+/** Запас сверх зазора: без него дуга ложится ровно на угол обходимой фигуры. */
+const BOW_LEEWAY = 3
 /** Если шага не хватило -- дуга круче; больше 2 шагов уже не влезает в поле. */
 const BOW_SCALE = [1, 1.55, 2.1]
 /** Сколько точек кривой проверяется на помехи: хватает, чтобы не проскочить. */
@@ -150,8 +205,66 @@ export function depths(scheme: Scheme): Map<string, number> {
   return depth
 }
 
+/**
+ * Клетки схемы по слоям: слой -- глубина по связям, порядок внутри слоя --
+ * порядок клеток в самой схеме.
+ *
+ * Вынесено из `miniature` потому, что слои нужны не только ей. Разбор блока на
+ * холсте ставит клетки по этой же раскладке (#554): человек видел внутри
+ * коробки схему слоями, и после «разобрать на клетки» она обязана стоять
+ * слоями, а не сеткой «лишь бы не в кучу». Вторая такая же расстановка
+ * разошлась бы с первой незаметно -- она и расходилась.
+ */
+export function layered(scheme: Scheme): string[][] {
+  const depth = depths(scheme)
+  const columns = new Map<number, string[]>()
+  for (const neuron of scheme.neurons) {
+    const level = depth.get(neuron.id) ?? 0
+    const column = columns.get(level) ?? []
+    column.push(neuron.id)
+    columns.set(level, column)
+  }
+  const last = Math.max(0, ...columns.keys())
+  const out: string[][] = []
+  // Слой без клеток возможен и пропускать его нельзя: пропущенный слой сдвинул
+  // бы все следующие влево, и схема поехала бы относительно той же схемы,
+  // нарисованной миниатюрой.
+  for (let level = 0; level <= last; level += 1) out.push(columns.get(level) ?? [])
+  return out
+}
+
+/**
+ * Места клеток по той же раскладке, но шагом холста.
+ *
+ * Пиксели миниатюры сюда не переносятся: фигура клетки на холсте 74x38, а в
+ * миниатюре 28x20, и один в один они не лягут. Переносится строение -- какая
+ * клетка в каком слое и в каком ряду, -- а шаг задаёт тот, кто знает размер
+ * нарисованной фигуры.
+ *
+ * Слой -- столбец, как и в миниатюре: схема читается слева направо. Вокруг
+ * названной точки, а не в неё: стопка из трёх клеток, положенная в одно место,
+ * выглядит одной клеткой, и растаскивать её пришлось бы мышью.
+ */
+export function layeredPlaces(
+  scheme: Scheme,
+  centre: [number, number],
+  step: { x: number; y: number },
+): Record<string, [number, number]> {
+  const columns = layered(scheme)
+  const places: Record<string, [number, number]> = {}
+  columns.forEach((ids, column) => {
+    ids.forEach((id, row) => {
+      places[id] = [
+        Math.round(centre[0] + (column - (columns.length - 1) / 2) * step.x),
+        Math.round(centre[1] + (row - (ids.length - 1) / 2) * step.y),
+      ]
+    })
+  })
+  return places
+}
+
 /** Точка выхода линии на границе фигуры -- прямоугольник режется точно. */
-function boundary(node: MiniNode, dx: number, dy: number): MiniPoint {
+function boundary(node: ArcBox, dx: number, dy: number): MiniPoint {
   const halfWidth = node.width / 2
   const halfHeight = node.height / 2
   const scale = Math.min(
@@ -205,7 +318,7 @@ export function edgePath(edge: MiniEdge): string {
 }
 
 /** Насколько точка зашла в фигуру с зазором; 0 -- не зашла. */
-function intrusion(node: MiniNode, point: MiniPoint): number {
+function intrusion(node: ArcBox, point: MiniPoint): number {
   const overX = node.width / 2 + CLEARANCE - Math.abs(point.x - node.x)
   const overY = node.height / 2 + CLEARANCE - Math.abs(point.y - node.y)
   return overX > 0 && overY > 0 ? Math.min(overX, overY) : 0
@@ -213,11 +326,11 @@ function intrusion(node: MiniNode, point: MiniPoint): number {
 
 /** Чем плох такой изгиб: чужие фигуры на пути, выход за поле, лишняя дуга. */
 function penalty(
-  from: MiniNode,
-  to: MiniNode,
+  from: ArcBox,
+  to: ArcBox,
   bow: number,
-  others: MiniNode[],
-  box: MiniatureBox,
+  others: ArcBox[],
+  field: ArcField,
 ): number {
   const points = quadPoints(from, controlPoint(from, to, bow), to, SAMPLES)
   // Пересечь чужую клетку нельзя совсем -- из-за этого FFI и читался цепочкой.
@@ -230,14 +343,33 @@ function penalty(
   for (const point of points) {
     const outside = Math.max(
       0,
-      EDGE_INSET - point.x,
-      point.x - (box.width - EDGE_INSET),
-      EDGE_INSET - point.y,
-      point.y - (box.height - EDGE_INSET),
+      field.x + EDGE_INSET - point.x,
+      point.x - (field.x + field.width - EDGE_INSET),
+      field.y + EDGE_INSET - point.y,
+      point.y - (field.y + field.height - EDGE_INSET),
     )
     cost += 8 * outside
   }
   return cost
+}
+
+/**
+ * Шаг отклонения: на сколько дуга отходит от прямой, чтобы обойти фигуру.
+ *
+ * Наибольшее отклонение кривой от прямой -- половина шага, поэтому шаг берётся
+ * в два роста самой высокой фигуры из тех, что связь может задеть, плюс зазор
+ * и небольшой запас. У миниатюры все клетки высотой 20, и формула даёт ровно
+ * то число 34, что стояло здесь константой. На холсте клетка 38, а коробка
+ * блока 62 -- тем же числом 34 дуга проходила бы сквозь них.
+ *
+ * Концы связи считаются наравне с чужими фигурами: встречная пара разводится
+ * этим же шагом, и разойтись она должна настолько, чтобы обе дуги были видны
+ * рядом со своими клетками, а не слиплись у них на краю.
+ */
+function bowStep(from: ArcBox, to: ArcBox, others: ArcBox[]): number {
+  let half = 0
+  for (const box of [from, to, ...others]) half = Math.max(half, box.height / 2)
+  return 2 * (half + CLEARANCE + BOW_LEEWAY)
 }
 
 /**
@@ -246,8 +378,8 @@ function penalty(
  * точно на первую, -- поэтому только дуги и только вправо по ходу: встречная,
  * идущая обратно, окажется с другой стороны сама.
  */
-function bowChoices(sameWay: number, alone: boolean): number[] {
-  const base = BOW_STEP * (sameWay + 1)
+function bowChoices(step: number, sameWay: number, alone: boolean): number[] {
+  const base = step * (sameWay + 1)
   const arcs = BOW_SCALE.map((scale) => base * scale)
   if (!alone) return arcs
   return [0, ...arcs.flatMap((value) => [value, -value])]
@@ -255,18 +387,65 @@ function bowChoices(sameWay: number, alone: boolean): number[] {
 
 /** Пара клеток без учёта направления: у встречных связей ключ один. */
 function pairKey(from: string, to: string): string {
-  return from < to ? `${from} ${to}` : `${to} ${from}`
+  return from < to ? `${from} ${to}` : `${to} ${from}`
+}
+
+/**
+ * Дуга одной связи: выбрать изгиб и посчитать точки.
+ *
+ * Вынесено наружу ради проводов холста песочницы (#554): дуга там считается
+ * этой же функцией, а не второй такой же. Три вещи решаются разом, и порядок
+ * между ними важен:
+ *
+ * 1. изгиб выбирается перебором заготовленных шагов по наименьшему штрафу --
+ *    задел за чужую фигуру дороже всего, выход за поле дешевле, лишняя
+ *    кривизна дешевле всего;
+ * 2. точки крепления берутся уже по выбранному изгибу: связь выходит из
+ *    фигуры и входит в неё в сторону дуги, иначе линия отрывалась бы от
+ *    клетки на самом видном месте -- у её края;
+ * 3. `tip` -- касательная в конце, а не направление «начало -- конец»: по ней
+ *    повёрнут знак рода связи, и на дуге это разные вещи.
+ *
+ * Связь фигуры на саму себя сюда не приходит: ход нулевой длины, делить на
+ * него нельзя, а изгибать нечего. Миниатюра такие связи не рисует вовсе,
+ * холст рисует петлёй у самой фигуры (`lib/wire`).
+ */
+export function arc(
+  from: ArcBox,
+  to: ArcBox,
+  others: ArcBox[],
+  field: ArcField,
+  sameWay = 0,
+  alone = true,
+): Arc {
+  const step = bowStep(from, to, others)
+  let bow = 0
+  let best = Number.POSITIVE_INFINITY
+  for (const choice of bowChoices(step, sameWay, alone)) {
+    const cost = penalty(from, to, choice, others, field)
+    if (cost < best) {
+      best = cost
+      bow = choice
+    }
+  }
+
+  const control = controlPoint(from, to, bow)
+  const start = boundary(from, control.x - from.x, control.y - from.y)
+  const end = boundary(to, control.x - to.x, control.y - to.y)
+  const tipX = end.x - control.x
+  const tipY = end.y - control.y
+  const tipLength = Math.hypot(tipX, tipY) || 1
+  return {
+    start,
+    end,
+    control,
+    bow,
+    tip: { x: tipX / tipLength, y: tipY / tipLength },
+  }
 }
 
 export function miniature(scheme: Scheme, box: MiniatureBox = DEFAULT_BOX): Miniature {
-  const depth = depths(scheme)
-  const columns = new Map<number, string[]>()
-  for (const neuron of scheme.neurons) {
-    const level = depth.get(neuron.id) ?? 0
-    const column = columns.get(level) ?? []
-    column.push(neuron.id)
-    columns.set(level, column)
-  }
+  const columns = layered(scheme)
 
   const span = (size: number, count: number, index: number): number => {
     // Одна клетка стоит по центру, несколько -- поровну между краями поля.
@@ -275,21 +454,20 @@ export function miniature(scheme: Scheme, box: MiniatureBox = DEFAULT_BOX): Mini
     return box.padding + (inner * index) / (count - 1)
   }
 
-  const lastColumn = Math.max(0, ...columns.keys())
   const placed = new Map<string, MiniNode>()
-  for (const [level, ids] of columns) {
+  columns.forEach((ids, level) => {
     ids.forEach((id, index) => {
       const neuron = scheme.neurons.find((item) => item.id === id)
       placed.set(id, {
         id,
         inhibitory: neuron?.inhibitory ?? false,
-        x: span(box.width, lastColumn + 1, level),
+        x: span(box.width, columns.length, level),
         y: span(box.height, ids.length, index),
         width: nodeWidth(id),
         height: NODE_HEIGHT,
       })
     })
-  }
+  })
 
   const nodes = scheme.neurons
     .map((neuron) => placed.get(neuron.id))
@@ -311,41 +489,21 @@ export function miniature(scheme: Scheme, box: MiniatureBox = DEFAULT_BOX): Mini
   const seen = new Map<string, number>()
   const edges: MiniEdge[] = []
   for (const { edge, from, to } of drawn) {
-    const wayKey = `${edge.from} ${edge.to}`
+    const wayKey = `${edge.from} ${edge.to}`
     const sameWay = seen.get(wayKey) ?? 0
     seen.set(wayKey, sameWay + 1)
     const alone = (pairSize.get(pairKey(edge.from, edge.to)) ?? 1) <= 1
     const others = nodes.filter((node) => node !== from && node !== to)
-
-    let bow = 0
-    let best = Number.POSITIVE_INFINITY
-    for (const choice of bowChoices(sameWay, alone)) {
-      const cost = penalty(from, to, choice, others, box)
-      if (cost < best) {
-        best = cost
-        bow = choice
-      }
-    }
-
-    // Связь выходит из фигуры и входит в неё в сторону изгиба, иначе дуга
-    // отрывалась бы от клетки на самом видном месте -- у её края.
-    const control = controlPoint(from, to, bow)
-    const start = boundary(from, control.x - from.x, control.y - from.y)
-    const end = boundary(to, control.x - to.x, control.y - to.y)
-    const tipX = end.x - control.x
-    const tipY = end.y - control.y
-    const tipLength = Math.hypot(tipX, tipY) || 1
-    edges.push({
-      id: edge.id,
-      kind: edge.kind,
+    // Поле миниатюры начинается в нуле; у холста оно стоит там, где фигуры.
+    const line = arc(
       from,
       to,
-      start,
-      end,
-      bow,
-      control,
-      tip: { x: tipX / tipLength, y: tipY / tipLength },
-    })
+      others,
+      { x: 0, y: 0, width: box.width, height: box.height },
+      sameWay,
+      alone,
+    )
+    edges.push({ id: edge.id, kind: edge.kind, from, to, ...line })
   }
 
   return { width: box.width, height: box.height, nodes, edges }

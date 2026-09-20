@@ -798,6 +798,24 @@ def test_ungroup_scatters_the_cells_around_the_block(project, ffi):
     assert all(abs(x - 300.0) <= 200.0 and abs(y - 80.0) <= 200.0 for x, y in places)
 
 
+def test_ungroup_puts_the_cells_where_they_were_drawn(project, ffi):
+    """Места приходят от того, кто блок нарисовал, -- сетка им не мешает.
+
+    Внутри коробки схема разложена слоями, и после разбора она обязана стоять
+    так же (#554). Считает раскладку интерфейс: размеры фигур и раскрытие блока
+    живут только там.
+    """
+    project.insert_pattern(ffi, instance_id="a", position=(300.0, 80.0))
+
+    project.ungroup("a", {"IN": (10.0, 20.0), "E": (250.0, 20.0)})
+
+    places = {name: cell.position for name, cell in project.sandbox.neurons.items()}
+    assert places["IN"] == (10.0, 20.0)
+    assert places["E"] == (250.0, 20.0)
+    # Клетка, которую не назвали, легла по запасной сетке, а не в ноль.
+    assert places["I"] not in {(0.0, 0.0), (10.0, 20.0), (250.0, 20.0)}
+
+
 def test_ungroup_keeps_the_run_spike_for_spike(project, ffi):
     """Разбор -- смена вида, а не схемы: при том же зерне сеть считается та же.
 

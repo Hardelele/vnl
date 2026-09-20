@@ -4,6 +4,8 @@ import {
   DEFAULT_BOX,
   depths,
   edgePoints,
+  layered,
+  layeredPlaces,
   miniature,
   nodeWidth,
   type MiniEdge,
@@ -219,6 +221,52 @@ const FFI = scheme(
     ['I', 'E', 'inh'],
   ],
 )
+
+describe('одна раскладка на все изображения схемы (#554)', () => {
+  it('разбор блока ставит клетки по тем же слоям, что миниатюра', () => {
+    // Человек видел внутри коробки схему слоями и жал «разобрать на клетки».
+    // Прежде места раздавала сетка «лишь бы не в кучу», и та же схема ложилась
+    // иначе -- он читал две разные картинки одной вещи.
+    const view = miniature(FFI)
+    const places = layeredPlaces(FFI, [400, 300], { x: 120, y: 90 })
+
+    const byColumn = (ids: string[], at: (id: string) => number): string[] =>
+      [...ids].sort((one, other) => at(one) - at(other))
+    const mini = byColumn(
+      FFI.neurons.map((neuron) => neuron.id),
+      (id) => nodeOf(view, id).x,
+    )
+    const canvas = byColumn(
+      FFI.neurons.map((neuron) => neuron.id),
+      (id) => places[id]?.[0] ?? 0,
+    )
+    expect(canvas).toEqual(mini)
+    // И слои те же самые, а не просто похожий порядок.
+    expect(layered(FFI)).toEqual([['IN'], ['I'], ['E']])
+  })
+
+  it('столбец стоит вокруг названного места, а не съезжает с него', () => {
+    // Схема остаётся там, где стояла коробка: иначе после разбора её пришлось
+    // бы искать глазами по холсту.
+    const places = layeredPlaces(FFI, [400, 300], { x: 120, y: 90 })
+    expect(places.I).toEqual([400, 300])
+    expect(places.IN?.[0]).toBe(280)
+    expect(places.E?.[0]).toBe(520)
+  })
+
+  it('пустой слой не сдвигает следующие', () => {
+    // Слой без клеток бывает: глубину задают связи. Пропусти его -- и схема
+    // на холсте поехала бы относительно той же схемы в миниатюре.
+    const gap = scheme(
+      [
+        ['A', false],
+        ['B', false],
+      ],
+      [['A', 'B']],
+    )
+    expect(layered(gap)).toEqual([['A'], ['B']])
+  })
+})
 
 describe('связь на миниатюре говорит то же, что на схеме', () => {
   it('встречная пара рисуется двумя различимыми линиями', () => {

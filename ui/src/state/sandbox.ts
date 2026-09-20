@@ -14,6 +14,7 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { layeredPlaces } from '../lib/miniature'
 import { OfflineError, isDenied } from '../model/catalog'
 import { loadCells } from '../model/cells'
 import { NO_GLOSSARY, loadGlossary } from '../model/glossary'
@@ -254,6 +255,16 @@ const SLOT = { x: 220, y: 140, margin: 60 }
  * тот край, от которого мы и уходили.
  */
 const PASS = { x: 48, y: 36 }
+
+/**
+ * Шаг, которым ложатся клетки разобранного блока.
+ *
+ * Те же числа, что были на сервере (`UNGROUP_STEP` в `vnl/patterns.py`):
+ * меняется не расстояние между клетками, а то, какая клетка куда попадает.
+ * Фигура клетки 74x38, и шаг оставляет между ними полсотни пикселей -- ровно
+ * столько, чтобы дуга связи прошла между соседями, а не по ним.
+ */
+const UNGROUP_STEP = { x: 120, y: 90 }
 
 /**
  * Куда положить следующий объект, чтобы он не лёг поверх соседа.
@@ -586,12 +597,25 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
      * Выделение снимается: блока с этим именем больше нет, и панель свойств
      * показывала бы пустоту. Раскрытие тоже забывается -- раскрывать стало
      * нечего.
+     *
+     * Места клеткам считаются здесь и уезжают вместе с запросом. Раньше их
+     * раздавал сервер сеткой «лишь бы не в кучу», и получалось вот что: внутри
+     * коробки человек видел схему слоями, жал «разобрать» -- и та же схема
+     * ложилась сеткой, которая про связи не знает вовсе. Раскладка у схемы
+     * одна, и берётся она оттуда же, откуда нарисована начинка блока (#554).
+     *
+     * Вокруг места самого блока: схема остаётся там, где стояла коробка.
      */
-    ungroup: (block: string) =>
-      act((id) => io.ungroup(id, block), {
+    ungroup: (block: string) => {
+      const item = store.getState().project?.blocks.find((one) => one.id === block)
+      const places = item
+        ? layeredPlaces(item.scheme, item.position, UNGROUP_STEP)
+        : undefined
+      return act((id) => io.ungroup(id, block, places), {
         selected: null,
         opened: store.getState().opened.filter((item) => item !== block),
-      }),
+      })
+    },
 
     remove: (object: string) => act((id) => io.remove(id, object), { selected: null }),
 

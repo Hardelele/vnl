@@ -13,10 +13,16 @@
  * возбуждения на конце была точка: на большой схеме она значит место контакта
  * на ветви, а здесь ветвей нет, и от точки оставалась одна двусмысленность --
  * `A→B` и `B→A` выглядели одинаково.
+ *
+ * Сами знаки описаны один раз на весь проект (`lib/marker`). Раньше их было
+ * три набора -- свой здесь, свой на холсте, свой на карточке, -- и владелец
+ * это увидел: «и стрелки по-другому нарисованы» (#554). Числа остались
+ * здешние: их и выбрали эталоном.
  */
 
 import { useMemo } from 'react'
 
+import { capLine, tipPoints } from '../../lib/marker'
 import { edgePath, miniature, type MiniEdge, type MiniNode } from '../../lib/miniature'
 import type { Scheme } from '../../model/types'
 import './thumbnail.css'
@@ -84,38 +90,18 @@ function Cell({ node }: { node: MiniNode }) {
   )
 }
 
-/** Длина острия и половина плашки: больше -- знак закрывает саму связь. */
-const TIP = 6.5
-const CAP = 4.5
-
 function Edge({ edge }: { edge: MiniEdge }) {
   // Связь -- квадратичная кривая: у прямой контрольная точка лежит на ней
   // самой, поэтому ветки на «прямую и дугу» здесь нет. Поворот знака берётся
   // из касательной в конце, а не из направления «начало -- конец»: у дуги это
   // разные вещи, и на дуге знак смотрел бы мимо клетки.
-  const ux = edge.tip.x
-  const uy = edge.tip.y
-
   return (
     <g className={`thumbnail-link is-${edge.kind}`}>
       <path className="thumbnail-wire" d={edgePath(edge)} />
       {edge.kind === 'inh' ? (
-        <line
-          className="thumbnail-cap"
-          x1={edge.end.x - uy * CAP}
-          y1={edge.end.y + ux * CAP}
-          x2={edge.end.x + uy * CAP}
-          y2={edge.end.y - ux * CAP}
-        />
+        <line className="thumbnail-cap" {...capLine(edge.end, edge.tip)} />
       ) : (
-        <polygon
-          className="thumbnail-cap"
-          points={[
-            `${edge.end.x},${edge.end.y}`,
-            `${edge.end.x - ux * TIP - uy * 3},${edge.end.y - uy * TIP + ux * 3}`,
-            `${edge.end.x - ux * TIP + uy * 3},${edge.end.y - uy * TIP - ux * 3}`,
-          ].join(' ')}
-        />
+        <polygon className="thumbnail-cap" points={tipPoints(edge.end, edge.tip)} />
       )}
     </g>
   )

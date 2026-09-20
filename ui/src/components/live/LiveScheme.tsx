@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
+import { capLine, tipPoints } from '../../lib/marker'
 import { builtinPlacement, placeScheme, type Placement } from '../../lib/place'
 import type { Scheme } from '../../model/types'
 import type { CellState } from '../../model/sim'
@@ -195,17 +196,14 @@ function Edge({
           курсора значило бы менять схему под способ ввода. */}
       {pickable ? <path className="scheme-hit" d={path} fill="none" /> : null}
       <path d={path} fill="none" />
+      {/* Знаки общие на весь проект (`lib/marker`): плашка поперёк -- это
+          торможение, остриё -- возбуждение. Прежде здесь у возбуждения стоял
+          кружок: он симметричен и о направлении не говорит, а «место контакта
+          на ветви» значит на схеме с ветвями, которых тут нет (#524, #554). */}
       {edge.kind === 'inh' ? (
-        // Плашка поперёк линии -- торможение.
-        <line
-          className="scheme-cap"
-          x1={last.x - uy * 6}
-          y1={last.y + ux * 6}
-          x2={last.x + uy * 6}
-          y2={last.y - ux * 6}
-        />
+        <line className="scheme-cap" {...capLine(last, { x: ux, y: uy })} />
       ) : (
-        <circle className="scheme-cap" cx={last.x} cy={last.y} r={3.5} />
+        <polygon className="scheme-cap" points={tipPoints(last, { x: ux, y: uy })} />
       )}
     </g>
   )
