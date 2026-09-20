@@ -177,6 +177,27 @@ describe('буфер', () => {
     // в этой симуляции никогда не было.
     expect(control.store.getState().traces['E.soma:v']).toEqual([-65, -64])
   })
+
+  it('шаг просит шаг, а не перемотку на маленькое число', async () => {
+    // Разница не в величине, а в том, показывает ли сессия разряд, попавший
+    // внутрь перехода: шаг вперёд -- кадр, прыжок курсором -- нет (#537).
+    // Поэтому намерение говорится вызовом, и подменять его здесь нечем.
+    const seek = vi.fn().mockResolvedValue(update())
+    const step = vi.fn().mockResolvedValue(update({ time: 21, samples: 210 }))
+    const control = createSimController({
+      open: vi.fn().mockResolvedValue(update()),
+      seek,
+      step,
+      every: manualTimer().every,
+    })
+
+    await control.open({ pattern: 'ffi' })
+    await control.step(1)
+
+    expect(step).toHaveBeenCalledWith('sim1', 1)
+    expect(seek).not.toHaveBeenCalled()
+    expect(control.store.getState().time).toBe(21)
+  })
 })
 
 describe('закрытие', () => {

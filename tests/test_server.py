@@ -514,6 +514,26 @@ def test_seek_pauses_and_puts_time_where_asked(base):
     assert ask(base, "POST", f"/api/sim/{sim['id']}/seek", {})[0] == 400
 
 
+def test_a_step_moves_time_by_a_millisecond_and_stays_a_frame(base):
+    """Шаг -- свой маршрут, а не перемотка на маленькое число.
+
+    Через HTTP целиком, потому что различие между шагом и прыжком курсором
+    интерфейс выражает именно выбором маршрута: `seek` обнуляет накопленное
+    для показа, `step` -- нет (см. `live.Session.step`).
+    """
+    _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    ask(base, "POST", f"/api/sim/{sim['id']}/seek", {"time": 20.0})
+
+    _, ahead = ask(base, "POST", f"/api/sim/{sim['id']}/step", {"delta": 1.0})
+    assert ahead["state"] == "paused"
+    assert ahead["time"] == pytest.approx(21.0, abs=ahead["dt"])
+
+    _, back = ask(base, "POST", f"/api/sim/{sim['id']}/step", {"delta": -1.0})
+    assert back["time"] == pytest.approx(20.0, abs=back["dt"])
+
+    assert ask(base, "POST", f"/api/sim/{sim['id']}/step", {})[0] == 400
+
+
 def test_reset_brings_the_simulation_back_to_the_start(base):
     _, sim = ask(base, "POST", "/api/sim", {"pattern": "ffi", "pace": 2000})
     ask(base, "POST", f"/api/sim/{sim['id']}/start")
@@ -1442,6 +1462,7 @@ def test_the_whole_list_of_what_answers_without_login_fits_on_one_screen(tmp_pat
         ("POST", r"^/api/sim/([^/]+)/pause$"),
         ("POST", r"^/api/sim/([^/]+)/reset$"),
         ("POST", r"^/api/sim/([^/]+)/seek$"),
+        ("POST", r"^/api/sim/([^/]+)/step$"),
         ("DELETE", r"^/api/sim/([^/]+)$"),
     }
 

@@ -97,6 +97,18 @@ export function seekSim(id: string, time: number): Promise<SimUpdate> {
   return post<SimUpdate>(`/sim/${encodeURIComponent(id)}/seek`, { time })
 }
 
+/**
+ * Шагнуть по времени от текущего момента.
+ *
+ * Свой вызов, а не `seekSim` с маленькой разницей: сессия показывает разряд,
+ * попавший в шаг, и не показывает разряд, попавший в прыжок курсором
+ * (`live.Session.step`). Различать их по величине числа значило бы однажды
+ * показать разряд из чужого отрезка -- поэтому намерение говорится маршрутом.
+ */
+export function stepSim(id: string, delta: number): Promise<SimUpdate> {
+  return post<SimUpdate>(`/sim/${encodeURIComponent(id)}/step`, { delta })
+}
+
 export function closeSim(id: string): Promise<void> {
   return ask(`/sim/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(() => undefined)
 }

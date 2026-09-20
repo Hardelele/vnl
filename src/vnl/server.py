@@ -327,6 +327,22 @@ class Api:
         session.seek(moment)
         return session.update()
 
+    def sim_step(self, sim_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Шаг по времени от текущего момента -- отдельно от перемотки.
+
+        Отдельный маршрут, а не `seek` с маленьким временем: сессия по-разному
+        показывает разряд в шаге и в прыжке курсором (`Session.step`), и
+        различать их по величине присланного числа значило бы решать это за
+        того, кто знает точно.
+        """
+        session = self.pool.get(sim_id)
+        try:
+            delta = float(body.get("delta"))  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError('нужен шаг в мс: {"delta": 1.0}') from exc
+        session.step(delta)
+        return session.update()
+
     def close_sim(self, sim_id: str) -> dict[str, Any]:
         self.pool.close(sim_id)
         return {"closed": sim_id}
@@ -812,6 +828,13 @@ def routes(service: Api) -> list[Route]:
             "POST",
             re.compile(r"^/api/sim/([^/]+)/seek$"),
             service.sim_seek,
+            wants="body",
+            anonymous=service.sim_is_of_pattern,
+        ),
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/step$"),
+            service.sim_step,
             wants="body",
             anonymous=service.sim_is_of_pattern,
         ),

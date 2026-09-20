@@ -217,6 +217,7 @@ export function SandboxScreen() {
           onStart={() => void start()}
           onPause={() => void sim.pause()}
           onReset={() => void sim.reset()}
+          onStep={(delta) => void sim.step(delta)}
         />
 
         {/* Раскладка -- по требованию, а не на каждую вставку: человек

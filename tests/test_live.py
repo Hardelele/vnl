@@ -310,6 +310,153 @@ def test_a_rewind_forwards_does_not_leave_an_old_discharge_glowing():
         item.close()
 
 
+# --- шаг по времени -------------------------------------------------------
+#
+# Шаг и прыжок курсором кончаются одним -- время встало на другом моменте, -- а
+# различаются ровно тем, показан ли разряд, попавший внутрь перехода. Поэтому
+# проверяется здесь не арифметика времени, а это различие: шаг вперёд -- кадр,
+# прыжок -- не кадр, шаг назад -- состояние, а не событие.
+#
+# Схема `synaptic_delay` выбрана за известные наперёд моменты разрядов: `NEAR`
+# разряжается на 23.8 мс (шапка паттерна обещает то же число), `FAR` -- на 9 мс
+# позже. Значит шаг с 23.0 на 24.0 накрывает разряд, а следующий -- уже нет.
+
+
+def delayed() -> Session:
+    return Session("s-step", model("library/synaptic_delay"), source="задержка")
+
+
+def test_a_step_forward_shows_the_discharge_inside_it():
+    """Разряд, попавший в шаг, виден -- ради этого шагают.
+
+    Разряд занимает один шаг движка из десяти в миллисекунде, и по мгновенному
+    значению его не видно никогда: сразу после него клетка на `v_reset`, то
+    есть по заряду -- ноль. Шаг вперёд -- кадр, и кадр рассказывает про весь
+    отрезок.
+    """
+    item = delayed()
+    try:
+        item.seek(23.0)
+        before = item.update(since=0)["cells"]["NEAR"]
+        assert before["spiked"] is False, "разряд ещё не случился"
+
+        item.step(1.0)
+        inside = item.update(since=0)
+        assert inside["time"] == pytest.approx(24.0, abs=item.dt)
+        assert inside["spikes"]["NEAR"] == [23.8], "разряд и правда внутри шага"
+        assert inside["cells"]["NEAR"]["spiked"] is True
+        assert inside["cells"]["NEAR"]["peak"] >= 1.0
+
+        item.step(1.0)
+        after = item.update(since=0)["cells"]["NEAR"]
+        # В следующем шаге -- настоящий заряд после сброса, а не тот же пик.
+        assert after["spiked"] is False
+        assert after["peak"] == after["charge"]
+    finally:
+        item.close()
+
+
+def test_a_step_back_shows_the_state_not_the_event():
+    """Назад смотрят на состояние: разряда, случившегося позже, там нет.
+
+    Шаг назад иначе как восстановлением не сделать -- движок умеет идти только
+    вперёд, -- но дело не в механике: миллисекундой раньше разряда ещё не
+    было, и показывать его значило бы врать про момент, на который встали.
+    """
+    item = delayed()
+    try:
+        item.seek(23.0)
+        item.step(1.0)
+        assert item.update(since=0)["cells"]["NEAR"]["spiked"] is True
+
+        item.step(-1.0)
+        back = item.update(since=0)
+        assert back["time"] == pytest.approx(23.0, abs=item.dt)
+        cells = back["cells"]["NEAR"]
+        assert cells["spiked"] is False
+        assert cells["peak"] == cells["charge"]
+        # И это настоящий заряд той миллисекунды, а не ноль после сброса.
+        assert cells["charge"] > 0.5
+    finally:
+        item.close()
+
+
+def test_a_jump_of_the_same_size_is_still_not_a_frame():
+    """Прыжок курсором не показывает разряд, даже если он ровно с шаг.
+
+    Ради этого шаг и перемотка -- разные вызовы, а не один с догадкой по
+    величине дельты: догадка однажды ошиблась бы, и человек увидел бы разряд
+    из чужого отрезка (#534 про то, чем это кончается).
+    """
+    item = delayed()
+    try:
+        item.seek(23.0)
+        item.seek(24.0)
+
+        cells = item.update(since=0)["cells"]["NEAR"]
+        assert cells["spiked"] is False
+        assert cells["peak"] == cells["charge"]
+    finally:
+        item.close()
+
+
+def test_steps_leave_snapshots_to_come_back_to():
+    """Шаг берёт снимки: иначе откатываться после сотни шагов будет некуда.
+
+    Внутри перемотки движок идёт без снимков, и если бы шаг был устроен так
+    же, то сто шагов по миллисекунде от начала оставили бы один снимок на
+    нуле -- и следующий шаг назад пересчитывал бы весь прогон заново.
+    """
+    item = delayed()
+    try:
+        item.seek(20.0)
+        marks = len(item._marks)
+        for _ in range(60):
+            item.step(1.0)
+
+        assert item.elapsed == pytest.approx(80.0, abs=item.dt)
+        assert len(item._marks) > marks, "за 60 мс шагов не взято ни одного снимка"
+        assert all(mark.time <= item.elapsed for mark in item._marks)
+    finally:
+        item.close()
+
+
+def test_a_step_stops_the_running_time():
+    """Шаг -- это кадр по требованию, и время после него стоит.
+
+    Иначе шагнувший на миллисекунду тут же потерял бы её: фоновый поток
+    добавил бы своё, и разглядеть отрезок было бы нечем.
+    """
+    item = delayed()
+    try:
+        item.start()
+        assert item.state == "running"
+        item.step(1.0)
+        assert item.state == "paused"
+    finally:
+        item.close()
+
+
+def test_a_step_does_not_run_past_the_end_of_the_run():
+    item = delayed()
+    try:
+        item.seek(item.duration)
+        item.step(1.0)
+        assert item.elapsed == pytest.approx(item.duration, abs=item.dt)
+    finally:
+        item.close()
+
+
+def test_a_step_back_from_the_start_stays_at_the_start():
+    item = delayed()
+    try:
+        item.seek(0.5)
+        item.step(-1.0)
+        assert item.elapsed == 0.0
+    finally:
+        item.close()
+
+
 def test_inhibition_reads_as_a_charge_below_rest():
     """Клетка ниже покоя -- отрицательная доля, а не ноль.
 

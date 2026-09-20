@@ -217,6 +217,7 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             onStart={() => void act(() => control.start())}
             onPause={() => void act(() => control.pause())}
             onReset={() => void act(() => control.reset())}
+            onStep={(delta) => void act(() => control.step(delta))}
           />
         </div>
       </header>
