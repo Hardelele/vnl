@@ -49,6 +49,7 @@ import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { edgePath, miniature, type MiniEdge, type Miniature } from '../../lib/miniature'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
+import type { CellKind } from '../../model/types'
 import type { Pending, Selection } from '../../state/sandbox'
 import './canvas.css'
 
@@ -85,6 +86,15 @@ export interface CanvasProps {
   neurons: SandboxNeuron[]
   links: SandboxLink[]
   cells: Record<string, CellState>
+  /**
+   * Каталог типов клеток -- ради `note` (#541). На холсте клетка подписана
+   * своим именем (`sst`), и что за ним стоит, нигде не сказано; объяснение
+   * уже написано в `vnl/cells.py` и приходит вместе с каталогом.
+   *
+   * Необязателен: холст рисуется и до ответа сервера, а подсказка объясняет, а
+   * не управляет.
+   */
+  palette?: CellKind[]
   selected: Selection | null
   pending: Pending | null
   /** Какие блоки раскрыты. Это показ: на сервер не уходит и схему не меняет. */
@@ -228,6 +238,7 @@ export function Canvas({
   neurons,
   links,
   cells,
+  palette = [],
   selected,
   pending,
   opened = [],
@@ -507,6 +518,9 @@ export function Canvas({
 
       {neurons.map((neuron) => {
         const [x, y] = positionOf(neuron.id, neuron.position)
+        // Что это за клетка -- человеческими словами. Текст написан в
+        // `vnl/cells.py` и приходит каталогом: своего словаря здесь нет (#541).
+        const kind = palette.find((item) => item.id === neuron.cellType)
         const chosen = selected?.kind === 'neuron' && selected.id === neuron.id
         // Приставки у отдельной клетки нет: в собранной сети она зовётся так же.
         const state = cells[neuron.id]
@@ -523,6 +537,11 @@ export function Canvas({
             onPointerDown={(event) => startDrag(event, neuron.id, neuron.position)}
             onClick={() => onPickNeuron(neuron.id)}
           >
+            {/* Подсказка на всей фигуре, а не только на подписи: целиться
+                курсором в семь букв посреди клетки человек не обязан. */}
+            <title>
+              {kind ? `${kind.name}. ${kind.note}` : `${neuron.id} · ${neuron.cellType}`}
+            </title>
             <rect
               x={x - DOT.width / 2}
               y={y - DOT.height / 2}
@@ -546,9 +565,6 @@ export function Canvas({
             />
             <text className="cv-label" x={x} y={y + 4} textAnchor="middle">
               {short(neuron.id, 9)}
-              <title>
-                {neuron.id} · {neuron.cellType}
-              </title>
             </text>
             {/* Заряд числом -- над фигурой, там же, где он стоит на схеме
                 паттерна: внутрь не поместить, там имя клетки. Надписи нет,

@@ -82,6 +82,40 @@ export interface CellKind {
   morphology: Morphology
 }
 
+/**
+ * Рецептор из реестра сервера: чем он отличается от соседа по списку.
+ *
+ * Ни списка рецепторов, ни объяснений в браузере больше нет: и то и другое
+ * приходит из `ir.RECEPTORS`, где рядом с ними лежат числа, по которым их
+ * считают. Свой список здесь означал бы, что новый рецептор появляется в
+ * симуляторе и не появляется в панели свойств.
+ */
+export interface Receptor {
+  id: string
+  note: string
+  /** мВ, к какому потенциалу синапс тянет клетку. */
+  reversal: number
+  /** мс, за сколько спадает открытая проводимость. */
+  tauDecay: number
+  inhibitory: boolean
+}
+
+/**
+ * Расшифровка подписей песочницы (#541).
+ *
+ * Все подписи на экране -- шифр: `ampa`, `нСм`, `τ мембраны`, `mod`. Тексты
+ * живут на сервере, рядом со своим предметом, а здесь только показываются.
+ * Ключи `cell` -- те же, что у `PointModel`: подсказка ложится на поле, а не
+ * подбирается по порядку.
+ */
+export interface Glossary {
+  schema: number
+  receptors: Receptor[]
+  cell: Record<string, string>
+  contact: Record<string, string>
+  port: Record<string, string>
+}
+
 export interface ShortTermDynamics {
   enabled: boolean
   u: number

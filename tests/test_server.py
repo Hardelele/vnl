@@ -1438,3 +1438,38 @@ def test_a_link_drawn_from_an_inhibitory_cell_comes_out_inhibitory(base):
     assert any(
         "тормозный" in note and "ampa" in note for note in changed["warnings"]
     ), changed["warnings"]
+
+
+def test_the_glossary_explains_the_labels_on_the_screen(base):
+    """Расшифровка подписей приходит с сервера, а не из словаря в браузере (#541).
+
+    Проверяется не текст, а то, что объяснение есть у каждого пункта списка и
+    что ключи мембраны -- те же, по которым берутся её числа: разойдись они, и
+    подсказка однажды объяснит соседнее поле.
+    """
+    _, glossary = ask(base, "GET", "/api/glossary")
+
+    receptors = {item["id"]: item for item in glossary["receptors"]}
+    assert set(receptors) == set(ir.RECEPTORS)
+    assert all(item["note"] for item in receptors.values())
+    assert (receptors["gaba_a"]["inhibitory"], receptors["gaba_a"]["reversal"]) == (
+        True,
+        -70.0,
+    )
+    assert receptors["ampa"]["inhibitory"] is False
+
+    _, cells_payload = ask(base, "GET", "/api/cells")
+    point = cells_payload["cells"][0]["pointModel"]
+    assert set(glossary["cell"]) == set(point), "подсказка обязана лечь на поле"
+
+    assert set(glossary["contact"]) == {"receptor", "weight", "delay"}
+    assert set(glossary["port"]) == {"in", "out", "mod"}
+
+
+def test_a_builtin_cell_carries_its_own_explanation(base):
+    """Тексты клеток уже написаны -- их не надо заводить заново (#541)."""
+    _, payload = ask(base, "GET", "/api/cells")
+    notes = {item["id"]: item["note"] for item in payload["cells"]}
+
+    assert "дендрит" in notes["sst"].lower()
+    assert all(notes[cell] for cell in ("pyr", "pv", "sst", "vip", "relay"))

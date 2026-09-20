@@ -11,6 +11,7 @@
  * ровно столько, сколько параметров у модели: они будут только прибывать.
  */
 
+import { NO_GLOSSARY } from '../../model/glossary'
 import type { CellState } from '../../model/sim'
 import type {
   DriveKind,
@@ -23,12 +24,64 @@ import type {
   SandboxRecording,
   SandboxState,
 } from '../../model/sandbox'
-import type { PatternPort, PointModel, RecordedVar, RunSpec } from '../../model/types'
+import type {
+  CellKind,
+  Glossary,
+  PatternPort,
+  PointModel,
+  RecordedVar,
+  RunSpec,
+} from '../../model/types'
 import { sandboxController, type Selection } from '../../state/sandbox'
 import { Vitals } from '../live/Vitals'
 
-/** Рецепторы: тот же список, что в `ir.RECEPTORS`. */
-const RECEPTORS = ['ampa', 'nmda', 'gaba_a', 'gaba_b', 'nicotinic']
+/**
+ * Подсказка к рецептору: объяснение плюс его же числа.
+ *
+ * Числа берутся из полей ответа, а не пересказываются словами: реверсал и спад
+ * -- те самые, по которым синапс и считается, и повтори их в тексте, правка
+ * `tau_decay` оставила бы в подсказке старое число.
+ */
+function receptorHint(receptor: {
+  note: string
+  reversal: number
+  tauDecay: number
+}): string {
+  return `${receptor.note} Реверсал ${receptor.reversal} мВ, спад ${receptor.tauDecay} мс.`
+}
+
+/**
+ * Список рецепторов для поля выбора.
+ *
+ * Своего списка в браузере нет: он приходит из `ir.RECEPTORS` вместе с
+ * объяснениями. Пока ответа нет, в списке стоит одно текущее значение -- поле
+ * обязано показывать то, что в проекте, даже без справки; предлагать выбор из
+ * выдуманного здесь списка было бы хуже, чем не предлагать его вовсе.
+ */
+function receptorOptions(
+  glossary: Glossary,
+  value: string,
+): Array<{ id: string; name: string; note?: string }> {
+  if (!glossary.receptors.length) return [{ id: value, name: value }]
+  return glossary.receptors.map((item) => ({
+    id: item.id,
+    name: item.id,
+    note: receptorHint(item),
+  }))
+}
+
+/**
+ * Клетка палитры по имени типа -- ради её `note`.
+ *
+ * Тексты клеток уже написаны в `vnl/cells.py` и приходят каталогом; в
+ * песочнице они просто нигде не показывались (#541). Потерянный тип -- не
+ * ошибка: у клетки из чужого `.vnl` объяснения может не быть вовсе.
+ */
+function cellHint(palette: CellKind[], type: string): string | undefined {
+  const kind = palette.find((item) => item.id === type)
+  if (!kind) return undefined
+  return kind.note ? `${kind.name}. ${kind.note}` : kind.name
+}
 
 /** Что можно записывать: реестр живёт в `ir.RECORDED`. */
 const RECORDED: Array<{ id: RecordedVar; name: string }> = [
@@ -116,6 +169,8 @@ export function Properties({
   cells,
   spikes,
   elapsed,
+  glossary = NO_GLOSSARY,
+  palette = [],
 }: {
   selection: Selection | null
   project: SandboxState
@@ -124,6 +179,13 @@ export function Properties({
   spikes: Record<string, number[]>
   /** Пройденное время симуляции, мс: по нему считается частота. */
   elapsed: number
+  /**
+   * Расшифровка подписей с сервера (#541). Пустая -- панель работает как
+   * работала: подсказка объясняет, а не управляет, и ждать её незачем.
+   */
+  glossary?: Glossary
+  /** Каталог клеток -- ради `note`: объяснения уже написаны в `cells.py`. */
+  palette?: CellKind[]
 }) {
   if (!selection) {
     return (
@@ -139,13 +201,22 @@ export function Properties({
 
   if (selection.kind === 'block') {
     const block = project.blocks.find((item) => item.id === selection.id)
-    return block ? <BlockProps block={block} cells={cells} /> : null
+    return block ? (
+      <BlockProps block={block} cells={cells} glossary={glossary} palette={palette} />
+    ) : null
   }
 
   if (selection.kind === 'neuron') {
     const neuron = project.neurons.find((item) => item.id === selection.id)
     return neuron ? (
-      <NeuronProps neuron={neuron} cells={cells} spikes={spikes} elapsed={elapsed} />
+      <NeuronProps
+        neuron={neuron}
+        cells={cells}
+        spikes={spikes}
+        elapsed={elapsed}
+        glossary={glossary}
+        palette={palette}
+      />
     ) : null
   }
 
@@ -163,17 +234,20 @@ export function Properties({
         </div>
         <SelectField
           label="Рецептор"
+          hint={glossary.contact.receptor}
           value={link.receptor}
-          options={RECEPTORS.map((name) => ({ id: name, name }))}
+          options={receptorOptions(glossary, link.receptor)}
           onChange={(receptor) => void control.setParams(link.id, { receptor })}
         />
         <NumberField
           label="Вес, нСм"
+          hint={glossary.contact.weight}
           value={link.weight}
           onChange={(weight) => void control.setParams(link.id, { weight })}
         />
         <NumberField
           label="Задержка, мс"
+          hint={glossary.contact.delay}
           value={link.delay}
           onChange={(delay) => void control.setParams(link.id, { delay })}
         />
@@ -184,7 +258,7 @@ export function Properties({
 
   if (selection.kind === 'stimulus') {
     const drive = project.stimuli.find((item) => item.id === selection.id)
-    return drive ? <DriveProps drive={drive} /> : null
+    return drive ? <DriveProps drive={drive} glossary={glossary} /> : null
   }
 
   const record = project.recordings.find((item) => item.id === selection.id)
@@ -194,9 +268,13 @@ export function Properties({
 function BlockProps({
   block,
   cells,
+  glossary,
+  palette,
 }: {
   block: SandboxBlock
   cells: Record<string, CellState>
+  glossary: Glossary
+  palette: CellKind[]
 }) {
   const control = sandboxController
   return (
@@ -224,8 +302,15 @@ function BlockProps({
         const state = cells[`${block.id}/${port.site.instance}`]
         return (
           <div className="row" key={port.name}>
-            <span className="row-id">{port.name}</span>
-            <span className="mono row-dim">{port.direction}</span>
+            <span className="row-id" title={port.note || undefined}>
+              {port.name}
+            </span>
+            {/* `in`, `out` и `mod` -- машинные имена из текста схемы, и
+                оставить их без расшифровки значит предложить угадать, чем
+                модуляторный порт отличается от входа (#541). */}
+            <span className="mono row-dim" title={glossary.port[port.direction]}>
+              {port.direction}
+            </span>
             <span className="mono row-dim row-end">
               {state ? `${state.v.toFixed(1)} мВ` : port.site.instance}
             </span>
@@ -266,7 +351,12 @@ function BlockProps({
           потрогать механизм там, где он живёт, не получалось -- оставалось
           переписывать `.vnl` и перекладывать схему заново (#531). */}
       {block.contacts.map((contact) => (
-        <ContactGroup key={contact.id} block={block.id} contact={contact} />
+        <ContactGroup
+          key={contact.id}
+          block={block.id}
+          contact={contact}
+          glossary={glossary}
+        />
       ))}
       {block.contacts.length ? (
         <p className="sb-note">
@@ -279,7 +369,13 @@ function BlockProps({
 
       <Section title="Клетки" />
       {block.cells.map((cell) => (
-        <CellGroup key={cell.type} block={block.id} cell={cell} />
+        <CellGroup
+          key={cell.type}
+          block={block.id}
+          cell={cell}
+          glossary={glossary}
+          palette={palette}
+        />
       ))}
 
       <div className="sb-actions">
@@ -347,19 +443,26 @@ function NeuronProps({
   cells,
   spikes,
   elapsed,
+  glossary,
+  palette,
 }: {
   neuron: SandboxNeuron
   cells: Record<string, CellState>
   spikes: Record<string, number[]>
   elapsed: number
+  glossary: Glossary
+  palette: CellKind[]
 }) {
   const control = sandboxController
   // Приставки у отдельной клетки нет: в собранной сети она зовётся так же.
   const state = cells[neuron.id]
+  // Объяснение клетки уже написано в `cells.py` и приходит каталогом: в
+  // песочнице оно просто нигде не показывалось (#541).
+  const about = cellHint(palette, neuron.cellType)
   return (
     <>
       <Head title="Клетка" note={neuron.id} />
-      <div className="row">
+      <div className="row" title={about}>
         <span className={`sb-dot${neuron.inhibitory ? ' is-inh' : ''}`} />
         <span className="mono row-dim">{neuron.cellType}</span>
         <span className="mono row-dim row-end">
@@ -380,6 +483,7 @@ function NeuronProps({
             <NumberField
               key={field.key}
               label={field.label}
+              hint={glossary.cell[field.key]}
               step={field.step}
               value={neuron.pointModel![field.key]}
               onChange={(value) =>
@@ -437,20 +541,34 @@ function NeuronProps({
  * типе, поэтому правка задевает всех, кто этого типа, и знать это надо до
  * правки, а не после прогона.
  */
-function CellGroup({ block, cell }: { block: string; cell: SandboxCell }) {
+function CellGroup({
+  block,
+  cell,
+  glossary,
+  palette,
+}: {
+  block: string
+  cell: SandboxCell
+  glossary: Glossary
+  palette: CellKind[]
+}) {
   const control = sandboxController
+  const about = cellHint(palette, cell.type)
   return (
     <details className="sb-group">
-      <summary>
+      <summary title={about}>
         <span className={`sb-dot${cell.inhibitory ? ' is-inh' : ''}`} />
         <span className="sb-row-name">{cell.neurons.join(', ')}</span>
         <span className="mono sb-kind">{cell.pointModel.vThreshold} мВ</span>
       </summary>
-      <p className="sb-note mono">{cell.type}</p>
+      <p className="sb-note mono" title={about}>
+        {cell.type}
+      </p>
       {CELL_FIELDS.map((field) => (
         <NumberField
           key={field.key}
           label={field.label}
+          hint={glossary.cell[field.key]}
           step={field.step}
           value={cell.pointModel[field.key]}
           onChange={(value) =>
@@ -477,9 +595,11 @@ function CellGroup({ block, cell }: { block: string; cell: SandboxCell }) {
 function ContactGroup({
   block,
   contact,
+  glossary,
 }: {
   block: string
   contact: SandboxContact
+  glossary: Glossary
 }) {
   const control = sandboxController
   return (
@@ -497,19 +617,22 @@ function ContactGroup({
       <p className="sb-note mono">{contact.id}</p>
       <SelectField
         label="Рецептор"
+        hint={glossary.contact.receptor}
         value={contact.receptor}
-        options={RECEPTORS.map((name) => ({ id: name, name }))}
+        options={receptorOptions(glossary, contact.receptor)}
         onChange={(receptor) =>
           void control.setContact(block, contact.id, { receptor })
         }
       />
       <NumberField
         label="Вес, нСм"
+        hint={glossary.contact.weight}
         value={contact.weight}
         onChange={(weight) => void control.setContact(block, contact.id, { weight })}
       />
       <NumberField
         label="Задержка, мс"
+        hint={glossary.contact.delay}
         value={contact.delay}
         onChange={(delay) => void control.setContact(block, contact.id, { delay })}
       />
@@ -517,7 +640,13 @@ function ContactGroup({
   )
 }
 
-function DriveProps({ drive }: { drive: SandboxDrive }) {
+function DriveProps({
+  drive,
+  glossary,
+}: {
+  drive: SandboxDrive
+  glossary: Glossary
+}) {
   const control = sandboxController
   // Пуассоновский шум задаётся частотой, ток -- амплитудой, список спайков --
   // временами. Показывать все три сразу значило бы предлагать править то, что
@@ -561,8 +690,9 @@ function DriveProps({ drive }: { drive: SandboxDrive }) {
       {drive.kind === 'current' ? null : (
         <SelectField
           label="Рецептор"
+          hint={glossary.contact.receptor}
           value={drive.receptor}
-          options={RECEPTORS.map((name) => ({ id: name, name }))}
+          options={receptorOptions(glossary, drive.receptor)}
           onChange={(receptor) => void control.setDrive(drive.id, { receptor })}
         />
       )}
@@ -675,19 +805,29 @@ function Remove({ what, id }: { what: string; id: string }) {
   )
 }
 
+/**
+ * Числовое поле. `hint` -- расшифровка подписи (#541).
+ *
+ * Подсказкой, а не строкой под полем: панель свойств и без того плотная, а
+ * восемь объяснений мембраны, выписанных на экран, превратили бы её в статью.
+ * Висит на всей подписи вместе с полем: человек наводит на «τ мембраны, мс»,
+ * а не целится в вопросительный знак.
+ */
 export function NumberField({
   label,
+  hint,
   value,
   step = 0.1,
   onChange,
 }: {
   label: string
+  hint?: string
   value: number
   step?: number
   onChange: (value: number) => void
 }) {
   return (
-    <label className="sb-field">
+    <label className="sb-field" title={hint}>
       <span>{label}</span>
       <input
         type="number"
@@ -731,23 +871,41 @@ export function TextField({
   )
 }
 
+/**
+ * Поле выбора. Объясняется и само поле, и каждый его пункт (#541).
+ *
+ * Объяснений два места нарочно. В закрытом списке видно одно значение, и
+ * подсказка на самом поле расшифровывает выбранное -- иначе, чтобы понять, что
+ * такое `gaba_a`, список пришлось бы открыть. Открытый список объясняет тот
+ * пункт, который под курсором: выбирают там, а не в закрытом поле.
+ *
+ * `hint` отвечает на другой вопрос: что это за поле вообще. Поэтому он стоит
+ * на подписи, а не на самом `select`, где уже висит объяснение значения.
+ */
 function SelectField<T extends string = string>({
   label,
+  hint,
   value,
   options,
   onChange,
 }: {
   label: string
+  hint?: string
   value: T
-  options: Array<{ id: T; name: string }>
+  options: Array<{ id: T; name: string; note?: string }>
   onChange: (value: T) => void
 }) {
+  const chosen = options.find((option) => option.id === value)
   return (
     <label className="sb-field">
-      <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value as T)}>
+      <span title={hint}>{label}</span>
+      <select
+        value={value}
+        title={chosen?.note}
+        onChange={(event) => onChange(event.target.value as T)}
+      >
         {options.map((option) => (
-          <option key={option.id} value={option.id}>
+          <option key={option.id} value={option.id} title={option.note}>
             {option.name}
           </option>
         ))}

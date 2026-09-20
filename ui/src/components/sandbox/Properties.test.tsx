@@ -18,7 +18,57 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Properties } from './Properties'
 import type { CellState } from '../../model/sim'
 import type { SandboxBlock, SandboxNeuron, SandboxState } from '../../model/sandbox'
-import type { PatternPort, PointModel } from '../../model/types'
+import type { CellKind, Glossary, PatternPort, PointModel } from '../../model/types'
+
+/** Расшифровка -- ровно та, что приходит с сервера: своей здесь нет. */
+const GLOSSARY: Glossary = {
+  schema: 1,
+  receptors: [
+    {
+      id: 'ampa',
+      note: 'Быстрое возбуждение.',
+      reversal: 0,
+      tauDecay: 2,
+      inhibitory: false,
+    },
+    {
+      id: 'gaba_a',
+      note: 'Быстрое торможение.',
+      reversal: -70,
+      tauDecay: 6,
+      inhibitory: true,
+    },
+  ],
+  cell: { tauM: 'За сколько мембрана забывает заряд.' },
+  contact: { receptor: 'Чем контакт действует на цель.', weight: 'Сила контакта.' },
+  port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
+}
+
+/** Каталог клеток -- ради `note`: текст написан в `vnl/cells.py`. */
+const PALETTE: CellKind[] = [
+  {
+    id: 'pyr',
+    name: 'Пирамидная клетка',
+    note: 'Главный возбуждающий выход коры.',
+    tags: ['excitatory'],
+    transmitter: 'glutamate',
+    inhibitory: false,
+    builtin: true,
+    source: null,
+    pointModel: {
+      kind: 'lif',
+      vRest: -65,
+      vReset: -65,
+      vThreshold: -50,
+      tauM: 15,
+      rIn: 100,
+      refractory: 2,
+      adaptation: 1.5,
+      tauAdaptation: 100,
+    },
+    morphology: { name: 'point', isPoint: true, sections: [] },
+  },
+]
 
 const POINT: PointModel = {
   kind: 'lif',
@@ -110,6 +160,8 @@ async function mount(
         cells={{}}
         spikes={{}}
         elapsed={0}
+        glossary={GLOSSARY}
+        palette={PALETTE}
         {...props}
       />,
     )
@@ -314,5 +366,86 @@ describe('выбранная клетка в панели свойств', () =>
     expect(vital('заряд')).toBe('—')
     expect(vital('потенциал')).toBe('—')
     expect(vital('разряды')).toBe('—')
+  })
+})
+
+describe('подписи расшифровываются подсказкой (#541)', () => {
+  /** Поле по его подписи: у каждого свой `title`, и искать надо по имени. */
+  function field(label: string): HTMLElement | null {
+    return (
+      [...host.querySelectorAll('.sb-field')].find(
+        (node) => node.querySelector('span')?.textContent === label,
+      ) ?? null
+    ) as HTMLElement | null
+  }
+
+  it('список рецепторов приходит с сервера, а не из словаря в браузере', async () => {
+    await mount({
+      selection: { kind: 'link', id: 'l1' },
+      project: {
+      ...PROJECT,
+      links: [
+        {
+          id: 'l1',
+          source: { instance: 'X', port: null, section: 'soma', fraction: 0.5 },
+          target: { instance: 'Y', port: null, section: 'soma', fraction: 0.5 },
+          receptor: 'gaba_a',
+          inhibitory: true,
+          weight: 1,
+          delay: 1,
+        },
+      ],
+      } as unknown as SandboxState,
+    })
+
+    const select = field('Рецептор')?.querySelector('select') as HTMLSelectElement
+    expect([...select.options].map((option) => option.value)).toEqual([
+      'ampa',
+      'gaba_a',
+    ])
+
+    // Объяснение и там, где выбирают, и там, где значение уже выбрано: в
+    // закрытом списке видно одно значение, и расшифровать надо его.
+    const chosen = [...select.options].find((option) => option.value === 'gaba_a')
+    expect(chosen?.title).toContain('Быстрое торможение')
+    expect(select.title).toContain('Быстрое торможение')
+    // Числа -- из полей ответа, а не пересказанные словами.
+    expect(select.title).toContain('-70 мВ')
+    expect(select.title).toContain('6 мс')
+  })
+
+  it('единицы у веса объясняются, а не предлагаются к угадыванию', async () => {
+    // Контакт внутри блока: те же три поля, что у связи холста, -- и те же
+    // объяснения, потому что вещь одна.
+    await mount({ selection: { kind: 'block', id: 'dis' } })
+
+    expect(field('Вес, нСм')?.title).toBe('Сила контакта.')
+  })
+
+  it('параметр мембраны объясняется тем же ключом, каким берётся число', async () => {
+    await mount({ selection: { kind: 'neuron', id: 'X' } })
+
+    expect(field('τ мембраны, мс')?.title).toBe('За сколько мембрана забывает заряд.')
+    // Про что объяснения нет -- поле остаётся полем, а не показывает пустую
+    // подсказку: расшифровка приходит с сервера и может его не знать.
+    expect(field('Порог, мВ')?.title).toBe('')
+  })
+
+  it('клетка на холсте объясняется своим же `note`', async () => {
+    await mount({ selection: { kind: 'neuron', id: 'X' } })
+
+    const row = [...host.querySelectorAll('.row')].find((node) =>
+      node.textContent?.includes('pyr'),
+    ) as HTMLElement
+    expect(row.title).toContain('Главный возбуждающий выход коры')
+  })
+
+  it('направление порта названо словами', async () => {
+    await mount()
+
+    const mod = [...host.querySelectorAll('.row-dim')].find(
+      (node) => node.textContent === 'mod',
+    ) as HTMLElement
+    expect(mod.title).toBe('Модуляция.')
   })
 })
