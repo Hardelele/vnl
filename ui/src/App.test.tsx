@@ -730,6 +730,60 @@ describe('дорога с карточки в песочницу (#526)', () => 
     expect(host.querySelector('.pat-name')).toBe(null)
   })
 
+  it('проектная часть стоит слева сверху, а в правой панели её нет (#569)', async () => {
+    // Жалоба владельца: «у нас в UI сейчас справа находится практически всё.
+    // Например, там не место, как я считаю, названию проекта». Имя проекта
+    // легло в панель свойств в #563 -- туда, где правят выбранную клетку, -- а
+    // выбирали проект в другом месте.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    // Слева сверху: поле имени стоит в верхней полосе и правится прямо там.
+    const bar = host.querySelector('.sb-bar .sb-project-bar') as HTMLElement
+    expect(bar).not.toBeNull()
+    const name = bar.querySelector('.sb-project-input') as HTMLInputElement
+    expect(name.value).toBe('Проба')
+    await act(async () => {
+      name.value = 'Сеть внимания'
+      name.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+    expect(asked.some((call) => call.body.name === 'Сеть внимания')).toBe(true)
+
+    // В правой панели проектных полей не осталось -- и чисел прогона тоже: и
+    // то и другое не исчезает вместе со снятым выделением, значит панели
+    // выбранного объекта не принадлежит.
+    const right = host.querySelector('.sb-right') as HTMLElement
+    expect(right.textContent).not.toContain('Название')
+    expect(right.textContent).not.toContain('Длительность')
+    expect(right.textContent).not.toContain('Зерно')
+  })
+
+  it('управление временем и числа прогона стоят у таймлайна (#569)', async () => {
+    // «Попытки запустить, стоп -- я бы это к таймлайну отнёс… настройки
+    // прогона почему-то в месте, где у нас расположена детальная информация
+    // по конкретным нейронам». Оба переезда -- вниз, к дорожкам.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    // Наверху транспорта не осталось: это переезд, а не второй экземпляр.
+    expect(host.querySelector('.sb-bar .tr')).toBeNull()
+    expect(host.querySelector('.ap-head .tr')).not.toBeNull()
+    // Числа прогона -- над дорожками, в теле той же панели.
+    const run = host.querySelector('.ap-run') as HTMLElement
+    expect(run.textContent).toContain('Длительность')
+    expect(run.textContent).toContain('Зерно')
+  })
+
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {
     serve([
       ['/api/session', ANONYMOUS],

@@ -46,17 +46,137 @@
   display: none;
 }
 
-.sb-pick-project {
+/* Проектная часть: имя и меню проектов (#569). Точка отсчёта для самого меню
+   -- оно приходит выпадающим списком ровно под полосой. */
+.sb-project-bar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--space-2);
+  position: relative;
+  /* Рамкой вокруг всей проектной части: «проектная часть вообще как бы
+     где-то обособлена должна быть» -- то, о чём просили, и есть эта рамка.
+     Подпись, имя и меню внутри неё читаются одной вещью, а не тремя
+     соседними кнопками полосы. */
+  padding: 2px var(--space-2) 2px var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.sb-project-label {
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Имя проекта -- поле, но выглядит подписью: рамка появляется под курсором и
+   при наборе. Иначе полоса начиналась бы с пустого прямоугольника, в котором
+   имя проекта читается как введённое значение, а не как заголовок экрана. */
+.sb-project-input {
+  width: 200px;
   height: 30px;
-  max-width: 260px;
   padding: 0 var(--space-2);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--panel);
+  background: none;
   color: var(--ink);
   font: inherit;
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
+}
+
+.sb-project-input:hover {
+  border-color: var(--line);
+}
+
+.sb-project-input:focus {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  outline: none;
+}
+
+/* Кнопка меню внутри рамки: своей рамки ей не нужно -- она часть группы. */
+.sb-project-more {
+  border-color: transparent;
+  font-size: 11px;
+}
+
+/* Подложка под меню. Fixed, а не absolute: щелчок мимо закрывает меню, где бы
+   по экрану ни попали, -- в том числе по нижней панели и по холсту. */
+.sb-menu-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: default;
+}
+
+.sb-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--space-1) 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 22%);
+}
+
+.sb-menu-title {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sb-menu-item {
+  padding: 7px var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.sb-menu-item:hover,
+.sb-menu-item:focus-visible {
+  background: var(--subtle);
+  outline: none;
+}
+
+.sb-menu-item.is-on {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.sb-menu-line {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line);
+}
+
+/* Пустота между проектной частью и действиями над схемой: она и разводит их по
+   краям полосы. Сам разделитель ничего не значит -- значит расстояние. */
+.sb-bar-gap {
+  margin-right: auto;
 }
 
 .sb-icon {
@@ -74,12 +194,6 @@
 .sb-icon:hover {
   background: var(--subtle);
   color: var(--ink);
-}
-
-.sb-run {
-  font-size: var(--text-xs);
-  color: var(--faint);
-  margin-right: auto;
 }
 
 .sb-dirty {
@@ -314,6 +428,53 @@
 .ap-sum {
   font-size: var(--text-xs);
   color: var(--faint);
+  /* В одну строку: рядом стоит управление временем, и сводка, разложенная на
+     три строки, растянула бы шапку панели втрое. */
+  white-space: nowrap;
+}
+
+/* Управление временем в шапке панели (#569). Не сжимается и не переносится:
+   это то, ради чего панель и прибита к низу, -- пуск и пауза должны быть на
+   одном и том же месте и при свёрнутой панели тоже. */
+.ap-controls {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+/* Числа прогона над дорожками. Строкой, а не столбцом: высоту панель делит с
+   холстом, и три поля в столбик отняли бы у дорожек полсотни пикселей ради
+   того, что трогают раз в несколько прогонов. */
+.ap-run {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.sb-run-label {
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Поля прогона в строке: рамка снизу и отступы панели свойств здесь лишние --
+   поля стоят рядом, а не списком. */
+.ap-run .sb-field {
+  padding: 0;
+  border-bottom: 0;
+  justify-content: flex-start;
+  gap: var(--space-2);
+}
+
+.ap-run .sb-field input {
+  width: 84px;
+  height: 26px;
 }
 
 /* Названные жесты. Уходят первыми, когда места нет: это объяснение, а не

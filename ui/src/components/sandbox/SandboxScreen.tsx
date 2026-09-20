@@ -41,7 +41,9 @@ import { ButtonBoard } from './ButtonBoard'
 import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
-import { ProjectFields, Properties, RunFields, where } from './Properties'
+import { ProjectBar } from './ProjectBar'
+import { Properties, where } from './Properties'
+import { RunSettings } from './RunSettings'
 import { SavePattern } from './SavePattern'
 import './sandbox.css'
 
@@ -401,52 +403,24 @@ export function SandboxScreen({
         >
           ☰
         </button>
-        {/* Список проектов прямо в панели, как в макете: переключаться между
-            ними надо чаще, чем открывать заново, а выход к выбору — отдельно,
-            иначе из проекта не выйти вовсе. */}
-        <select
-          className="sb-pick-project"
-          value={project.id}
-          aria-label="Проект"
-          onChange={(event) => void control.open(event.target.value)}
-        >
-          {rows(list, project).map((row) => (
-            <option key={row.id} value={row.id}>
-              {row.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="sb-icon"
-          title="Новый проект"
-          onClick={() => void control.create(nextName(list))}
-        >
-          +
-        </button>
-        <button
-          type="button"
-          className="sb-icon"
-          title="Закрыть проект и вернуться к списку"
-          onClick={() => control.close()}
-        >
-          ×
-        </button>
-        <span className="mono sb-run">
-          {project.run.duration} мс · dt {project.run.dt} · seed {project.run.seed}
-        </span>
+        {/* Проектная часть -- одним местом и первой в полосе (#569): какой
+            проект открыт, как он зовётся, переключиться, завести новый,
+            закрыть. Разбор, почему меню, а не список с «+» и «×», -- в самом
+            `ProjectBar`.
 
-        <Transport
-          state={simState}
-          time={time}
-          duration={duration || project.run.duration}
-          busy={busy}
-          restart={stale}
-          onStart={() => void start()}
-          onPause={() => void sim.pause()}
-          onReset={() => void sim.reset()}
-          onStep={(delta) => void sim.step(delta)}
+            Числа прогона отсюда ушли вниз, к управлению временем: они
+            настройки того же прогона, что и кнопки под дорожками, а в полосе
+            стояли подписью, которую нельзя тронуть. */}
+        <ProjectBar
+          id={project.id}
+          name={project.name}
+          list={rows(list, project)}
+          onRename={(name) => void control.renameProject(name)}
+          onOpen={(id) => void control.open(id)}
+          onCreate={() => void control.create(nextName(list))}
+          onClose={() => control.close()}
         />
+        <span className="sb-bar-gap" />
 
         {/* Раскладка -- по требованию, а не на каждую вставку: человек
             расставил объекты по смыслу, и новая клетка, перетасовавшая бы всю
@@ -886,6 +860,10 @@ export function SandboxScreen({
           />
         </section>
 
+        {/* Правая панель -- только выбранный объект (#569). Правило написано
+            в самой `Properties`, и держится оно здесь: всё, что не исчезает
+            вместе со снятым выделением, стоит в другом месте -- проект слева
+            сверху, числа прогона у дорожек. */}
         <aside className="panel sb-right">
           <Properties
             selection={selected}
@@ -896,8 +874,6 @@ export function SandboxScreen({
             glossary={glossary}
             palette={palette}
           />
-          <ProjectFields name={project.name} />
-          <RunFields run={project.run} />
         </aside>
       </div>
 
@@ -920,11 +896,36 @@ export function SandboxScreen({
       />
 
       {/* Таймлайн живёт в прибитой снизу панели, а не под холстом: иначе он
-          уезжает за край экрана вместе с транспортом. Транспорт при этом
-          остаётся в панели сверху -- она `flex:none` в окне фиксированной
-          высоты и не уезжает никуда, так что второй его экземпляр здесь был бы
-          вторым «управлением временем» на одном экране (#504). */}
-      <ActivityPanel summary={summary(cells, spikes, time, Boolean(duration))}>
+          уезжает за край экрана вместе с транспортом (#504).
+
+          Управление временем стоит в шапке этой же панели (#569). В #504
+          второго транспорта здесь не заводили нарочно -- два «управления
+          временем» на одном экране были бы двумя воплощениями одного понятия.
+          Теперь это не второй, а единственный: наверху его не осталось.
+          Владелец сказал прямо, что пуск и стоп относятся к таймлайну, и это
+          верно -- они двигают ровно то время, которое нарисовано здесь.
+
+          В шапке, а не в теле: тело сворачивается в полоску, а управление
+          временем обязано оставаться на виду во время прогона. Числа прогона,
+          наоборот, в теле: их задают до пуска, и прятать их вместе с
+          дорожками не жалко. */}
+      <ActivityPanel
+        summary={summary(cells, spikes, time, Boolean(duration))}
+        controls={
+          <Transport
+            state={simState}
+            time={time}
+            duration={duration || project.run.duration}
+            busy={busy}
+            restart={stale}
+            onStart={() => void start()}
+            onPause={() => void sim.pause()}
+            onReset={() => void sim.reset()}
+            onStep={(delta) => void sim.step(delta)}
+          />
+        }
+        settings={<RunSettings run={project.run} />}
+      >
         <Timeline
           duration={duration || project.run.duration}
           time={time}

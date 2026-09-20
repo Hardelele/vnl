@@ -23,7 +23,11 @@ async function mount(): Promise<void> {
   root = createRoot(host)
   await act(async () => {
     root!.render(
-      <ActivityPanel summary="4 клетки · 9 Гц">
+      <ActivityPanel
+        summary="4 клетки · 9 Гц"
+        controls={<button type="button" className="probe-run">Запустить</button>}
+        settings={<span className="probe-run-params">Длительность</span>}
+      >
         <p className="probe">дорожки</p>
       </ActivityPanel>,
     )
@@ -105,5 +109,35 @@ describe('панель активности', () => {
       ),
     )
     expect(host.querySelector('.probe')).not.toBeNull()
+  })
+
+  it('управление временем остаётся на виду и у свёрнутой панели (#569)', async () => {
+    // Транспорт переехал сюда из верхней полосы, и ровно это нельзя сломать:
+    // «Запустить» и «Пауза» обязаны быть на виду во время прогона (#504).
+    // Поэтому он в шапке, которая видна всегда, а не в теле, которое
+    // сворачивается.
+    await mount()
+    expect(host.querySelector('.ap-controls .probe-run')).not.toBeNull()
+
+    const fold = host.querySelector('.ap-fold') as HTMLButtonElement
+    act(() => fold.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(panel().className).toContain('is-folded')
+    expect(host.querySelector('.ap-controls .probe-run')).not.toBeNull()
+  })
+
+  it('числа прогона стоят над дорожками и сворачиваются вместе с ними (#569)', async () => {
+    // Они не управление, а настройка: их задают до пуска, и к свёрнутой
+    // панели приходят смотреть, а не настраивать.
+    await mount()
+    const run = host.querySelector('.ap-run .probe-run-params')
+    expect(run).not.toBeNull()
+    // Над дорожками, а не под ними: сперва «сколько считать», потом сам счёт.
+    const body = host.querySelector('.ap-body') as HTMLElement
+    expect(body.firstElementChild?.className).toBe('ap-run')
+
+    const fold = host.querySelector('.ap-fold') as HTMLButtonElement
+    act(() => fold.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.querySelector('.ap-run')).toBeNull()
   })
 })
