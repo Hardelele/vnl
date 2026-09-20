@@ -109,6 +109,17 @@ def _coerce(text: str) -> Any:
     return text
 
 
+def _optional_number(params: dict[str, Any], key: str) -> float | None:
+    """Написанное число или `None`, если параметра нет вовсе.
+
+    Нужно там, где «не написано» -- не то же самое, что «написан ноль»:
+    реверсал `0mV` у `ampa` совпадает с реестром, а отсутствие параметра
+    означает «бери из реестра», и однажды реестр может поменяться. Свернуть их
+    в одно число значило бы потерять волю человека молча.
+    """
+    return None if key not in params else float(params[key])
+
+
 def _parse_block(cur: _Cursor) -> dict[str, Any]:
     """{ k = v, k = v, k = name { ... } } -> dict."""
     cur.take("lbrace")
@@ -269,6 +280,10 @@ class PendingContact:
     delay: float
     dynamics: ir.ShortTermDynamics
     plasticity: ir.Plasticity
+    #: `reversal = -65mV`, если написано; `None` -- «как в реестре» (#496).
+    #: Отдельно от числа, потому что «не написано» и «написан ноль» -- разные
+    #: вещи, и подставить сюда реестр парсер не может: реестр знает резолвер.
+    reversal: float | None = None
 
 
 @dataclass
@@ -282,6 +297,8 @@ class PendingStimulus:
     start: float
     stop: float
     receptor: str
+    #: `reversal = -65mV` входного контакта; `None` -- из реестра.
+    reversal: float | None = None
     #: Числа шаблона протокола: те же имена, что у полей `ir.Stimulus`.
     #: Словарём, потому что на этом шаге род ещё не проверен -- разбирать
     #: `train` как `tbs` парсер не должен, он только записывает написанное.
@@ -500,6 +517,7 @@ class Parser:
                 delay=float(params.get("delay", 1.0)),
                 dynamics=dynamics,
                 plasticity=plasticity,
+                reversal=_optional_number(params, "reversal"),
             )
         )
 
@@ -550,6 +568,7 @@ class Parser:
                 start=float(params.get("start", 0.0)),
                 stop=float(params.get("stop", float("inf"))),
                 receptor=str(params.get("receptor", "ampa")),
+                reversal=_optional_number(params, "reversal"),
                 shape=shape,
             )
         )

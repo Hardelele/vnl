@@ -336,6 +336,10 @@ class Link:
     delay: float = 1.0
     dynamics: ir.ShortTermDynamics = field(default_factory=ir.ShortTermDynamics)
     plasticity: ir.Plasticity = field(default_factory=ir.Plasticity)
+    #: Реверсал, мВ; `None` -- «как у рецептора» (#496). Поле есть и здесь,
+    #: потому что связь холста и контакт -- одна вещь с двумя адресами: не
+    #: будь его, шунт нельзя было бы нарисовать, только написать текстом.
+    reversal: float | None = None
 
 
 @dataclass
@@ -353,6 +357,8 @@ class SandboxStimulus:
     target: Endpoint
     kind: str = "poisson"
     receptor: str = "ampa"
+    #: Реверсал входного контакта, мВ; `None` -- из реестра (#496).
+    reversal: float | None = None
     amplitude: float = 0.0
     rate: float = 0.0
     times: tuple[float, ...] = ()
@@ -689,6 +695,7 @@ def ungroup_block(
                 receptor=contact.receptor,
                 weight=contact.weight,
                 delay=contact.delay,
+                reversal=contact.reversal_override,
                 dynamics=copy.deepcopy(contact.dynamics),
                 plasticity=plasticity,
             )
@@ -869,6 +876,7 @@ def adopt_demo(
                 target=inside(stim.target),
                 kind=stim.kind,
                 receptor=stim.receptor,
+                reversal=stim.reversal_override,
                 amplitude=stim.amplitude,
                 rate=stim.rate,
                 times=tuple(stim.times),
@@ -975,6 +983,7 @@ def extract_pattern(
                     receptor=link.receptor,
                     weight=link.weight,
                     delay=link.delay,
+                    reversal_override=link.reversal,
                     dynamics=copy.deepcopy(link.dynamics),
                     plasticity=copy.deepcopy(link.plasticity),
                 )

@@ -68,6 +68,13 @@ def circuit_svg(model: ir.Model, placement: LayoutResult | None = None) -> str:
         '<marker id="inh" viewBox="0 0 10 10" refX="4" refY="5" markerWidth="7" '
         'markerHeight="7" orient="auto-start-reverse">'
         '<path d="M2,0 L2,10" class="inh-stroke"/></marker>'
+        # Шунт -- полый кружок, тот же знак, что и в экспорте DOT. Ни стрелка,
+        # ни плашка не годятся: он не подводит клетку к порогу и не уводит от
+        # него, а делит чужой вход, и рисовать его как ослабленное торможение
+        # значило бы обещать на `v` провал, которого не будет.
+        '<marker id="shunt" viewBox="0 0 10 10" refX="5" refY="5" '
+        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<circle cx="5" cy="5" r="3.4" class="shunt-stroke"/></marker>'
         "</defs>",
     ]
 
@@ -87,7 +94,12 @@ def circuit_svg(model: ir.Model, placement: LayoutResult | None = None) -> str:
         route = placement.routes.get(contact.id)
         if route is None:
             continue
-        klass = "inh" if contact.receptor.startswith("gaba") else "exc"
+        # Полярность -- по реверсалу, а не по имени рецептора. Прежнее
+        # `receptor.startswith("gaba")` было третьим определением «тормозный» в
+        # проекте и врало бы на первом же контакте с написанным реверсалом:
+        # `gaba_a` на уровне покоя рисовался бы торможением, которого на
+        # мембране нет.
+        klass = model.polarity_of(contact)
         where = (
             f"{contact.post.section}@{contact.post.fraction:g}"
             if contact.post.section != "soma"
@@ -154,11 +166,14 @@ CIRCUIT_STYLE = """
 .edge { fill: none; stroke-width: 1.9; opacity: .9; }
 .edge.exc { stroke: var(--exc); }
 .edge.inh { stroke: var(--inh); }
+.edge.shunt { stroke: var(--shunt); }
 .edge.mod { stroke: var(--mod); stroke-dasharray: 6 4; opacity: .85; }
 .exc-fill { fill: var(--exc); }
 .inh-stroke { stroke: var(--inh); stroke-width: 2.4; }
+.shunt-stroke { stroke: var(--shunt); stroke-width: 1.8; fill: none; }
 .bouton.exc-fill { fill: var(--exc); }
 .bouton.inh-fill { fill: var(--inh); }
+.bouton.shunt-fill { fill: var(--shunt); }
 .soma { fill: var(--panel); stroke-width: 2; }
 .exc-cell { stroke: var(--exc); }
 .inh-cell { stroke: var(--inh); }

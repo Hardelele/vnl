@@ -151,6 +151,7 @@ def compose(sandbox: Sandbox) -> Composition:
                     receptor=link.receptor,
                     weight=link.weight,
                     delay=link.delay,
+                    reversal_override=link.reversal,
                 )
             )
             continue
@@ -175,6 +176,7 @@ def compose(sandbox: Sandbox) -> Composition:
                 target=site,
                 kind=stim.kind,
                 receptor=stim.receptor,
+                reversal_override=stim.reversal,
                 amplitude=stim.amplitude,
                 rate=stim.rate,
                 times=tuple(stim.times),
@@ -425,6 +427,7 @@ def _link_contact(
         receptor=link.receptor,
         weight=link.weight,
         delay=link.delay,
+        reversal_override=link.reversal,
         dynamics=copy.deepcopy(link.dynamics),
         plasticity=copy.deepcopy(link.plasticity),
     )

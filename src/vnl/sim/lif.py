@@ -59,6 +59,15 @@ _NS_MV_TO_NA = 1e-3
 # бессмысленных параметрах.
 _EXP_CEILING = 64.0
 
+#: Записываемая величина -> полярность, чью проводимость она суммирует (#496).
+#: Таблицей, а не тремя ветками `if`: имя величины и полярность связаны
+#: один к одному, и разъехаться им негде.
+_POLARITY_VARS: dict[str, str] = {
+    "g_exc": ir.POLARITY_EXC,
+    "g_inh": ir.POLARITY_INH,
+    "g_shunt": ir.POLARITY_SHUNT,
+}
+
 
 @dataclass(frozen=True)
 class SenseEvent:
@@ -118,7 +127,28 @@ class _Cell:
     #: иначе откат времени вернёт клетку без её собственной памяти.
     w: float = 0.0
     refractory_left: float = 0.0
-    conductance: dict[str, float] = field(default_factory=dict)
+    #: Открытая проводимость, нСм, по видам синаптического слагаемого.
+    #:
+    #: Ключ -- пара (рецептор, реверсал), а не имя рецептора, и это и есть
+    #: правка #496. Раньше ключом было имя, и два `gaba_a`-контакта с разными
+    #: реверсалами складывались в одно число, а считались по одному реверсалу
+    #: -- молча и неверно. Пара разводит их по разным слагаемым, и у каждого
+    #: остаётся свой множитель `(E − v)`.
+    #:
+    #: Почему пара, а не проводимость по каждому синапсу отдельно (второй
+    #: вариант из карточки). Во-первых, числа: спад линеен, сумма двух
+    #: раздельно спадающих величин равна спаду их суммы -- но только в
+    #: арифметике вещественных чисел, а не в двоичных дробях. Разбиение на
+    #: синапсы сдвинуло бы последний знак у всех двадцати паттернов
+    #: библиотеки, где в шапках стоят заявленные результаты прогонов, ничего не
+    #: меняя в физике. Во-вторых, смысла: слагаемые в `_integrate` различаются
+    #: ровно реверсалом, постоянной спада и (с #498) зависимостью от
+    #: напряжения -- всё это определяется парой, и два синапса с одной парой
+    #: считались бы побуквенно одинаково. Пресинаптическое торможение,
+    #: ради которого стоило бы хранить по синапсам, живёт не здесь: оно правит
+    #: амплитуду выброса в `_release`, до того как проводимость попала на
+    #: клетку.
+    conductance: dict[tuple[str, float], float] = field(default_factory=dict)
     current: float = 0.0
     spiked: bool = False
     post_trace: float = 0.0
@@ -183,6 +213,17 @@ class _Synapse:
     pre_trace: float = 0.0
     eligibility: float = 0.0
 
+    @property
+    def key(self) -> tuple[str, float]:
+        """Под каким ключом этот синапс копит проводимость на клетке.
+
+        Считается от контакта, а не хранится полем: контакт -- единственное
+        место, где реверсал решается (реестр или написанное число), и копия
+        ключа в синапсе однажды разошлась бы с ним после правки веса через
+        песочницу.
+        """
+        return (self.contact.receptor, self.contact.reversal)
+
 
 @dataclass(frozen=True)
 class Snapshot:
@@ -231,6 +272,19 @@ def _degrade(model: ir.Model, contact: ir.Contact) -> tuple[float, float, str | 
         f"@{contact.post.fraction:g} ({distance:.0f} мкм от сомы) свёрнуто в "
         f"вес x{attenuation:.3f} и задержку +{extra_delay:.2f} мс"
     )
+    if model.polarity_of(contact) == ir.POLARITY_SHUNT:
+        # Ослабление веса -- честный перевод для контакта, который вливает в
+        # клетку ток: до сомы доходит меньше. Для шунта это перевод неполный.
+        # Шунт работает не током, а сопротивлением, и работает он там, где
+        # сидит: на ветви он делит то, что идёт по этой ветви, а всё
+        # остальное не трогает. В точке отсека нет, и поделено окажется всё
+        # разом. Сказать об этом надо здесь, вместе с самим сворачиванием:
+        # число в отчёте («вес x0.7») выглядит как полное описание потери, а
+        # тут потеряна операция, а не доля.
+        note += (
+            "; контакт шунтирующий -- в точечной клетке он делит весь вход "
+            "сразу, а не только то, что идёт по этой ветви"
+        )
     return contact.weight * attenuation, contact.delay + extra_delay, note
 
 
@@ -284,6 +338,7 @@ class Simulator:
                 receptor=stim.receptor,
                 weight=stim.amplitude,
                 delay=max(self.dt, 0.1),
+                reversal_override=stim.reversal_override,
             )
             self.stim_synapses[stim.id] = _Synapse(
                 contact=fake,
@@ -321,6 +376,7 @@ class Simulator:
                     receptor=link.receptor,
                     weight=link.weight,
                     delay=max(link.delay, self.dt),
+                    reversal_override=link.reversal_override,
                 )
                 links.append(
                     _Synapse(
@@ -554,10 +610,8 @@ class Simulator:
         for synapse, _ in self.pending.pop(step, []):
             amplitude = self._release(synapse)
             cell = self.cells[synapse.target]
-            receptor = synapse.contact.receptor
-            cell.conductance[receptor] = (
-                cell.conductance.get(receptor, 0.0) + amplitude
-            )
+            key = synapse.key
+            cell.conductance[key] = cell.conductance.get(key, 0.0) + amplitude
             if synapse.contact.plasticity.enabled:
                 synapse.pre_trace += 1.0
                 self._on_pre(synapse, cell)
@@ -612,9 +666,9 @@ class Simulator:
         dt = self.dt
         for cell in self.cells.values():
             cell.spiked = False
-            for receptor, value in list(cell.conductance.items()):
-                tau = ir.RECEPTORS[receptor].tau_decay
-                cell.conductance[receptor] = _decay(value, dt, tau)
+            for key, value in list(cell.conductance.items()):
+                tau = ir.RECEPTORS[key[0]].tau_decay
+                cell.conductance[key] = _decay(value, dt, tau)
             point = cell.model
             adex = point.kind == "adex"
             if cell.refractory_left > 0.0:
@@ -630,9 +684,15 @@ class Simulator:
                 if adex:
                     self._advance_w(cell, cell.v, dt)
                 continue
+            # Реверсал берётся из ключа, а не из реестра по имени рецептора:
+            # в ключе он и лежит затем, чтобы у каждого слагаемого был свой.
+            # Отсюда и шунт: при `E ≈ v_rest` множитель `(E − v)` у покоя равен
+            # нулю, то есть мембрану контакт не двигает, -- но `value` осталось
+            # в сумме и поделило всё остальное, потому что `dt/tau_m * g·v` --
+            # это и есть добавка к скорости утечки.
             synaptic = sum(
-                value * (ir.RECEPTORS[receptor].reversal - cell.v)
-                for receptor, value in cell.conductance.items()
+                value * (reversal - cell.v)
+                for (_, reversal), value in cell.conductance.items()
             )
             # МОм * нА = мВ: сопротивление и ток уже в тех единицах, в
             # которых считается мембрана, и переводить нечего. Лишний
@@ -752,14 +812,21 @@ class Simulator:
                 value = cell.v
             elif recording.var == "g":
                 value = sum(cell.conductance.values())
-            elif recording.var in ("g_exc", "g_inh"):
-                # Возбуждение и торможение врозь: их баланс и есть то, что
-                # решает судьбу клетки, а в сумме он теряется.
-                inhibitory = recording.var == "g_inh"
+            elif recording.var in _POLARITY_VARS:
+                # Возбуждение, торможение и шунт врозь: их баланс и есть то,
+                # что решает судьбу клетки, а в сумме он теряется.
+                #
+                # Корзины три, и разбирает их реверсал, а не имя рецептора
+                # (#496). Шунт не подводит к порогу и не уводит от него, и
+                # зачисли его в `g_inh` -- график показывал бы «торможение»,
+                # которого на `v` не видно. Кто записал только `g_exc` и
+                # `g_inh`, шунта в них не увидит вовсе: это честнее, чем
+                # приписать его к чужой сумме.
+                want = _POLARITY_VARS[recording.var]
                 value = sum(
                     conductance
-                    for receptor, conductance in cell.conductance.items()
-                    if ir.is_inhibitory_receptor(receptor) is inhibitory
+                    for (_, reversal), conductance in cell.conductance.items()
+                    if ir.synapse_polarity(reversal, cell.model) == want
                 )
             elif recording.var == "spikes":
                 value = 1.0 if cell.spiked else 0.0

@@ -9,6 +9,15 @@ from __future__ import annotations
 
 from .. import ir
 
+#: Полярность -> наконечник стрелки DOT. Таблицей, чтобы новый исход
+#: полярности нельзя было забыть здесь молча: `KeyError` громче стрелки,
+#: нарисованной по умолчанию.
+_ARROWS: dict[str, str] = {
+    ir.POLARITY_EXC: "normal",
+    ir.POLARITY_INH: "tee",
+    ir.POLARITY_SHUNT: "odot",
+}
+
 
 def export(model: ir.Model) -> str:
     lines = [f"digraph {model.name} {{", "  rankdir=LR;", "  node [shape=circle];"]
@@ -24,7 +33,11 @@ def export(model: ir.Model) -> str:
     for contact in model.contacts:
         # Тормозный контакт рисуется плашкой, а не стрелкой: знак связи
         # важнее направления, его должно быть видно без чтения подписи.
-        arrow = "tee" if ir.is_inhibitory_receptor(contact.receptor) else "normal"
+        # Шунт -- кружком: он не третий сорт торможения, а другая операция
+        # (делит, а не вычитает), и плашка врала бы про механизм.
+        # Полярность спрашивается по реверсалу, а не по имени рецептора:
+        # `gaba_a` с реверсалом на уровне покоя -- это кружок, а не плашка.
+        arrow = _ARROWS[model.polarity_of(contact)]
         label = f"{contact.post.section}@{contact.post.fraction:g}"
         lines.append(
             f"  {contact.pre.instance} -> {contact.post.instance} "

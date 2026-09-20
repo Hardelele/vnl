@@ -93,6 +93,42 @@ class _Resolver:
 
     # --- сущности ------------------------------------------------------
 
+    def _written_reversal(
+        self,
+        where: str,
+        written: float | None,
+        reversal: float,
+        point: ir.PointModel,
+        post: ir.Site,
+    ) -> None:
+        """Сказать вслух про подозрительный написанный реверсал.
+
+        Проверяется написанное руками, а не взятое из реестра. `ampa` со своим
+        нулём выше порога любой клетки, и ругайся мы на реестр -- предупреждение
+        выпадало бы на каждую вторую связь в каждой схеме, то есть приучило бы
+        их не читать. Написанный реверсал -- другое дело: человек нарочно вышел
+        за реестр, и цена опечатки в знаке здесь максимальная, потому что модель
+        посчитается и ответит неправдой.
+
+        Случай ниже покоя тут не повторяется: про него уже говорит общий разбор
+        полярности (`контакт через ampa тормозный (реверсал -70 мВ)`), и
+        второе сообщение о том же числе было бы шумом.
+
+        Отказа нет: реверсал выше порога -- законная вещь, просто он превращает
+        контакт в генератор разрядов, и знать об этом надо заранее, а не по
+        странной трассе.
+        """
+        if written is None or reversal < point.v_threshold:
+            return
+        self.warn(
+            where,
+            f"написан реверсал {reversal:g} мВ -- не ниже порога клетки "
+            f"{post.instance} ({point.v_threshold:g} мВ): пока проводимость "
+            f"открыта, мембрану держит выше порога, и клетка разряжается "
+            f"подряд, как от генератора. Шунту нужен реверсал около покоя "
+            f"({point.v_rest:g} мВ)",
+        )
+
     def contact(self, pending: PendingContact) -> ir.Contact | None:
         where = f"контакт {pending.id}"
         pre = self.site(pending.pre_address, where, default_kind="axon")
@@ -128,24 +164,47 @@ class _Resolver:
                 f"дендро-дендритный контакт допустим, но проверьте, не опечатка ли",
             )
 
+        # Полярность считается по числу, а не по имени рецептора: с #496
+        # реверсал пишется параметром, и `gaba_a` с реверсалом на уровне покоя
+        # ничего не тормозит. Спрашивать здесь имя значило бы ругаться на
+        # честно написанный шунт и молчать про `ampa` с реверсалом -80 мВ.
+        reversal = (
+            ir.RECEPTORS[pending.receptor].reversal
+            if pending.reversal is None
+            else pending.reversal
+        )
+        point = self.parsed.cell_types[
+            self.parsed.instances[post.instance].cell_type
+        ].point_model
+        polarity = ir.synapse_polarity(reversal, point)
+        self._written_reversal(where, pending.reversal, reversal, point, post)
+
         transmitter = self.parsed.cell_types[
             self.parsed.instances[pre.instance].cell_type
         ].transmitter
-        if transmitter == "gaba" and not ir.is_inhibitory_receptor(pending.receptor):
+        # Спор -- это разный знак, а не разное имя. Шунт от ГАМК-клетки не спор:
+        # так и устроено торможение с хлорным реверсалом на уровне покоя, и
+        # ругаться на него значило бы ругаться на учебник.
+        if transmitter == "gaba" and polarity == ir.POLARITY_EXC:
             self.warn(
                 where,
                 f"клетка {pre.instance} помечена как ГАМК-ергическая, "
-                f"а рецептор {pending.receptor} возбуждающий",
+                f"а контакт через {pending.receptor} возбуждающий "
+                f"(реверсал {reversal:g} мВ)",
             )
-        if transmitter == "glutamate" and ir.is_inhibitory_receptor(pending.receptor):
+        if transmitter == "glutamate" and polarity == ir.POLARITY_INH:
             self.warn(
                 where,
                 f"клетка {pre.instance} помечена как глутаматергическая, "
-                f"а рецептор {pending.receptor} тормозный",
+                f"а контакт через {pending.receptor} тормозный "
+                f"(реверсал {reversal:g} мВ)",
             )
 
         if pending.weight < 0:
-            self.error(where, "вес контакта отрицателен; знак задаётся рецептором")
+            self.error(
+                where,
+                "вес контакта отрицателен; знак задаёт реверсал, а не вес",
+            )
         if pending.delay < self.parsed.run.dt:
             self.error(
                 where,
@@ -182,6 +241,7 @@ class _Resolver:
             delay=pending.delay,
             dynamics=pending.dynamics,
             plasticity=plasticity,
+            reversal_override=pending.reversal,
         )
 
     def stimulus(self, pending: PendingStimulus) -> ir.Stimulus | None:
@@ -205,6 +265,24 @@ class _Resolver:
         if pending.receptor not in ir.RECEPTORS:
             self.error(where, f"неизвестный рецептор {pending.receptor!r}")
             return None
+        if pending.kind != "current" and pending.reversal is not None:
+            self._written_reversal(
+                where,
+                pending.reversal,
+                pending.reversal,
+                self.parsed.cell_types[
+                    self.parsed.instances[target.instance].cell_type
+                ].point_model,
+                target,
+            )
+        if pending.kind == "current" and pending.reversal is not None:
+            # Инжекция тока не открывает проводимости вовсе, реверсала у неё
+            # нет. Молча проглотить число нельзя: человек ждал бы шунта.
+            self.error(
+                where,
+                "у токового стимула нет реверсала: он вливает ток, а не "
+                "открывает проводимость",
+            )
         stimulus = ir.Stimulus(
             id=pending.id,
             target=target,
@@ -215,6 +293,7 @@ class _Resolver:
             start=pending.start,
             stop=pending.stop,
             receptor=pending.receptor,
+            reversal_override=pending.reversal,
             **pending.shape,  # type: ignore[arg-type]
         )
         # Шаблон проверяется тем же разворачиванием, каким он поедет в солвер:
@@ -324,7 +403,18 @@ class _Resolver:
             )
             return None
         if pending.weight < 0:
-            self.error(where, "вес не бывает отрицательным: знак задаёт рецептор")
+            self.error(where, "вес не бывает отрицательным: знак задаёт реверсал")
+        self._written_reversal(
+            where,
+            pending.reversal,
+            ir.RECEPTORS[pending.receptor].reversal
+            if pending.reversal is None
+            else pending.reversal,
+            self.parsed.cell_types[
+                self.parsed.instances[post.instance].cell_type
+            ].point_model,
+            post,
+        )
         if pending.delay < self.parsed.run.dt:
             self.error(
                 where,
@@ -346,6 +436,7 @@ class _Resolver:
             receptor=pending.receptor,
             weight=pending.weight,
             delay=pending.delay,
+            reversal_override=pending.reversal,
         )
 
     def recording(self, pending: PendingRecording) -> ir.Recording | None:

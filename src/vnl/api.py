@@ -19,7 +19,7 @@ from typing import Any, Sequence
 
 from . import ir, protocols
 from .catalog import STATUS_NAMES, Query, facets, search
-from .patterns import LEVEL_NAMES, PORT_NOTES
+from .patterns import LEVEL_NAMES, PORT_NOTES, cell_type_at
 from .sim import SimResult
 
 # Версия формата. Фронтенд проверяет её и отказывается читать чужое.
@@ -111,16 +111,33 @@ def _cell_type(cell_type: ir.CellType) -> dict[str, Any]:
     }
 
 
-def _contact(contact: ir.Contact) -> dict[str, Any]:
+def _contact(model: ir.Model, contact: ir.Contact) -> dict[str, Any]:
+    """Контакт для интерфейса. Полярность -- по реверсалу, а не по имени (#496).
+
+    `polarity` говорит всё: `exc`, `inh` или `shunt`. `inhibitory` остаётся
+    рядом и отвечает на более грубый вопрос -- «не ведёт ли контакт клетку к
+    порогу»; шунт в нём true, потому что к порогу он не ведёт, а третьего
+    значения у логического поля нет. Убрать его нельзя: по нему интерфейс
+    рисует плашку, и молча перевернуть его смысл было бы хуже, чем оставить
+    загрубление рядом с точным ответом.
+
+    `reversal` -- число, по которому считают, `reversalOverride` -- написанное
+    в схеме или `null`. Панель свойств должна показывать пустое поле, когда
+    реверсал взят из реестра, а не подставлять туда его значение: иначе
+    человек, ничего не трогая, закрепил бы реестровое число на века.
+    """
     dynamics = contact.dynamics
     plasticity = contact.plasticity
+    polarity = model.polarity_of(contact)
     return {
         "id": contact.id,
         "pre": _site(contact.pre),
         "post": _site(contact.post),
         "receptor": contact.receptor,
-        "inhibitory": ir.is_inhibitory_receptor(contact.receptor),
+        "polarity": polarity,
+        "inhibitory": polarity != ir.POLARITY_EXC,
         "reversal": contact.reversal,
+        "reversalOverride": contact.reversal_override,
         "tauDecay": contact.tau_decay,
         "weight": contact.weight,
         "delay": contact.delay,
@@ -189,7 +206,7 @@ def _stimulus(stim: ir.Stimulus, duration: float) -> dict[str, Any]:
     }
 
 
-def _sensor(sensor: ir.Sensor) -> dict[str, Any]:
+def _sensor(model: ir.Model, sensor: ir.Sensor) -> dict[str, Any]:
     """Сенсор наружу: род, его числа и куда он подключён.
 
     `story` -- род словами вместе с числами («частота, 100 Гц при 1»), и
@@ -207,7 +224,13 @@ def _sensor(sensor: ir.Sensor) -> dict[str, Any]:
             {
                 "target": _site(link.target),
                 "receptor": link.receptor,
-                "inhibitory": ir.is_inhibitory_receptor(link.receptor),
+                "polarity": model.polarity_at(link.target, link.reversal),
+                "inhibitory": (
+                    model.polarity_at(link.target, link.reversal)
+                    != ir.POLARITY_EXC
+                ),
+                "reversal": link.reversal,
+                "reversalOverride": link.reversal_override,
                 "weight": link.weight,
                 "delay": link.delay,
             }
@@ -264,7 +287,7 @@ def model_payload(model: ir.Model) -> dict[str, Any]:
             }
             for instance in model.instances.values()
         ],
-        "contacts": [_contact(contact) for contact in model.contacts],
+        "contacts": [_contact(model, contact) for contact in model.contacts],
         "modulators": [
             {
                 "id": modulator.id,
@@ -278,7 +301,7 @@ def model_payload(model: ir.Model) -> dict[str, Any]:
         "stimuli": [
             _stimulus(stim, model.run.duration) for stim in model.stimuli
         ],
-        "sensors": [_sensor(sensor) for sensor in model.sensors.values()],
+        "sensors": [_sensor(model, sensor) for sensor in model.sensors.values()],
         "motors": [_motor(motor) for motor in model.motors.values()],
         "recordings": [
             {
@@ -387,7 +410,15 @@ def scheme_payload(model: ir.Model) -> dict[str, Any]:
             "id": contact.id,
             "from": contact.pre.instance,
             "to": contact.post.instance,
-            "kind": "inh" if ir.is_inhibitory_receptor(contact.receptor) else "exc",
+            # `kind` у ребра двузначен, и трогать его нельзя: по нему
+            # холст рисует плашку. Шунт едет в `inh` -- «не возбуждает», --
+            # а точная полярность лежит рядом полем `polarity`.
+            "kind": (
+                "exc"
+                if model.polarity_of(contact) == ir.POLARITY_EXC
+                else "inh"
+            ),
+            "polarity": model.polarity_of(contact),
         }
         for contact in model.contacts
     ]
@@ -745,12 +776,38 @@ def _block_contacts(block: Any) -> list[dict[str, Any]]:
             "pre": _site(contact.pre),
             "post": _site(contact.post),
             "receptor": contact.receptor,
-            "inhibitory": ir.is_inhibitory_receptor(contact.receptor),
+            "polarity": block.snapshot.body.polarity_of(contact),
+            "inhibitory": (
+                block.snapshot.body.polarity_of(contact) != ir.POLARITY_EXC
+            ),
+            "reversal": contact.reversal,
+            "reversalOverride": contact.reversal_override,
             "weight": contact.weight,
             "delay": contact.delay,
         }
         for contact in block.snapshot.body.contacts
     ]
+
+
+def _link_reversal(link: Any) -> float:
+    """Реверсал связи холста, мВ: написанный или реестровый."""
+    if link.reversal is None:
+        return ir.RECEPTORS[link.receptor].reversal
+    return link.reversal
+
+
+def _link_polarity(sandbox: Any, link: Any) -> str:
+    """Что связь холста делает с клеткой, в которую входит (#496).
+
+    Полярность считается по той клетке, а не по одному на всех порогу: у
+    корзинчатой он -52 мВ, у пирамиды -50, и шунт на одной может оказаться
+    возбуждением на другой. Тип цели бывает и неизвестен (связь показывает на
+    несуществующий блок) -- тогда берутся значения мембраны по умолчанию:
+    нарисовать связь надо в любом случае, а про сломанный адрес скажет сборка.
+    """
+    cell_type = cell_type_at(sandbox, link.target)
+    point = cell_type.point_model if cell_type else ir.PointModel()
+    return ir.synapse_polarity(_link_reversal(link), point)
 
 
 def sandbox_payload(project: Any) -> dict[str, Any]:
@@ -813,7 +870,12 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 "source": _endpoint(link.source),
                 "target": _endpoint(link.target),
                 "receptor": link.receptor,
-                "inhibitory": ir.is_inhibitory_receptor(link.receptor),
+                "polarity": _link_polarity(sandbox, link),
+                "inhibitory": (
+                    _link_polarity(sandbox, link) != ir.POLARITY_EXC
+                ),
+                "reversal": _link_reversal(link),
+                "reversalOverride": link.reversal,
                 "weight": link.weight,
                 "delay": link.delay,
             }

@@ -27,9 +27,13 @@ _SCRUB_MARK = {
     "g": " g",
     "g_exc": " g+",
     "g_inh": " g−",
+    # Шунт не «g−» и не «g+»: он делит, а не двигает. Знак деления и стоит.
+    "g_shunt": " g÷",
     "w": " w",
 }
-_SCRUB_DIGITS = {"v": 1, "g": 2, "g_exc": 2, "g_inh": 2, "w": 2}
+_SCRUB_DIGITS = {
+    "v": 1, "g": 2, "g_exc": 2, "g_inh": 2, "g_shunt": 2, "w": 2
+}
 
 
 def scrub_label(instance: str, kind: str) -> str:

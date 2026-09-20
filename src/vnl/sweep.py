@@ -29,7 +29,15 @@ _SPEC = re.compile(r"^(?P<path>[A-Za-z_][A-Za-z_0-9.\[\]]*)=(?P<values>.+)$")
 
 # Поля, которые осмысленно крутить. Список явный, чтобы опечатка в пути
 # ловилась сразу, а не превращалась в новый атрибут на объекте.
-CONTACT_FIELDS = {"weight", "delay"}
+CONTACT_FIELDS = {"weight", "delay", "reversal"}
+
+#: Развёртка по имени -> поле, в которое она ложится. Реверсал крутят под тем
+#: именем, под которым он пишется в схеме (`c3.reversal=-70,-65`), а ложится он
+#: в `reversal_override`: `Contact.reversal` -- свойство, и присваивать в него
+#: нечего. Развёртка через покой к возбуждению -- главный опыт задачи #496, и
+#: требовать здесь внутреннего имени поля значило бы, что в схеме параметр
+#: зовётся одним словом, а в развёртке другим.
+_CONTACT_ALIASES = {"reversal": "reversal_override"}
 CONTACT_GROUPS = {"dynamics", "plasticity"}
 CELL_FIELDS = {
     "tau_m",
@@ -151,7 +159,7 @@ def _apply_to_contact(
             f"(можно: {', '.join(sorted(CONTACT_FIELDS))}, "
             f"а также dynamics.* и plasticity.*); путь {path!r}"
         )
-    setattr(contact, group, value)
+    setattr(contact, _CONTACT_ALIASES.get(group, group), value)
 
 
 def _apply_to_cell(

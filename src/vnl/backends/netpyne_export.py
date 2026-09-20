@@ -87,14 +87,37 @@ def _cell_params(model: ir.Model) -> tuple[dict, list[str]]:
     return out, losses
 
 
+def _mech_name(receptor: str, reversal: float) -> str:
+    """Имя механизма для пары (рецептор, реверсал).
+
+    Механизм в NetPyNE -- это `Exp2Syn` с числами, и реверсал одно из них.
+    Один механизм на имя рецептора схлопнул бы два `gaba_a`-контакта с
+    реверсалами -70 и -65 мВ в один, и экспортированный скрипт считал бы
+    другую сеть -- молча, потому что синтаксически он остался бы верным.
+
+    Имя при реестровом реверсале остаётся прежним (`gaba_a`), а не становится
+    `gaba_a_e_70` для всех подряд: девяносто девять моделей из ста реверсал не
+    трогают, и переименовывать у них все механизмы значило бы менять вид
+    экспорта у тех, кого правка не касается. Минус в имени NEURON не живёт,
+    поэтому знак пишется буквой `m`.
+    """
+    if reversal == ir.RECEPTORS[receptor].reversal:
+        return receptor
+    sign = "m" if reversal < 0 else ""
+    return sanitize(f"{receptor}_e{sign}{abs(reversal):g}")
+
+
 def _syn_mech_params(model: ir.Model) -> dict:
-    used = {contact.receptor for contact in model.contacts}
-    used |= {stim.receptor for stim in model.stimuli if stim.kind != "current"}
+    used = {(contact.receptor, contact.reversal) for contact in model.contacts}
+    used |= {
+        (stim.receptor, stim.reversal)
+        for stim in model.stimuli
+        if stim.kind != "current"
+    }
     out: dict = {}
-    for receptor in sorted(used):
-        kind = ir.RECEPTORS[receptor]
-        reversal, tau_decay = kind.reversal, kind.tau_decay
-        out[receptor] = {
+    for receptor, reversal in sorted(used):
+        tau_decay = ir.RECEPTORS[receptor].tau_decay
+        out[_mech_name(receptor, reversal)] = {
             "mod": "Exp2Syn",
             "tau1": max(0.1, tau_decay / 10.0),
             "tau2": tau_decay,
@@ -110,7 +133,7 @@ def _conn_params(model: ir.Model) -> tuple[dict, list[str]]:
         entry = {
             "preConds": {"pop": contact.pre.instance},
             "postConds": {"pop": contact.post.instance},
-            "synMech": contact.receptor,
+            "synMech": _mech_name(contact.receptor, contact.reversal),
             "weight": contact.weight * 0.001,  # нСм -> мкСм, единицы NEURON
             "delay": contact.delay,
             "sec": sanitize(contact.post.section),
@@ -152,6 +175,23 @@ def _conn_params(model: ir.Model) -> tuple[dict, list[str]]:
                 f"(u={contact.dynamics.u}, tau_rec={contact.dynamics.tau_rec}, "
                 f"tau_facil={contact.dynamics.tau_facil}) требует механизма "
                 f"Цодыкса--Маркрама; Exp2Syn её не воспроизводит"
+            )
+        if model.polarity_of(contact) == ir.POLARITY_SHUNT:
+            # Сам механизм переносится честно: `Exp2Syn` с `e` на уровне покоя
+            # -- это и есть шунт, NEURON считает его как надо. Потеря в другом:
+            # шунт настроен на покой точечной модели (`v_rest`), а на L2 покой
+            # задают каналы Ходжкина--Хаксли, и реверсал, совпадавший с покоем
+            # на L1, там окажется чуть выше или ниже него. Деление превратится
+            # в деление с примесью, и разница будет тем больше, чем сильнее
+            # контакт. Молчать нельзя: скрипт посчитается и ответит похоже, а
+            # не так же.
+            point = model.cell_type_of(contact.post.instance).point_model
+            losses.append(
+                f"контакт {contact.id}: шунт настроен на покой точечной модели "
+                f"({point.v_rest:g} мВ, реверсал {contact.reversal:g} мВ); на "
+                f"L2 покой задают каналы клетки, и деление входа окажется не "
+                f"тем же -- сверьте реверсал с настоящим покоем экспортированной "
+                f"клетки"
             )
         if contact.pre.section != "soma":
             losses.append(
@@ -209,7 +249,7 @@ def _stim_params(model: ir.Model) -> tuple[dict, dict, list[str]]:
             "conds": {"pop": stim.target.instance},
             "sec": sanitize(stim.target.section),
             "loc": stim.target.fraction,
-            "synMech": stim.receptor,
+            "synMech": _mech_name(stim.receptor, stim.reversal),
             "weight": stim.amplitude * 0.001,
             "delay": 1.0,
         }

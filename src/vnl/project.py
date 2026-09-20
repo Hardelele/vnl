@@ -85,9 +85,10 @@ def _check_contact_params(params: dict[str, Any]) -> None:
 
     Задержка отрицательной не бывает: симулятор сдвигает приход события на
     `delay` вперёд, и минус означал бы, что проводимость открылась раньше
-    спайка. Отрицательный вес -- не торможение: знак задаёт рецептор через
-    реверсал (`ir.RECEPTORS`), а вес меньше нуля дал бы возбуждающий синапс,
-    тянущий клетку от порога, -- ровно то, чего в модели нет.
+    спайка. Отрицательный вес -- не торможение: знак задаёт реверсал (свой у
+    контакта или реестровый, `ir.RECEPTORS`), а вес меньше нуля дал бы
+    синапс, у которого ток течёт против собственного реверсала, -- ровно то,
+    чего в модели нет.
     """
     if "receptor" in params and params["receptor"] not in ir.RECEPTORS:
         raise PatternError(
@@ -97,7 +98,7 @@ def _check_contact_params(params: dict[str, Any]) -> None:
     if "delay" in params and float(params["delay"]) < 0:
         raise PatternError("задержка не бывает отрицательной")
     if "weight" in params and float(params["weight"]) < 0:
-        raise PatternError("вес не бывает отрицательным: знак задаёт рецептор")
+        raise PatternError("вес не бывает отрицательным: знак задаёт реверсал")
 
 
 @dataclass
