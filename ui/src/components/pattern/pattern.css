@@ -233,3 +233,47 @@
   font-size: var(--text-sm);
   color: var(--status-danger);
 }
+
+/* Строка витрины, которой одной строки мало: драйв и динамика контакта
+   говорятся словами, а слова не обрезать многоточием -- «восстановление 4…»
+   не прочесть. Поэтому в столбик и с переносом, а не с `nowrap`, как у строк,
+   где стоят три коротких числа. */
+.row.pat-fact {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.pat-fact .row-dim,
+.pat-fact .row-path {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.pat-fact-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Строка в два столбца, где правый переносится: у записи слева адрес, справа
+   величина словами, и «возбуждающая проводимость, нСм» в узкой панели живёт
+   двумя строками, а не обрезком. */
+.row.pat-soft {
+  align-items: flex-start;
+}
+
+.pat-soft .row-dim {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Подпись слева в строке витрины -- тем же кеглем, что подписи в сетке
+   инспектора: это одно и то же «как это зовётся». */
+.pat-fact .insp-label {
+  font-size: 11px;
+  color: var(--muted);
+}

@@ -507,6 +507,16 @@ def glossary_payload() -> dict[str, Any]:
         },
         "contact": dict(ir.CONTACT_NOTES),
         "port": dict(PORT_NOTES),
+        # Что означает `g_exc` -- такая же расшифровка подписи, как «что такое
+        # gaba_a», и приходит она отсюда же (#546). Реестр с именами и
+        # единицами уже есть в `ir.RECORDED`: по нему подписывают оси графика и
+        # колонки CSV, и список записей на карточке обязан звать величину тем
+        # же словом. Свой список в браузере разошёлся бы с этим молча --
+        # подписи ни на один прогон не влияют.
+        "recorded": [
+            {"id": name, "name": variable.name, "unit": variable.unit}
+            for name, variable in ir.RECORDED.items()
+        ],
     }
 
 

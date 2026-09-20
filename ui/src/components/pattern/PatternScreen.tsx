@@ -23,16 +23,26 @@
  * у каждого паттерна кнопка «+». Погашенная кнопка врёт про возможности, поэтому
  * её здесь нет; переход с карточки прямо в песочницу -- отдельная задача (#526),
  * потому что требует перехода между экранами, а не вызова к серверу.
+ *
+ * Выделение на карточке одно на весь экран: клетка или связь. Схема, списки и
+ * таймлайн показывают одно и то же выбранное -- щёлкнув по связи на схеме,
+ * человек видит подсвеченной ту же строку, и наоборот (#546). Двух выделений
+ * сразу нет намеренно: панель сбоку одна, и «выбрана клетка E и связь c3»
+ * пришлось бы как-то показывать двумя панелями о разном.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 
 import { LINKS, NEURONS, PORTS, counted } from '../../lib/plural'
+import { siteText } from '../../lib/site'
 import { deletePattern, isDenied, loadPattern } from '../../model/catalog'
-import type { Contact, Neuron, PatternDetail } from '../../model/types'
+import { NO_GLOSSARY, loadGlossary, receptorHint } from '../../model/glossary'
+import type { Contact, Glossary, Neuron, PatternDetail } from '../../model/types'
 import { canChange, goToLogin, loginAt, useSession } from '../../state/session'
 import { simController, useSim } from '../../state/sim'
 import { LoginHint } from '../shell/Login'
+import { DrivePanel, RecordsPanel } from './Demo'
+import { LinkInspector } from './LinkInspector'
 import { Inspector } from '../live/Inspector'
 import { LiveScheme } from '../live/LiveScheme'
 import { TIMELINE_HINT, Timeline } from '../live/Timeline'
@@ -50,12 +60,19 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
   /** Отказ был «нужен вход»: он поправим входом, а не повторным открытием. */
   const [denied, setDenied] = useState(false)
   const [engine, setEngine] = useState<'elk' | 'builtin'>('builtin')
-  /** Клетка, открытая в инспекторе. Общая для схемы, таймлайна и списка. */
-  const [neuron, setNeuron] = useState<string | null>(null)
+  /** Что выбрано: клетка или связь. Общее для схемы, таймлайна и списков. */
+  const [picked, setPicked] = useState<Picked>(null)
+  /**
+   * Расшифровка подписей с сервера (#541). Пустая -- карточка работает как
+   * работала: подсказка объясняет, а не показывает, и ждать её незачем.
+   */
+  const [glossary, setGlossary] = useState<Glossary>(NO_GLOSSARY)
   /** Спросили ли про удаление. Действие необратимо, поэтому в два шага. */
   const [dropping, setDropping] = useState(false)
   const [busyDrop, setBusyDrop] = useState(false)
   const remember = useCallback((chosen: 'elk' | 'builtin') => setEngine(chosen), [])
+  const pickNeuron = useCallback((id: string) => setPicked({ kind: 'neuron', id }), [])
+  const pickLink = useCallback((id: string) => setPicked({ kind: 'link', id }), [])
 
   const control = simController
   const state = useSim((view) => view.state)
@@ -73,6 +90,22 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
 
   useEffect(() => {
     let alive = true
+    // Словарь -- реестр, одинаковый на любой машине: спрашивается один раз за
+    // открытие карточки и не зависит от того, какой паттерн открыт.
+    loadGlossary()
+      .then((loaded) => alive && setGlossary(loaded))
+      // Без расшифровки карточка показывает то же самое, только без подсказок:
+      // ругаться на её отсутствие значило бы пугать отказом там, где ничего не
+      // потеряно.
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    setPicked(null)
     loadPattern(id)
       .then((loaded) => alive && setPattern(loaded))
       .catch((reason: Error) => {
@@ -111,6 +144,15 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
       </div>
     )
   }
+
+  // Выбранное распускается на две величины: схеме и таймлайну нужна клетка,
+  // спискам -- ещё и связь. Держать их двумя состояниями значило бы уметь
+  // выбрать обе сразу.
+  const neuron = picked?.kind === 'neuron' ? picked.id : null
+  const contact =
+    picked?.kind === 'link'
+      ? (pattern.body.contacts.find((item) => item.id === picked.id) ?? null)
+      : null
 
   const meta = [
     counted(pattern.counts.neurons, NEURONS),
@@ -201,7 +243,9 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
               cells={cells}
               onEngine={remember}
               selected={neuron}
-              onPick={setNeuron}
+              onPick={pickNeuron}
+              selectedLink={contact?.id ?? null}
+              onPickLink={pickLink}
             />
           </div>
           {/* Заголовок таймлайна даёт панель, а не он сам: на этом экране он
@@ -224,7 +268,7 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             )}
             onSeek={(moment) => void act(() => control.seek(moment))}
             selected={neuron}
-            onSelect={setNeuron}
+            onSelect={pickNeuron}
           />
         </section>
 
@@ -241,6 +285,12 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             </div>
           ) : null}
 
+          {contact ? (
+            <div className="panel">
+              <LinkInspector contact={contact} glossary={glossary} />
+            </div>
+          ) : null}
+
           <div className="panel">
             <div className="panel-head">
               <span className="panel-title">Нейроны</span>
@@ -254,7 +304,7 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
                 neuron={item}
                 pattern={pattern}
                 on={item.id === neuron}
-                onPick={() => setNeuron(item.id)}
+                onPick={() => pickNeuron(item.id)}
               />
             ))}
           </div>
@@ -262,11 +312,25 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
           <div className="panel">
             <div className="panel-head">
               <span className="panel-title">Связи</span>
+              <span className="mono panel-note">
+                {contact ? 'выбрана ' + contact.id : 'выберите связь'}
+              </span>
             </div>
-            {pattern.body.contacts.map((contact) => (
-              <LinkRow key={contact.id} contact={contact} />
+            {pattern.body.contacts.map((item) => (
+              <LinkRow
+                key={item.id}
+                contact={item}
+                glossary={glossary}
+                on={item.id === contact?.id}
+                onPick={() => pickLink(item.id)}
+              />
             ))}
           </div>
+
+          {/* Драйв и записи -- рядом со связями и портами: это такая же часть
+              устройства паттерна, как они, и спрашивают о ней там же. */}
+          <DrivePanel demo={pattern.demo} glossary={glossary} />
+          <RecordsPanel demo={pattern.demo} glossary={glossary} />
 
           <div className="panel">
             <div className="panel-head">
@@ -275,8 +339,8 @@ export function PatternScreen({ id, onBack }: PatternScreenProps) {
             {pattern.ports.map((port) => (
               <div className="row" key={port.name}>
                 <span className="row-id">{port.name}</span>
-                <span className="mono row-dim">
-                  {port.direction} · {port.site.instance}.{port.site.section}
+                <span className="mono row-dim" title={glossary.port[port.direction]}>
+                  {port.direction} · {siteText(port.site)}
                 </span>
               </div>
             ))}
@@ -369,18 +433,42 @@ function CellRow({
   )
 }
 
-function LinkRow({ contact }: { contact: Contact }) {
+/**
+ * Строка связи в списке -- и способ её выбрать.
+ *
+ * Кнопка, как и строка клетки: раньше это был `div`, по которому нельзя было
+ * щёлкнуть, хотя рядом, в том же столбце, строки клеток выбирались (#546).
+ * Рецептор стоит первым из трёх чисел, потому что он и решает, что связь
+ * делает: вес и задержка говорят «сколько» и «когда», а `gaba_a` -- «гасит».
+ */
+function LinkRow({
+  contact,
+  glossary,
+  on,
+  onPick,
+}: {
+  contact: Contact
+  glossary: Glossary
+  on: boolean
+  onPick: () => void
+}) {
   const arrow = contact.inhibitory ? '⊣' : '→'
   return (
-    <div className="row">
+    <button type="button" className={`row row-pick${on ? ' is-on' : ''}`} onClick={onPick}>
       <span className={`row-arrow${contact.inhibitory ? ' is-inh' : ''}`}>{arrow}</span>
       <span className="mono row-path">
-        {contact.pre.instance} → {contact.post.instance}.{contact.post.section}
-        {contact.post.fraction !== 0.5 ? `@${contact.post.fraction}` : ''}
+        {contact.pre.instance} {arrow} {siteText(contact.post)}
       </span>
       <span className="mono row-dim row-end">
+        <span title={receptorHint(glossary, contact.receptor)}>{contact.receptor}</span> ·{' '}
         {contact.weight} нСм · {contact.delay} мс
       </span>
-    </div>
+    </button>
   )
 }
+
+/**
+ * Что выбрано на карточке. Один выбор на экран: панель сбоку одна, и показать
+ * «клетку E и связь c3» одновременно ей нечем.
+ */
+type Picked = { kind: 'neuron'; id: string } | { kind: 'link'; id: string } | null

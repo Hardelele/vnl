@@ -73,6 +73,7 @@ export function Field({
   value,
   wide = false,
   below = false,
+  hint,
 }: {
   label: string
   value: string
@@ -80,9 +81,15 @@ export function Field({
   wide?: boolean
   /** Клетка ниже покоя: значение красится в цвет торможения, как на схеме. */
   below?: boolean
+  /**
+   * Расшифровка подписи из словаря сервера (#541, #546). Стоит на всей ячейке,
+   * а не на одном значении: спрашивают и «что такое вес», и «что такое
+   * gaba_a», -- а это подпись и значение одной и той же ячейки.
+   */
+  hint?: string
 }) {
   return (
-    <div className={`insp-cell${wide ? ' is-wide' : ''}`}>
+    <div className={`insp-cell${wide ? ' is-wide' : ''}`} title={hint}>
       <span className="insp-label">{label}</span>
       <span className={`mono insp-value${below ? ' is-below' : ''}`}>{value}</span>
     </div>

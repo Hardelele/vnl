@@ -14,7 +14,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { LiveScheme } from './LiveScheme'
+import { LiveScheme, type LiveSchemeProps } from './LiveScheme'
 import type { CellState } from '../../model/sim'
 import type { Scheme } from '../../model/types'
 
@@ -28,6 +28,9 @@ const SCHEME: Scheme = {
     { id: 'c1', from: 'IN', to: 'E', kind: 'exc' },
     { id: 'c2', from: 'IN', to: 'I', kind: 'exc' },
     { id: 'c3', from: 'I', to: 'E', kind: 'inh' },
+    // Модуляторная линия: её склеивает сервер из модулятора и подопечной
+    // связи, и контакта с таким именем в паттерне нет.
+    { id: 'mod:dopamine:I:c1', from: 'I', to: 'E', kind: 'mod' },
   ],
 }
 
@@ -40,13 +43,23 @@ function cell(charge: number, spiked = false, peak = charge): CellState {
 let root: Root | null = null
 let host: HTMLElement
 
-async function mount(cells: Record<string, CellState>): Promise<void> {
+async function mount(
+  cells: Record<string, CellState>,
+  props: Partial<LiveSchemeProps> = {},
+): Promise<void> {
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
   await act(async () => {
-    root!.render(<LiveScheme scheme={SCHEME} cells={cells} />)
+    root!.render(<LiveScheme scheme={SCHEME} cells={cells} {...props} />)
   })
+}
+
+/** Связь на схеме по роду: тормозная одна, модуляторная тоже. */
+function link(kind: 'exc' | 'inh' | 'mod'): Element {
+  const found = host.querySelector(`.scheme-link.is-${kind}`)
+  if (!found) throw new Error(`нет связи рода ${kind}`)
+  return found
 }
 
 /** Надпись о заряде над клеткой -- та, что стоит в её же группе. */
@@ -95,6 +108,37 @@ describe('LiveScheme', () => {
   it('без ответа сессии надпись не выдумывается', async () => {
     await mount({})
     expect(level('E')).toBeNull()
+  })
+
+  it('по связи можно щёлкнуть: выбирается она, а не клетка (#546)', async () => {
+    const picked: string[] = []
+    await mount({}, { onPickLink: (id) => picked.push(id) })
+
+    await act(async () => {
+      link('inh').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(picked).toEqual(['c3'])
+  })
+
+  it('выбранная связь отмечена на схеме', async () => {
+    await mount({}, { selectedLink: 'c3', onPickLink: () => undefined })
+    expect(link('inh').classList.contains('is-on')).toBe(true)
+    expect(link('exc').classList.contains('is-on')).toBe(false)
+  })
+
+  it('модуляторная линия не выбирается: за ней нет строки', async () => {
+    // Её рисует не контакт, а модулятор, и рука над линией, от щелчка по
+    // которой ничего не происходит, обещала бы то, чего нет.
+    const picked: string[] = []
+    await mount({}, { onPickLink: (id) => picked.push(id) })
+
+    await act(async () => {
+      link('mod').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(picked).toEqual([])
+    expect(link('mod').classList.contains('is-pickable')).toBe(false)
   })
 
   it('надпись стоит над фигурой, а не в ней', async () => {

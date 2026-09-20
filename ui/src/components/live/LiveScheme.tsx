@@ -35,6 +35,9 @@ export interface LiveSchemeProps {
   /** Выбранная клетка: та же, что открыта в инспекторе и подсвечена в таймлайне. */
   selected?: string | null
   onPick?: (neuron: string) => void
+  /** Выбранная связь: та же, что подсвечена строкой в списке связей (#546). */
+  selectedLink?: string | null
+  onPickLink?: (link: string) => void
 }
 
 export function LiveScheme({
@@ -43,6 +46,8 @@ export function LiveScheme({
   onEngine,
   selected = null,
   onPick,
+  selectedLink = null,
+  onPickLink,
 }: LiveSchemeProps) {
   const fallback = useMemo(() => builtinPlacement(scheme), [scheme])
   const [placement, setPlacement] = useState<Placement>(fallback)
@@ -75,7 +80,12 @@ export function LiveScheme({
       aria-label="схема паттерна"
     >
       {placement.edges.map((edge) => (
-        <Edge key={edge.id} edge={edge} />
+        <Edge
+          key={edge.id}
+          edge={edge}
+          chosen={selectedLink === edge.id}
+          onPick={onPickLink}
+        />
       ))}
       {placement.nodes.map((node) => (
         <Cell
@@ -143,7 +153,24 @@ function Cell({
   )
 }
 
-function Edge({ edge }: { edge: Placement['edges'][number] }) {
+/**
+ * Связь на схеме: её же можно выбрать -- щелчком по линии (#546).
+ *
+ * Модуляторная линия не выбирается: её рисует не контакт, а модулятор
+ * (`scheme_payload` склеивает её из источника и подопечной связи), и за ней в
+ * списке связей нет строки. Курсор над ней остаётся обычным: рука над линией,
+ * от щелчка по которой ничего не происходит, обещает то, чего нет.
+ */
+function Edge({
+  edge,
+  chosen = false,
+  onPick,
+}: {
+  edge: Placement['edges'][number]
+  chosen?: boolean
+  onPick?: (link: string) => void
+}) {
+  const pickable = Boolean(onPick) && edge.kind !== 'mod'
   const points = edge.points
   const last = points[points.length - 1]
   const before = points[points.length - 2] ?? last
@@ -159,7 +186,14 @@ function Edge({ edge }: { edge: Placement['edges'][number] }) {
     .join(' ')
 
   return (
-    <g className={`scheme-link is-${edge.kind}`}>
+    <g
+      className={`scheme-link is-${edge.kind}${chosen ? ' is-on' : ''}${pickable ? ' is-pickable' : ''}`}
+      onClick={pickable ? () => onPick?.(edge.id) : undefined}
+    >
+      {/* Прозрачная полоса поверх линии -- то, во что попадают мышью: в
+          полуторапиксельную линию не прицелиться, а утолщать саму линию ради
+          курсора значило бы менять схему под способ ввода. */}
+      {pickable ? <path className="scheme-hit" d={path} fill="none" /> : null}
       <path d={path} fill="none" />
       {edge.kind === 'inh' ? (
         // Плашка поперёк линии -- торможение.

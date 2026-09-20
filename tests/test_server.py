@@ -1433,6 +1433,9 @@ def test_the_whole_list_of_what_answers_without_login_fits_on_one_screen(tmp_pat
     assert open_to_anyone == {
         ("GET", r"^/api/catalog$"),
         ("GET", r"^/api/patterns/([^/]+)$"),
+        # Словарь подписей -- часть витрины: без него карточка показывает
+        # анониму `g_exc` вместо «возбуждающей проводимости» (#546).
+        ("GET", r"^/api/glossary$"),
         ("POST", r"^/api/sim$"),
         ("GET", r"^/api/sim/([^/]+)$"),
         ("POST", r"^/api/sim/([^/]+)/start$"),
@@ -1501,8 +1504,21 @@ def test_the_glossary_explains_the_labels_on_the_screen(base):
     point = cells_payload["cells"][0]["pointModel"]
     assert set(glossary["cell"]) == set(point), "подсказка обязана лечь на поле"
 
-    assert set(glossary["contact"]) == {"receptor", "weight", "delay"}
+    assert set(glossary["contact"]) == {
+        "receptor",
+        "weight",
+        "delay",
+        "dynamics",
+        "plasticity",
+    }
     assert set(glossary["port"]) == {"in", "out", "mod"}
+
+    # Величины записи -- тот же реестр, что подписывает оси и колонки CSV
+    # (#546): карточка зовёт запись `g_exc` теми же словами, что график.
+    recorded = {item["id"]: item for item in glossary["recorded"]}
+    assert set(recorded) == set(ir.RECORDED)
+    assert recorded["g_exc"]["name"] == ir.RECORDED["g_exc"].name
+    assert recorded["v"]["unit"] == "мВ"
 
 
 def test_a_builtin_cell_carries_its_own_explanation(base):

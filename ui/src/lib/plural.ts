@@ -40,3 +40,6 @@ export const LINKS: Forms = { one: 'связь', few: 'связи', many: 'св�
 export const PORTS: Forms = { one: 'порт', few: 'порта', many: 'портов' }
 
 export const CELLS: Forms = { one: 'клетка', few: 'клетки', many: 'клеток' }
+
+/** Моменты спайкового драйва: «8 моментов», «1 момент». */
+export const MOMENTS: Forms = { one: 'момент', few: 'момента', many: 'моментов' }

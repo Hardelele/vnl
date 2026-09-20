@@ -470,6 +470,20 @@ def test_health_stays_behind_login(stand):
     assert ask(stand, "/api/health")[0] == 401
 
 
+def test_the_glossary_is_part_of_the_showcase(stand):
+    """Расшифровка подписей открыта: её читает карточка паттерна (#546).
+
+    Без словаря витрина говорит анониму `g_exc` и `gaba_a`, а вошедшему --
+    «возбуждающая проводимость» и «быстрое торможение»: одна и та же карточка
+    двумя разными языками. Содержимого хранилища в ответе нет -- это реестр,
+    одинаковый на любой машине, в отличие от `/api/cells` со своими клетками.
+    """
+    status, _, body = ask(stand, "/api/glossary")
+    assert status == 200
+    assert json_of(body)["receptors"], "карточка объясняет рецептор строкой отсюда"
+    assert ask(stand, "/api/cells")[0] == 401
+
+
 def test_pattern_cannot_be_deleted_without_session(stand):
     """Смотреть библиотеку можно всем, менять -- нет.
 
