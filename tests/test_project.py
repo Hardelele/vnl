@@ -337,6 +337,51 @@ def test_cell_parameters_are_checked_before_they_break_the_run(project, ffi):
         project.set_cell("a", "нет такого")
 
 
+def test_the_kind_of_point_model_is_editable_from_the_sandbox(project, ffi):
+    """Вид модели -- такое же поле типа клетки, как порог (#527).
+
+    До этого `adex` можно было написать файлом, но не собрать на холсте:
+    половина движка человеку была недоступна.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+
+    project.set_cell("a", "pyr_l5", kind="adex")
+
+    point = project.sandbox.instance("a").snapshot.body.cell_types["pyr_l5"].point_model
+    assert point.kind == "adex"
+    # Числа второго вида приехали вместе с ним и правятся так же.
+    project.set_cell("a", "pyr_l5", tau_w=60.0, w_increment=0.2)
+    assert (point.tau_w, point.w_increment) == (60.0, 0.2)
+
+
+def test_the_sandbox_refuses_what_the_language_refuses(project, ffi):
+    """Холст не собирает того, чего потом не примет файл (#527).
+
+    Слова отказа -- те же самые: и разбор, и правка спрашивают один список
+    (`ir.point_model_problems`), поэтому «почему нельзя» человек читает один
+    раз и в одних выражениях.
+    """
+    project.insert_pattern(ffi, instance_id="a")
+    project.set_cell("a", "pyr_l5", kind="adex")
+    point = project.sandbox.instance("a").snapshot.body.cell_types["pyr_l5"].point_model
+
+    with pytest.raises(PatternError, match="ток ничего не помнит"):
+        project.set_cell("a", "pyr_l5", tau_w=0.0)
+    with pytest.raises(PatternError, match="не выше v_t"):
+        project.set_cell("a", "pyr_l5", v_threshold=-30.0)
+    with pytest.raises(PatternError, match="не реализована"):
+        project.set_cell("a", "pyr_l5", kind="хиджкин")
+    assert (point.tau_w, point.v_threshold, point.kind) == (144.0, -50.0, "adex"), (
+        "отказ оставляет мембрану такой, какой она была"
+    )
+
+    # А у `lif` ноль в `tau_w` проезжает -- ровно как в языке: там это число
+    # не читается вовсе, и отбивать его значило бы быть строже файла.
+    project.set_cell("a", "pyr_l5", kind="lif")
+    project.set_cell("a", "pyr_l5", tau_w=0.0)
+    assert point.tau_w == 0.0
+
+
 def test_stimulus_parameters_are_editable_after_it_is_created(project, ffi):
     """Драйв создаётся с числами по умолчанию, а не с высеченными в камне."""
     running_project(project, ffi)

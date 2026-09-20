@@ -26,6 +26,7 @@ export const NO_GLOSSARY: Glossary = {
   schema: 0,
   receptors: [],
   cell: {},
+  models: [],
   contact: {},
   port: {},
   recorded: [],

@@ -27,6 +27,11 @@ const POINT = {
   refractory: 2,
   adaptation: 0,
   tauAdaptation: 100,
+  deltaT: 2,
+  vPeak: -40,
+  tauW: 144,
+  wCoupling: 4,
+  wIncrement: 0.0805,
 }
 
 function neuron(id: string, inhibitory: boolean, x: number): SandboxNeuron {

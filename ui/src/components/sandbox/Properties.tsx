@@ -101,7 +101,25 @@ function recordedOptions(
   return glossary.recorded.map((item) => ({ id: item.id, name: item.name }))
 }
 
-/** Правятся только числа: род модели (`kind`) -- это другой солвер, не поле. */
+/**
+ * Список видов точечной модели для поля выбора.
+ *
+ * Тем же устройством, что у рецепторов, и по той же причине: какие мембраны
+ * симулятор действительно считает, знает `ir.POINT_MODELS`, а браузер об этом
+ * знать не должен. Пока ответа сервера нет, в списке стоит один текущий вид --
+ * поле обязано показывать то, что в проекте, и выбор из выдуманного здесь
+ * списка был бы хуже, чем отсутствие выбора (#527).
+ */
+function modelOptions(
+  glossary: Glossary,
+  value: string,
+): Array<{ id: string; name: string; note?: string }> {
+  const models = glossary.models ?? []
+  if (!models.length) return [{ id: value, name: value }]
+  return models.map((item) => ({ id: item.id, name: item.id, note: item.note }))
+}
+
+/** Числа мембраны. Вид модели (`kind`) правится отдельно: это не число. */
 type CellField = Exclude<keyof PointModel, 'kind'>
 
 /**
@@ -118,6 +136,108 @@ const CELL_FIELDS: Array<{ key: CellField; label: string; step?: number }> = [
   { key: 'tauAdaptation', label: 'τ адаптации, мс' },
   { key: 'rIn', label: 'Rвх, МОм', step: 10 },
 ]
+
+/**
+ * Поля, которые читает только `adex`, -- в порядке того же разговора: сперва
+ * разгон у порога, потом ток адаптации.
+ *
+ * Отдельным списком, а не флагом в `CELL_FIELDS`, потому что и показываются
+ * они отдельно: у `lif` этих чисел нет вовсе -- не «есть, но не действуют», а
+ * нет, -- и предлагать править то, что никуда не идёт, значит врать про
+ * модель. Приходят они при этом всегда (`POINT_FIELDS`), и прятать их здесь
+ * можно безопасно: переключение вида ничего не теряет.
+ *
+ * В подписях -- имена из текста схемы (`Δ_t`, `v_peak`, `τ_w`, `a`, `b`). Тот
+ * же довод, что у имени вида модели: этими словами параметр пишется в файле, и
+ * «связь тока с потенциалом, нСм» пришлось бы потом переводить обратно.
+ */
+const ADEX_FIELDS: Array<{ key: CellField; label: string; step?: number }> = [
+  { key: 'deltaT', label: 'Δ_t разгона, мВ', step: 0.5 },
+  { key: 'vPeak', label: 'v_peak разряда, мВ' },
+  { key: 'tauW', label: 'τ_w тока адаптации, мс', step: 10 },
+  { key: 'wCoupling', label: 'a — ток за потенциалом, нСм', step: 0.5 },
+  { key: 'wIncrement', label: 'b — ток на разряд, нА', step: 0.01 },
+]
+
+/** Что сейчас за мембрана. Нет `pointModel` -- нет и разговора про вид. */
+const ADEX = 'adex'
+
+/**
+ * Мембрана: вид модели и его числа (#527).
+ *
+ * Один набор полей на оба места, где мембрану правят, -- отдельную клетку и
+ * тип внутри блока. Вещь одна, и вторая копия разошлась бы с первой на первом
+ * же новом параметре: у клетки поле появилось бы, у блока нет. Тем же
+ * правилом, что `DriveFields` и `RecordFields` (#565).
+ *
+ * Вид стоит первым, потому что он решает, о чём дальше разговор: половина
+ * полей ниже при `lif` не существует. До #527 его здесь не было вовсе --
+ * схему с `adex` можно было написать файлом, но не собрать на холсте, то есть
+ * половина движка человеку была недоступна.
+ *
+ * Отказ показывать не нужно: он приходит общим путём песочницы (`act` ->
+ * `error`), тем же, каким приходит отказ по весу связи или по частоте драйва.
+ * Своё сообщение об ошибке здесь было бы вторым местом, где написано, что не
+ * так с мембраной, -- а текст отказа приходит от языка.
+ */
+function MembraneFields({
+  point,
+  glossary,
+  onChange,
+}: {
+  point: PointModel
+  glossary: Glossary
+  /** Куда уходит правка: у клетки и у блока адрес разный, поле одно. */
+  onChange: (params: Partial<PointModel>) => void
+}) {
+  const adex = point.kind === ADEX
+  return (
+    <>
+      <SelectField
+        label="Вид модели"
+        hint={glossary.cell.kind}
+        value={point.kind}
+        options={modelOptions(glossary, point.kind)}
+        onChange={(kind) => onChange({ kind })}
+      />
+      {CELL_FIELDS.map((field) => (
+        <NumberField
+          key={field.key}
+          label={field.label}
+          hint={glossary.cell[field.key]}
+          step={field.step}
+          value={point[field.key]}
+          onChange={(value) => onChange({ [field.key]: value })}
+        />
+      ))}
+      {/* Адаптация порогом (`adaptation`, `tau_adaptation`) у `adex` не
+          читается: там она выражена током w. Поля всё равно остаются выше,
+          среди общих, -- они есть у типа клетки при любом виде модели, и
+          спрятать их значило бы молча потерять набранные числа при
+          переключении туда и обратно. Что при `adex` они не действуют,
+          сказано в их подсказке (`ir.POINT_NOTES`), там же, где сказано, что
+          пять полей ниже читает только `adex`. */}
+      {adex ? (
+        <>
+          {/* Заголовок, а не просто ещё пять полей подряд: эти числа
+              принадлежат второму виду модели, и без границы они читались бы
+              как продолжение общих -- то есть как что-то, что было и у lif. */}
+          <Section title="Разгон и ток адаптации" />
+          {ADEX_FIELDS.map((field) => (
+            <NumberField
+              key={field.key}
+              label={field.label}
+              hint={glossary.cell[field.key]}
+              step={field.step}
+              value={point[field.key]}
+              onChange={(value) => onChange({ [field.key]: value })}
+            />
+          ))}
+        </>
+      ) : null}
+    </>
+  )
+}
 
 /**
  * Адрес конца связи одной строкой.
@@ -578,18 +698,24 @@ function NeuronProps({
       {neuron.pointModel ? (
         <>
           <Section title="Мембрана" />
-          {CELL_FIELDS.map((field) => (
-            <NumberField
-              key={field.key}
-              label={field.label}
-              hint={glossary.cell[field.key]}
-              step={field.step}
-              value={neuron.pointModel![field.key]}
-              onChange={(value) =>
-                void control.setCell(neuron.id, neuron.cellType, { [field.key]: value })
-              }
-            />
-          ))}
+          {/* Правка задевает всех клеток этого типа в песочнице -- тип в IR
+              один на всех своих, -- и смена вида модели тем более: она меняет
+              не число, а солвер. Сказано это подписью здесь, а не только в
+              комментарии, ровно по той причине, по которой список нейронов
+              стоит в заголовке типа у блока: знать это надо до правки, а не
+              после прогона (#527). */}
+          <p className="sb-note">
+            Мембрана висит на типе «{neuron.cellType}»: правка задевает все
+            клетки этого типа в проекте. Вид модели — другой солвер, а не
+            число.
+          </p>
+          <MembraneFields
+            point={neuron.pointModel}
+            glossary={glossary}
+            onChange={(params) =>
+              void control.setCell(neuron.id, neuron.cellType, params)
+            }
+          />
         </>
       ) : (
         // Потерянный тип чинят, а не скрывают: клетка остаётся на холсте и
@@ -705,23 +831,23 @@ function CellGroup({
       <summary title={about}>
         <span className={`sb-dot${cell.inhibitory ? ' is-inh' : ''}`} />
         <span className="sb-row-name">{cell.neurons.join(', ')}</span>
-        <span className="mono sb-kind">{cell.pointModel.vThreshold} мВ</span>
+        {/* В сводке вид модели и порог: до #527 стоял один порог, а «-50 мВ»
+            у lif и у adex значат разное -- у второго это не порог, а точка, с
+            которой начинается разгон. Вид назван своим словом из текста
+            схемы, а не «обычная»/«с разгоном»: сравнивать свёрнутые строки
+            придётся с тем, что написано в файле. */}
+        <span className="mono sb-kind">
+          {cell.pointModel.kind} · {cell.pointModel.vThreshold} мВ
+        </span>
       </summary>
       <p className="sb-note mono" title={about}>
         {cell.type}
       </p>
-      {CELL_FIELDS.map((field) => (
-        <NumberField
-          key={field.key}
-          label={field.label}
-          hint={glossary.cell[field.key]}
-          step={field.step}
-          value={cell.pointModel[field.key]}
-          onChange={(value) =>
-            void control.setCell(block, cell.type, { [field.key]: value })
-          }
-        />
-      ))}
+      <MembraneFields
+        point={cell.pointModel}
+        glossary={glossary}
+        onChange={(params) => void control.setCell(block, cell.type, params)}
+      />
     </details>
   )
 }
