@@ -51,6 +51,8 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from html import escape
 from http.cookies import SimpleCookie
@@ -81,6 +83,26 @@ from .store import Store, StoreError
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 
 
+@dataclass(frozen=True)
+class Caller:
+    """Кто задал вопрос -- на время одного запроса.
+
+    Два поля, а не одно, ровно чтобы «вход не настроен» нельзя было спутать с
+    «пришёл аноним». На своей машине входа нет вовсе, и там человек один: любая
+    песочница его, спрашивать не с кого. На стенде вход есть, и тогда аноним --
+    это `sub=None` при `guarded=True`, то есть не владелец ничему. Одним полем
+    `sub: str | None` эти два случая совпали бы, и первая же ошибка в таблице
+    маршрутов открыла бы чужую работу всему интернету.
+
+    Значение по умолчанию -- «вход не настроен»: так `Api` зовётся из тестов и
+    из MCP (#482), где HTTP и куки вокруг вызова нет.
+    """
+
+    sub: str | None = None
+    #: Настроен ли вход на этом сервере.
+    guarded: bool = False
+
+
 class Api:
     """Операции над библиотекой. HTTP -- только оболочка вокруг них."""
 
@@ -96,6 +118,54 @@ class Api:
         # живут в `Project` -- значит между запросами он должен жить тоже.
         self._projects: dict[str, Project] = {}
         self._projects_lock = threading.Lock()
+        # Кто спрашивает -- на время одного запроса. Тред-локально, потому что
+        # `ThreadingHTTPServer` даёт на запрос свой поток, а тащить
+        # спрашивающего через сорок сигнатур обработчиков значило бы поменять
+        # каждый из них ради вопроса, который задаётся в одном месте -- у двери
+        # песочницы (`_project`).
+        self._asking = threading.local()
+
+    # --- кто спрашивает ----------------------------------------------------
+
+    @contextmanager
+    def asking(self, caller: Caller) -> Iterator[None]:
+        """Назвать спрашивающего на время одного вызова.
+
+        Вход и выход парой, а не присваиванием: поток обслуживает запрос за
+        запросом, и забытое значение означало бы, что следующий запрос из того
+        же потока пришёл от предыдущего человека.
+        """
+        was = self.caller
+        self._asking.caller = caller
+        try:
+            yield
+        finally:
+            self._asking.caller = was
+
+    @property
+    def caller(self) -> Caller:
+        return getattr(self._asking, "caller", Caller())
+
+    def _mine(self, owner: str | None) -> bool:
+        """Можно ли этому человеку в работу с таким владельцем.
+
+        Три ответа в одном месте, потому что вопрос один и тот же -- у
+        песочницы, у её сессии и у списка:
+
+        - вход не настроен: человек один, всё его;
+        - владельца нет (`None`): песочница старше владельцев -- общая, см.
+          `sandboxes`;
+        - владелец есть: совпадает с вошедшим или нет.
+
+        Аноним (`guarded=True`, `sub=None`) не владеет ничем и в ничейную тоже
+        не попадает: до сюда он не доходит -- маршруты песочницы закрыты
+        таблицей, -- но правило обязано быть верным и без этого.
+        """
+        if not self.caller.guarded:
+            return True
+        if self.caller.sub is None:
+            return False
+        return owner is None or owner == self.caller.sub
 
     def health(self) -> dict[str, Any]:
         """Живые данные для строки состояния, а не подпись из макета (#483)."""
@@ -104,7 +174,11 @@ class Api:
             "version": __version__,
             "root": str(self.store.root),
             "patterns": len(self.store.patterns()),
-            "sandboxes": len(self.store.sandboxes()),
+            # Песочницы -- только свои и общие: строка состояния говорит
+            # человеку про его работу. Общее число выдавало бы, сколько на
+            # стенде чужих проектов, -- ответ на вопрос, которого не задавали.
+            # Паттерны рядом считаются все: библиотека одна на всех нарочно.
+            "sandboxes": len(self._my_sandboxes()),
             "simulations": len(self.pool),
             "index": (
                 self.index.state(len(self.store.patterns()))
@@ -283,6 +357,11 @@ class Api:
             built.model,
             source=f"песочница «{project.sandbox.name}»",
             origin="sandbox",
+            # Владелец сессии -- владелец песочницы, а не тот, кто нажал
+            # «пуск»: у общей (ничейной) песочницы сессия тоже общая, иначе
+            # двое, работающие над ней, видели бы каждый свой прогон и спорили
+            # о том, чей настоящий.
+            owner=project.sandbox.owner,
             **self._pace(body),
         )
         return session.update()
@@ -300,26 +379,49 @@ class Api:
         except ValueError as exc:
             raise ValueError(f"since должно быть числом, а не {raw!r}") from exc
 
+    def _live(self, sim_id: str) -> Any:
+        """Живая сессия, к которой этому человеку можно (#520).
+
+        Дверь к сессии одна, как и к песочнице: все маршруты `/api/sim/<id>`
+        входят сюда, и проверка стоит здесь по той же причине -- забыть
+        пройти через неё нельзя.
+
+        Правило в одну строку, но правил в нём два. Сессия паттерна открыта
+        всем, включая невошедших: карточка -- витрина, на неё дают ссылку, и
+        закрывать её значило бы отменить #516. Сессия песочницы -- работа, и
+        она делится так же, как делится сама песочница: у общей (ничейной)
+        сессия тоже общая, у личной -- личная.
+
+        Отказ дословно повторяет «такой сессии нет»: перебор идентификаторов
+        не должен рассказывать, что на стенде кто-то считает и что именно.
+        """
+        session = self.pool.get(sim_id)
+        if session.origin != "pattern" and not self._mine(session.owner):
+            raise SessionError(
+                f"сессии {sim_id!r} нет: она закрыта или не открывалась"
+            )
+        return session
+
     def sim(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
-        return self.pool.get(sim_id).update(self._since(params))
+        return self._live(sim_id).update(self._since(params))
 
     def sim_start(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
-        session = self.pool.get(sim_id)
+        session = self._live(sim_id)
         session.start()
         return session.update(self._since(params))
 
     def sim_pause(self, sim_id: str, params: dict[str, list[str]]) -> dict[str, Any]:
-        session = self.pool.get(sim_id)
+        session = self._live(sim_id)
         session.pause()
         return session.update(self._since(params))
 
     def sim_reset(self, sim_id: str) -> dict[str, Any]:
-        session = self.pool.get(sim_id)
+        session = self._live(sim_id)
         session.reset()
         return session.update()
 
     def sim_seek(self, sim_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        session = self.pool.get(sim_id)
+        session = self._live(sim_id)
         try:
             moment = float(body.get("time"))  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
@@ -335,7 +437,7 @@ class Api:
         различать их по величине присланного числа значило бы решать это за
         того, кто знает точно.
         """
-        session = self.pool.get(sim_id)
+        session = self._live(sim_id)
         try:
             delta = float(body.get("delta"))  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
@@ -356,7 +458,7 @@ class Api:
         что нажатие изменило (величина сенсора, величина мотора, запись
         поданного), приходит тем же куском, которым рисуется кадр.
         """
-        session = self.pool.get(sim_id)
+        session = self._live(sim_id)
         if not isinstance(body, dict) or not body:
             raise PatternError('нечего подавать: нужно {"key": 1}')
         for name, value in body.items():
@@ -364,6 +466,9 @@ class Api:
         return session.update()
 
     def close_sim(self, sim_id: str) -> dict[str, Any]:
+        # Сначала та же дверь, что и у всех остальных: закрыть чужую сессию --
+        # такое же вмешательство в чужую работу, как её посмотреть.
+        self._live(sim_id)
         self.pool.close(sim_id)
         return {"closed": sim_id}
 
@@ -373,6 +478,9 @@ class Api:
     # смотрят и трогают без учётной записи; песочница -- чужая работа. Но у
     # маршрута `/api/sim` различие спрятано в теле, а у `/api/sim/<id>` не видно
     # вовсе, поэтому обе проверки живут тут, рядом с тем, что открывает сессии.
+    #
+    # Вопрос «чья именно песочница» здесь не решается: это уже не про вход, а
+    # про владельца, и отвечают на него `_live` и `_project` (#520).
 
     @staticmethod
     def sim_opens_pattern(body: dict[str, Any]) -> bool:
@@ -397,11 +505,36 @@ class Api:
     # --- песочница --------------------------------------------------------
 
     def _project(self, sandbox_id: str) -> Project:
-        """Открытый проект. История и отмена живут в нём, а не в файле."""
+        """Открытый проект. История и отмена живут в нём, а не в файле.
+
+        Здесь же -- единственная проверка владельца (#520), и стоит она тут не
+        от лени. Дверь в песочницу одна: все три десятка маршрутов -- от
+        «добавить блок» до «отменить» -- получают проект отсюда, и другой
+        дороги к нему нет. Поле у маршрута (как `anonymous`) пришлось бы
+        повторить три десятка раз, и цена забытого поля -- чужая работа
+        нараспашку; забыть же пройти через `_project` нельзя, потому что без
+        него в руках не будет проекта.
+
+        Вход в таблице остаётся там, где был: она отвечает на «нужна ли
+        учётная запись», а здесь вопрос другой -- «чья это вещь», и ответ на
+        него знает сама вещь, а не путь к ней.
+
+        Чужая песочница отвечает ровно тем же, чем несуществующая. Отдельный
+        403 сказал бы «такая есть, но не твоя» -- то есть выдал бы и чужие
+        имена, и сам факт чужой работы; спрашивать об этом перебором
+        идентификаторов не должно иметь смысла.
+        """
         with self._projects_lock:
             project = self._projects.get(sandbox_id)
+            fresh = project is None
             if project is None:
                 project = Project(self.store.load_sandbox(sandbox_id), self.store)
+            if not self._mine(project.sandbox.owner):
+                raise StoreError(f"песочницы {sandbox_id!r} нет")
+            # В памяти остаётся только то, что человеку и правда открыли:
+            # иначе перебор чужих идентификаторов набивал бы кэш проектами,
+            # которых никто не видел.
+            if fresh:
                 self._projects[sandbox_id] = project
             return project
 
@@ -433,6 +566,32 @@ class Api:
         position = body.get("position") or [0.0, 0.0]
         return float(position[0]), float(position[1])
 
+    def _my_sandboxes(self) -> list[Sandbox]:
+        """Песочницы, которые этому человеку видны: свои и ничейные (#520).
+
+        Ничейные -- те, что завели до появления владельцев, когда стенд стоял
+        за одним паролем на прокси. Их оставили общими нарочно, и это выбор
+        из трёх, а не единственный возможный:
+
+        - **отдать первому вошедшему**: первый вошедший -- не обязательно тот,
+          кто их собирал, и молча записать чужую работу на случайного человека
+          хуже, чем не записать её ни на кого;
+        - **спрятать до разбора**: работа, которую никто не видит, ничем не
+          отличается от стёртой, а стирать чужое молча нельзя;
+        - **оставить общими** -- так и сделано: видно и правится всем
+          вошедшим, ровно как до #520. Ничего не пропало и ничего не досталось
+          не тому. В ответе такая песочница помечена (`shared`), чтобы «общая»
+          было видно, а не угадывалось по тому, что её видят двое.
+
+        Новые песочницы ничейными не бывают: `create_sandbox` ставит владельца
+        сразу, поэтому список общих со временем только тает.
+        """
+        return [
+            sandbox
+            for sandbox in self.store.sandboxes()
+            if self._mine(sandbox.owner)
+        ]
+
     def sandboxes(self) -> dict[str, Any]:
         return {
             "schema": api.SCHEMA_VERSION,
@@ -443,15 +602,20 @@ class Api:
                     "blocks": len(sandbox.instances),
                     "links": len(sandbox.links),
                     "updatedAt": sandbox.updated_at,
+                    # Общая ли она -- то есть та самая, что старше владельцев.
+                    "shared": sandbox.owner is None,
                 }
-                for sandbox in self.store.sandboxes()
+                for sandbox in self._my_sandboxes()
             ],
         }
 
     def create_sandbox(self, body: dict[str, Any]) -> dict[str, Any]:
         name = str(body.get("name") or "").strip() or "Песочница"
+        # Занятые имена -- всей библиотеки, а не только своей: файл лежит по
+        # имени, и «Проба» двух людей затёрла бы одна другую. Отбор по
+        # владельцу решает, кому что видно, а не кто где лежит.
         taken = [item.id for item in self.store.sandboxes()]
-        sandbox = Sandbox.empty(name, taken)
+        sandbox = Sandbox.empty(name, taken, owner=self.caller.sub)
         self.store.save_sandbox(sandbox)
         project = Project(sandbox, self.store)
         with self._projects_lock:
@@ -1334,10 +1498,23 @@ class Handler(BaseHTTPRequestHandler):
             # Права проверяются после разбора аргументов и до работы: решение
             # «пускать ли» у части маршрутов зависит от тела и от того, что за
             # сессией стоит, а не только от пути.
-            if not self._entered() and not route.anonymous(*arguments):
+            # Куку разбираем один раз: ниже нужен не только ответ «вошёл ли»,
+            # но и кто именно.
+            session = self._session()
+            entered = self.provider is None or session is not None
+            if not entered and not route.anonymous(*arguments):
                 self._refuse()
                 return
-            payload = route.call(*arguments)
+            # Кто спрашивает -- на время вызова. Дальше это нужно там, где
+            # вопрос не «нужен ли вход», а «чья это вещь»: у песочницы и у её
+            # сессии (#520). `guarded` -- настроен ли вход вообще: без него
+            # человек на машине один, и делить ему не с кем.
+            caller = Caller(
+                sub=session.sub if session else None,
+                guarded=self.provider is not None,
+            )
+            with self.service.asking(caller):
+                payload = route.call(*arguments)
         except (StoreError, SessionError) as exc:
             self._send(404, {"error": str(exc)})
         except (PatternError, ValueError) as exc:
@@ -1400,9 +1577,6 @@ class Handler(BaseHTTPRequestHandler):
             email=payload.get("email"),
             name=payload.get("name"),
         )
-
-    def _entered(self) -> bool:
-        return self.provider is None or self._session() is not None
 
     def _session_payload(self) -> dict[str, Any]:
         """Ответ `/api/session`: кто вошёл и куда идти, если никто.

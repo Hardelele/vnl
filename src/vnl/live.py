@@ -72,6 +72,7 @@ class Session:
         model: ir.Model,
         source: str = "",
         origin: Origin = "sandbox",
+        owner: str | None = None,
         pace: float = DEFAULT_PACE,
         snapshot_every: float = SNAPSHOT_EVERY,
     ) -> None:
@@ -83,6 +84,11 @@ class Session:
         #: песочница -- сессия неизвестного происхождения обязана оказаться
         #: закрытой, а не открытой.
         self.origin: Origin = origin
+        #: Чью песочницу она считает (#520). У витрины паттерна владельца нет и
+        #: быть не должно: карточку открывают по ссылке и без входа. Хранится
+        #: у сессии по той же причине, что и происхождение, -- в `/api/sim/<id>`
+        #: об этом не сказано ничего, а спросить нужно на каждом запросе.
+        self.owner = owner
         self.pace = pace
         self.snapshot_every = snapshot_every
 

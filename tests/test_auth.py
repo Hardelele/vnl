@@ -29,8 +29,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from vnl import auth
+from vnl.patterns import Sandbox
 from vnl.server import create_server
-from vnl.store import Store
+from vnl.store import Store, to_plain
 
 from test_server import ffi_pattern
 
@@ -581,6 +582,252 @@ def test_a_simulation_that_does_not_exist_is_refused_the_same_way(stand):
     у других.
     """
     assert ask(stand, "/api/sim/sim42")[0] == 401
+
+
+# --- у песочницы есть владелец (#520) -----------------------------------------
+#
+# Вход отвечает на «кто этот человек», владелец -- на «чья это работа». Второе
+# без первого бессмысленно, поэтому тесты здесь, а не в `test_server.py`: там
+# входа нет вовсе, и все песочницы принадлежат одному.
+#
+# Граница проведена по работе, а не по всему хранилищу: библиотека общая
+# нарочно (#516), и ниже это утверждается отдельным тестом -- иначе «закрыли
+# чужое» однажды доедет и до витрины.
+
+
+def enter_as(base: str, plan: dict, sub: str) -> dict[str, str]:
+    """Вход от имени другого человека: тот же проход, другой `sub`."""
+    plan["claims"] = {"sub": sub, "email": f"{sub}@reckue.com", "name": sub}
+    return enter(base)
+
+
+def test_a_new_sandbox_belongs_to_the_one_who_made_it(stand, provider_plan):
+    """Владелец ставится при создании, а не досочиняется потом."""
+    one = enter_as(stand, provider_plan, "user-1")
+    status, _, body = ask(
+        stand, "/api/sandboxes", one, method="POST", payload={"name": "Моя"}
+    )
+    assert status == 201
+    made = json_of(body)["id"]
+
+    _, _, body = ask(stand, "/api/sandboxes", one)
+    rows = json_of(body)["sandboxes"]
+    assert [row["id"] for row in rows] == [made]
+    assert rows[0]["shared"] is False
+
+
+def test_someone_elses_sandbox_is_not_in_the_list(stand, provider_plan):
+    """Список -- свой, а не всё хранилище.
+
+    Числа здесь важнее слов: у одного песочница есть, у другого их ноль, а в
+    хранилище лежит одна и та же.
+    """
+    one = enter_as(stand, provider_plan, "user-1")
+    ask(stand, "/api/sandboxes", one, method="POST", payload={"name": "Моя"})
+    two = enter_as(stand, provider_plan, "user-2")
+
+    _, _, body = ask(stand, "/api/sandboxes", one)
+    assert len(json_of(body)["sandboxes"]) == 1
+    _, _, body = ask(stand, "/api/sandboxes", two)
+    assert json_of(body)["sandboxes"] == []
+
+
+def test_someone_elses_sandbox_does_not_open_by_id(stand, provider_plan):
+    """Прямой идентификатор -- не обход списка.
+
+    Ответ дословно тот же, что и у несуществующей песочницы: 404 с «нет такой».
+    403 сказал бы «есть, но не твоя» -- то есть рассказал бы перебором, кто на
+    стенде что завёл.
+    """
+    one = enter_as(stand, provider_plan, "user-1")
+    _, _, body = ask(
+        stand, "/api/sandboxes", one, method="POST", payload={"name": "Моя"}
+    )
+    made = json_of(body)["id"]
+    two = enter_as(stand, provider_plan, "user-2")
+
+    status, _, body = ask(stand, f"/api/sandboxes/{made}", two)
+    assert status == 404
+    missing = ask(stand, "/api/sandboxes/такой-нет", two)
+    assert missing[0] == 404
+    assert json_of(body)["error"] == json_of(missing[2])["error"].replace(
+        "такой-нет", made
+    )
+    # А владельцу она открывается как открывалась.
+    assert ask(stand, f"/api/sandboxes/{made}", one)[0] == 200
+
+
+def test_someone_elses_sandbox_cannot_be_changed(stand, provider_plan):
+    """Отказ случается до работы, а не после: чужой проект остаётся прежним.
+
+    Проверяются обе дороги к нему -- правка объекта и отмена чужого шага.
+    Отмена тут не лишняя: она страшнее правки, потому что стирает сделанное.
+    """
+    one = enter_as(stand, provider_plan, "user-1")
+    _, _, body = ask(
+        stand, "/api/sandboxes", one, method="POST", payload={"name": "Моя"}
+    )
+    made = json_of(body)["id"]
+    ask(
+        stand,
+        f"/api/sandboxes/{made}/blocks",
+        one,
+        method="POST",
+        payload={"pattern": "ffi", "position": [0, 0]},
+    )
+    two = enter_as(stand, provider_plan, "user-2")
+
+    assert (
+        ask(
+            stand,
+            f"/api/sandboxes/{made}/blocks",
+            two,
+            method="POST",
+            payload={"pattern": "ffi", "position": [200, 0]},
+        )[0]
+        == 404
+    )
+    assert (
+        ask(
+            stand,
+            f"/api/sandboxes/{made}",
+            two,
+            method="PATCH",
+            payload={"name": "Не моя"},
+        )[0]
+        == 404
+    )
+    assert ask(stand, f"/api/sandboxes/{made}/undo", two, method="POST")[0] == 404
+
+    _, _, body = ask(stand, f"/api/sandboxes/{made}", one)
+    state = json_of(body)
+    assert state["name"] == "Моя"
+    assert len(state["blocks"]) == 1
+
+
+def test_someone_elses_simulation_is_not_touchable(stand, provider_plan):
+    """Сессия песочницы делится так же, как сама песочница.
+
+    Иначе владелец чужой схемы не виден, а её прогон -- виден: трассы и спайки
+    рассказывают о схеме больше, чем её имя.
+    """
+    one = enter_as(stand, provider_plan, "user-1")
+    sandbox = sandbox_ready_to_run(stand, one)
+    _, _, body = ask(
+        stand, "/api/sim", one, method="POST", payload={"sandbox": sandbox}
+    )
+    sim = json_of(body)["id"]
+    two = enter_as(stand, provider_plan, "user-2")
+
+    assert ask(stand, f"/api/sim/{sim}", two)[0] == 404
+    assert ask(stand, f"/api/sim/{sim}/start", two, method="POST")[0] == 404
+    assert ask(stand, f"/api/sim/{sim}", two, method="DELETE")[0] == 404
+    # Владелец тем временем работает как работал.
+    assert ask(stand, f"/api/sim/{sim}", one)[0] == 200
+
+
+def test_the_showcase_simulation_stays_everyones(stand, provider_plan):
+    """Сессия паттерна -- витрина, и владельца у неё нет.
+
+    Её открыл вошедший, но смотреть её может кто угодно, включая невошедшего:
+    иначе на карточку нельзя было бы дать ссылку (#516).
+    """
+    one = enter_as(stand, provider_plan, "user-1")
+    _, _, body = ask(stand, "/api/sim", one, method="POST", payload={"pattern": "ffi"})
+    sim = json_of(body)["id"]
+    two = enter_as(stand, provider_plan, "user-2")
+    assert ask(stand, f"/api/sim/{sim}", two)[0] == 200
+    assert ask(stand, f"/api/sim/{sim}")[0] == 200
+
+
+def test_a_sandbox_from_before_owners_stays_common(stand, provider_plan, tmp_path):
+    """Песочница, которую завели до владельцев, никуда не делась.
+
+    В файле такой песочницы поля `owner` нет вовсе -- её сохранял сервер, где
+    этого поля не существовало. Здесь именно такой файл: ключ убран, а не
+    выставлен в `null`.
+
+    Она осталась общей: видна и правится всем вошедшим, помечена `shared`.
+    Отдавать её первому вошедшему нельзя -- он не обязательно её автор, --
+    а прятать до разбора значит ничем не отличаться от «стёрли».
+    """
+    store = Store(tmp_path)
+    raw = to_plain(Sandbox(id="со-стенда", name="Общая"))
+    raw.pop("owner")
+    (tmp_path / "sandboxes" / "со-стенда.json").write_text(
+        json.dumps(raw, ensure_ascii=False), encoding="utf-8"
+    )
+    assert store.load_sandbox("со-стенда").owner is None
+
+    one = enter_as(stand, provider_plan, "user-1")
+    two = enter_as(stand, provider_plan, "user-2")
+    for session in (one, two):
+        _, _, body = ask(stand, "/api/sandboxes", session)
+        rows = json_of(body)["sandboxes"]
+        assert [row["id"] for row in rows] == ["со-стенда"]
+        assert rows[0]["shared"] is True
+        assert ask(stand, "/api/sandboxes/со-стенда", session)[0] == 200
+    # И правится обоими -- как до #520, когда вошедший был один.
+    assert (
+        ask(
+            stand,
+            "/api/sandboxes/со-стенда",
+            two,
+            method="PATCH",
+            payload={"name": "Общая, правленая"},
+        )[0]
+        == 200
+    )
+    _, _, body = ask(stand, "/api/sandboxes/со-стенда", one)
+    assert json_of(body)["name"] == "Общая, правленая"
+
+
+def test_the_library_is_common_on_purpose(stand, provider_plan):
+    """Библиотека -- витрина, и правят её все вошедшие (#516).
+
+    Самая нужная проверка из всех здешних: она держит границу на месте. Стоит
+    «закрыли чужое» доехать до библиотеки, и ссылка на схему перестанет
+    работать у всех, кроме её автора.
+    """
+    one = enter_as(stand, provider_plan, "user-1")
+    sandbox = sandbox_ready_to_run(stand, one)
+    # Порты называет человек, а предлагает их сама песочница -- см. `_ports`.
+    _, _, body = ask(stand, f"/api/sandboxes/{sandbox}", one)
+    status, _, body = ask(
+        stand,
+        "/api/patterns",
+        one,
+        method="POST",
+        payload={
+            "sandbox": sandbox,
+            "name": "Общая схема",
+            "level": "L2",
+            "ports": json_of(body)["portHints"],
+        },
+    )
+    assert status == 201
+    made = json_of(body)["id"]
+
+    two = enter_as(stand, provider_plan, "user-2")
+    _, _, body = ask(stand, "/api/catalog", two)
+    assert made in [item["id"] for item in json_of(body)["patterns"]]
+    assert ask(stand, f"/api/patterns/{made}", two)[0] == 200
+    # И меняется чужими руками: библиотека общая, а не «каждому своя».
+    assert ask(stand, f"/api/patterns/{made}", two, method="DELETE")[0] == 200
+
+
+def test_health_counts_the_work_of_the_one_who_asks(stand, provider_plan):
+    """Строка состояния говорит про свою работу, а не про размер стенда."""
+    one = enter_as(stand, provider_plan, "user-1")
+    ask(stand, "/api/sandboxes", one, method="POST", payload={"name": "Моя"})
+    two = enter_as(stand, provider_plan, "user-2")
+
+    _, _, body = ask(stand, "/api/health", one)
+    assert json_of(body)["sandboxes"] == 1
+    _, _, body = ask(stand, "/api/health", two)
+    assert json_of(body)["sandboxes"] == 0
+    # Паттерны рядом считаются все: библиотека одна на всех.
+    assert json_of(body)["patterns"] == 1
 
 
 def test_ready_answers_without_login(stand):

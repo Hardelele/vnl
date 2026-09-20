@@ -423,6 +423,18 @@ class Sandbox:
 
     id: str
     name: str
+    #: Кто её завёл -- `sub` учётной записи Reckue (#520). `None` -- ничейная:
+    #: либо песочница старше владельцев (её завели, когда стенд был за одним
+    #: паролем), либо вход на этой машине не настроен вовсе. Ничейная общая --
+    #: см. `Api._mine` в `server.py`, там же разобрано, почему её не отдают
+    #: первому вошедшему.
+    #:
+    #: Поле здесь, а не в отдельном файле рядом: владелец -- свойство проекта,
+    #: и хранить его сбоку значило бы завести вторую правду, которая разойдётся
+    #: с первой при копировании хранилища. `from_plain` пропускает поля, которых
+    #: в файле нет, поэтому уже сохранённые песочницы читаются как ничейные,
+    #: а не падают.
+    owner: str | None = None
     instances: list[PatternInstance] = field(default_factory=list)
     cell_types: dict[str, ir.CellType] = field(default_factory=dict)
     neurons: dict[str, SandboxNeuron] = field(default_factory=dict)
@@ -437,9 +449,16 @@ class Sandbox:
     updated_at: str = field(default_factory=_now)
 
     @staticmethod
-    def empty(name: str, taken: Iterable[str] = ()) -> "Sandbox":
-        """Новый проект. Идентификатор -- из имени, чтобы файл читался глазами."""
-        return Sandbox(id=_unique(_slug(name), taken), name=name)
+    def empty(
+        name: str, taken: Iterable[str] = (), owner: str | None = None
+    ) -> "Sandbox":
+        """Новый проект. Идентификатор -- из имени, чтобы файл читался глазами.
+
+        Занятые имена -- всей библиотеки, а не только своей: файл лежит по
+        имени, и две песочницы разных людей с одинаковым `id` затёрли бы друг
+        друга. Владелец делит видимость, а не пространство имён.
+        """
+        return Sandbox(id=_unique(_slug(name), taken), name=name, owner=owner)
 
     def instance(self, instance_id: str) -> PatternInstance:
         for item in self.instances:
