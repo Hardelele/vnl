@@ -47,6 +47,7 @@ function project(patch: Partial<SandboxState> = {}): SandboxState {
       },
     ],
     neurons: [],
+    cellTypes: [],
     links: [],
     stimuli: [
       {
@@ -689,5 +690,33 @@ describe('имя, копия и удаление выбранного (#563)', (
 
     expect(duplicate).toHaveBeenCalledWith('s1', 'relay')
     expect(control.store.getState().selected).toEqual({ kind: 'neuron', id: 'relay2' })
+  })
+})
+
+describe('типы клеток самого проекта (#564)', () => {
+  it('кладутся своим полем, а не через каталог', async () => {
+    // Каталог и типы проекта -- разные источники, и одноимённый тип в них
+    // бывает разным: разбор блока кладёт в проект `relay_2`, когда его
+    // `relay` не совпал с проектным.
+    const addNeuronOfType = vi.fn().mockResolvedValue(project({ dirty: true }))
+    const addNeuron = vi.fn()
+    const control = await opened({ addNeuronOfType, addNeuron })
+
+    await control.insertCellOfType('target')
+
+    expect(addNeuronOfType).toHaveBeenCalledWith('s1', 'target', expect.anything())
+    expect(addNeuron).not.toHaveBeenCalled()
+    expect(control.store.getState().project?.dirty).toBe(true)
+  })
+
+  it('каталожная клетка по-прежнему кладётся своей дорогой', async () => {
+    const addNeuron = vi.fn().mockResolvedValue(project())
+    const addNeuronOfType = vi.fn()
+    const control = await opened({ addNeuron, addNeuronOfType })
+
+    await control.insertCell('pyr')
+
+    expect(addNeuron).toHaveBeenCalledWith('s1', 'pyr', expect.anything())
+    expect(addNeuronOfType).not.toHaveBeenCalled()
   })
 })

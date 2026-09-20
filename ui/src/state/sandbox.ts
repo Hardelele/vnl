@@ -21,6 +21,7 @@ import { NO_GLOSSARY, loadGlossary } from '../model/glossary'
 import {
   addBlock,
   addNeuron,
+  addNeuronOfType,
   addRecording,
   addStimulus,
   arrangeObjects,
@@ -194,6 +195,7 @@ export interface SandboxPorts {
   cells: typeof loadCells
   glossary: typeof loadGlossary
   addNeuron: typeof addNeuron
+  addNeuronOfType: typeof addNeuronOfType
   connect: typeof connect
   params: typeof setLinkParams
   contact: typeof setContactParams
@@ -224,6 +226,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   cells: loadCells,
   glossary: loadGlossary,
   addNeuron,
+  addNeuronOfType,
   connect,
   params: setLinkParams,
   contact: setContactParams,
@@ -468,6 +471,19 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     insertCell(cell: string): Promise<void> {
       const { project, view } = store.getState()
       return act((id) => io.addNeuron(id, cell, free(project, view)))
+    },
+
+    /**
+     * Положить клетку типа, который уже есть в этом проекте (#564).
+     *
+     * Отдельное действие, а не `insertCell` с флажком: это другой источник
+     * типа, а не другой способ спросить каталог. Тип берётся существующий --
+     * правка порога у новой клетки задевает всех клеток этого типа в проекте,
+     * как и было до того, как её положили.
+     */
+    insertCellOfType(type: string): Promise<void> {
+      const { project, view } = store.getState()
+      return act((id) => io.addNeuronOfType(id, type, free(project, view)))
     },
 
     /**

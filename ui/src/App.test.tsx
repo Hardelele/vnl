@@ -433,6 +433,7 @@ describe('дорога с карточки в песочницу (#526)', () => 
       name: 'Проба',
       blocks: [],
       neurons: [],
+      cellTypes: [],
       links: [],
       stimuli: [],
       recordings: [],

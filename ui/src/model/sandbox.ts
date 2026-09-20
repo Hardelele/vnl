@@ -102,6 +102,27 @@ export interface SandboxNeuron {
   pointModel: PointModel | null
 }
 
+/**
+ * Тип клетки самого проекта (#564).
+ *
+ * Не строка каталога: у каталожной клетки есть человеческое имя и объяснение
+ * (`CellKind`), а у типа, попавшего в проект из разобранного паттерна, только
+ * идентификатор -- `target`, `pyr_l5`. Поэтому в палитре они и стоят разными
+ * списками: свести их в один значило бы либо выдумать `target` имя, либо
+ * выбросить имена у половины строк.
+ *
+ * Поля те же, что у `SandboxCell` (клетки блока), потому что вещь та же:
+ * `neurons` говорит, кого задевает правка порога, -- параметры мембраны в IR
+ * висят на типе, а не на нейроне.
+ */
+export interface SandboxCellType {
+  type: string
+  neurons: string[]
+  inhibitory: boolean
+  transmitter: string | null
+  pointModel: PointModel
+}
+
 export interface SandboxLink {
   id: string
   source: Endpoint
@@ -166,6 +187,14 @@ export interface SandboxState {
   name: string
   blocks: SandboxBlock[]
   neurons: SandboxNeuron[]
+  /**
+   * Типы клеток, которые уже есть в этом проекте (#564).
+   *
+   * Часть состояния проекта, а не отдельный запрос: разбор блока пополняет
+   * их, и отдельный маршрут пришлось бы перечитывать после каждого разбора --
+   * палитра то знала бы про `target`, то нет.
+   */
+  cellTypes: SandboxCellType[]
   links: SandboxLink[]
   stimuli: SandboxDrive[]
   recordings: SandboxRecording[]
@@ -271,6 +300,25 @@ export function addNeuron(
   position: [number, number],
 ): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/neurons`, 'POST', { cell, position })
+}
+
+/**
+ * Положить клетку типа, который уже есть в этом проекте (#564).
+ *
+ * Тот же маршрут, другое поле: `cell` -- каталог, `type` -- типы проекта. Два
+ * поля, а не одно с поиском «сперва там, потом тут», потому что это два
+ * разных источника, и одноимённый тип в них бывает разным -- разбор блока
+ * кладёт в проект `relay_2`, когда его `relay` не совпал с проектным.
+ *
+ * Тип берётся существующий, а не его копия: параметры мембраны висят на типе,
+ * и копия означала бы, что правка порога задевает не всех клеток `target`.
+ */
+export function addNeuronOfType(
+  id: string,
+  type: string,
+  position: [number, number],
+): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/neurons`, 'POST', { type, position })
 }
 
 export function connect(

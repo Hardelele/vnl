@@ -475,27 +475,56 @@ class Api:
         return api.sandbox_payload(project)
 
     def add_neuron(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Положить на холст отдельную клетку из каталога типов.
+        """Положить на холст отдельную клетку.
 
-        Тип берётся из каталога, а не из тела запроса: параметры мембраны
-        правятся потом в панели свойств, и принимать их здесь значило бы
-        завести второй способ описать клетку, который рано или поздно разойдётся
-        с первым.
+        Тип берётся из одного из двух мест, и какое именно -- говорит тело
+        запроса: `cell` -- каталог (`vnl/cells.py` плюс свои), `type` -- типы
+        самого проекта (#564). Два поля, а не одно с поиском «сперва там,
+        потом тут», нарочно: это два разных источника, и одноимённый тип в них
+        бывает разным -- разобранный блок кладёт в проект `relay_2`, когда его
+        `relay` не совпал с проектным. Поиск по очереди молча выбирал бы за
+        человека, какой из двух он имел в виду.
+
+        Параметры мембраны в теле не принимаются ни в том, ни в другом случае:
+        правятся они потом, панелью свойств, и второй способ описать клетку
+        рано или поздно разошёлся бы с первым.
+
+        Тип проекта кладётся тем же вызовом и тем же объектом, а не его
+        копией: `Sandbox.add_neuron` ставит его через `setdefault`, то есть
+        существующий остаётся на месте, а клетка ссылается на него по имени.
+        Копия означала бы, что правка порога у одной клетки `target` не
+        задевает две соседние.
         """
         cell_id = str(body.get("cell") or "")
-        if not cell_id:
+        type_id = str(body.get("type") or "")
+        if cell_id and type_id:
             raise PatternError(
-                'не сказано, какую клетку класть: {"cell": "pyr"}'
+                "сказано сразу два источника типа: cell -- каталог, "
+                "type -- типы этого проекта; нужен один"
             )
-        try:
-            chosen = cells.catalog(self.store.cells()).get(cell_id)
-        except KeyError as exc:
-            raise PatternError(str(exc).strip("\"'")) from exc
         project = self._project(sandbox_id)
+        if type_id:
+            known = project.sandbox.cell_types
+            if type_id not in known:
+                names = ", ".join(known) or "типов нет"
+                raise PatternError(
+                    f"в проекте нет типа клетки {type_id!r} ({names})"
+                )
+            cell_type = known[type_id]
+        elif cell_id:
+            try:
+                cell_type = cells.catalog(self.store.cells()).get(cell_id).type
+            except KeyError as exc:
+                raise PatternError(str(exc).strip("\"'")) from exc
+        else:
+            raise PatternError(
+                'не сказано, какую клетку класть: {"cell": "pyr"} из каталога '
+                'или {"type": "target"} из типов этого проекта'
+            )
         position = body.get("position") or [0.0, 0.0]
         project.add_neuron(
             str(body["id"]) if body.get("id") else None,
-            chosen.type,
+            cell_type,
             position=(float(position[0]), float(position[1])),
         )
         return api.sandbox_payload(project)

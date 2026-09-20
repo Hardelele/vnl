@@ -1815,3 +1815,102 @@ def test_removing_a_drive_by_its_own_name_works(base):
 
     assert after["stimuli"] == []
     assert [cell["id"] for cell in after["neurons"]] == ["relay"], "цель осталась"
+
+
+# --- типы клеток самого проекта (#564) -------------------------------------
+
+
+def test_the_payload_lists_the_cell_types_of_the_project(base):
+    """Приёмка #564: разобранный блок оставляет в проекте свои типы, и они видны.
+
+    До этого они жили только внутри `pointModel` конкретной клетки: списком их
+    никто не показывал, а значит третью такую клетку положить было нечем.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+
+    _, broken = ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup")
+
+    types = {item["type"]: item for item in broken["cellTypes"]}
+    assert {"relay", "pyr_l5", "pv"} <= set(types)
+    assert types["pv"]["inhibitory"] is True
+    assert types["pyr_l5"]["pointModel"]["vThreshold"] == -50.0
+    # Видно, кого задевает правка порога, -- как и у клеток блока.
+    assert types["pyr_l5"]["neurons"], "тип назвал свои клетки"
+
+
+def test_a_project_type_is_put_on_the_canvas_by_the_same_route(base):
+    """Приёмка #564: третья клетка того же типа -- и тип берётся существующий.
+
+    Не копия: параметры мембраны висят на типе, и правка порога обязана
+    задевать всех клеток этого типа в проекте, как и было.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    _, broken = ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup")
+    was = len([cell for cell in broken["neurons"] if cell["cellType"] == "pyr_l5"])
+
+    status, added = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"type": "pyr_l5"}
+    )
+
+    assert status == 201
+    fresh = [cell for cell in added["neurons"] if cell["cellType"] == "pyr_l5"]
+    assert len(fresh) == was + 1
+
+    _, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/objects/{fresh[-1]['id']}/cells/pyr_l5",
+        {"vThreshold": -43.0},
+    )
+    touched = [
+        cell for cell in changed["neurons"] if cell["cellType"] == "pyr_l5"
+    ]
+    assert all(cell["pointModel"]["vThreshold"] == -43.0 for cell in touched), (
+        "тип один на всех своих клеток -- правка задевает всех"
+    )
+
+
+def test_a_type_the_project_does_not_have_is_refused_by_name(base):
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Типы"})
+    sandbox = project["id"]
+
+    status, answer = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"type": "target"}
+    )
+
+    assert status == 400
+    assert "target" in answer["error"]
+
+
+def test_two_sources_of_a_cell_type_at_once_are_refused(base):
+    """Каталог и типы проекта -- разные источники, и выбирать за человека нельзя."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Типы"})
+    sandbox = project["id"]
+
+    status, answer = ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/neurons",
+        {"cell": "relay", "type": "relay"},
+    )
+
+    assert status == 400
+    assert "один" in answer["error"]
+
+
+def test_a_catalog_cell_is_still_put_by_its_own_field(base):
+    """Каталог и его подсказки остаются как были (#541)."""
+    _, project = ask(base, "POST", "/api/sandboxes", {"name": "Типы"})
+    sandbox = project["id"]
+
+    status, added = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "sst"}
+    )
+
+    assert status == 201
+    assert [cell["cellType"] for cell in added["neurons"]] == ["sst"]
+    assert [item["type"] for item in added["cellTypes"]] == ["sst"]

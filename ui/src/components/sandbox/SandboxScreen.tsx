@@ -347,6 +347,9 @@ export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
   }
 
   const inhibitory = neuronKinds(project.blocks, project.neurons)
+  /** Типы проекта, которых каталог не знает: `target`, `pyr_l5` (#564). */
+  const known = new Set(palette.map((kind) => kind.id))
+  const own = project.cellTypes.filter((kind) => !known.has(kind.type))
   /** Сессия считает не эту схему: её результат уже про другую сеть. */
   const stale = Boolean(simId && built && built !== project.fingerprint)
 
@@ -628,6 +631,68 @@ export function SandboxScreen({ bring = null, onBrought }: SandboxScreenProps) {
               ))}
               {palette.length === 0 ? (
                 <p className="sb-hint">Каталог типов клеток пуст.</p>
+              ) : null}
+
+              {/* Типы клеток самого проекта -- отдельным разделом под
+                  каталогом (#564). Они попадают в проект из разобранного
+                  паттерна (#532) и каталогу не принадлежат: `target` в нём
+                  нет и не будет, пока его туда не положили. Смешать их с
+                  каталогом нельзя -- у каталожной клетки есть человеческое
+                  имя и объяснение, а у типа из паттерна только
+                  идентификатор, и общий список пришлось бы либо выдумывать
+                  `target` имя, либо у половины строк имена гасить.
+
+                  Показываются только те, которых нет в каталоге. Одноимённый
+                  тип -- это тот же самый тип: кнопка «+» каталожной строки
+                  кладёт клетку, а `Sandbox.add_neuron` оставляет в проекте
+                  уже лежащий там тип (`setdefault`), то есть обе строки
+                  сделали бы буквально одно и то же. Решается это здесь, а не
+                  на сервере: ответ о проекте не должен зависеть от того, что
+                  лежит в `.vnl/cells` на этой машине, -- а вопрос «стоит ли
+                  повторять строку в списке» и есть вопрос про список. */}
+              {own.length ? (
+                <>
+                  <div className="sb-section">В проекте</div>
+                  <p className="sb-note">
+                    Типы из разобранных паттернов. В каталоге их нет: у них
+                    есть только имя типа.
+                  </p>
+                  {own.map((kind) => (
+                    <div className="sb-row" key={kind.type}>
+                      <span className="sb-mini sb-cell-shape">
+                        <svg viewBox="0 0 40 24" role="img" aria-label={kind.type}>
+                          <rect
+                            className={`sb-shape${kind.inhibitory ? ' is-inh' : ''}`}
+                            x={4}
+                            y={5}
+                            width={32}
+                            height={14}
+                            rx={kind.inhibitory ? 3 : 7}
+                          />
+                        </svg>
+                      </span>
+                      <span className="sb-row-text">
+                        <span className="sb-row-name mono">{kind.type}</span>
+                        {/* Сколько таких уже стоит -- вместо объяснения,
+                            которого у типа из паттерна нет. Заодно это и
+                            предупреждение: правка порога задевает всех. */}
+                        <span className="mono sb-level">
+                          {kind.transmitter ?? 'порог'}{' '}
+                          {kind.pointModel.vThreshold} мВ ·{' '}
+                          {counted(kind.neurons.length, CELLS)}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="sb-plus"
+                        title={`Положить ещё одну клетку типа ${kind.type}. Тип общий: правка порога задевает все клетки этого типа в проекте`}
+                        onClick={() => pick(() => void control.insertCellOfType(kind.type))}
+                      >
+                        +
+                      </button>
+                    </div>
+                  ))}
+                </>
               ) : null}
             </div>
           ) : tab === 'library' ? (
