@@ -95,6 +95,49 @@ describe('каталог', () => {
     expect(failure.message).toContain('vnl serve')
   })
 
+  it('страница прокси вместо ответа -- недоступность, а не ошибка разбора', async () => {
+    // Ровно то, что приходит со стенда, пока служба перезапускается после
+    // выката: nginx рисует свою страницу и отдаёт её с кодом 502.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('<html>\n<head><title>502 Bad Gateway</title></head>\n</html>', {
+          status: 502,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      ),
+    )
+    const failure = await loadCatalog().catch((error) => error)
+    expect(failure).toBeInstanceOf(OfflineError)
+    expect(failure.message).toContain('502')
+    expect(failure.message).toContain('недоступно')
+    // Человеку не показывают внутренности разбора.
+    expect(failure.message).not.toContain('Unexpected token')
+    expect(failure.message).not.toContain('JSON')
+  })
+
+  it('401 страницей прокси не выдаётся за отказ «нужен вход»', async () => {
+    // У нашего отказа в теле лежит адрес входа, и по нему появляется кнопка.
+    // У чужой страницы его нет, и звать вход по ней значило бы предлагать
+    // войти туда, где никто ничего не спрашивал.
+    const called = vi.fn()
+    whenUnauthorized(called)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('<html>\n<head><title>401 Authorization Required</title></head>', {
+          status: 401,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      ),
+    )
+    const failure = await loadCatalog().catch((error) => error)
+    whenUnauthorized(undefined)
+
+    expect(failure).toBeInstanceOf(OfflineError)
+    expect(called).not.toHaveBeenCalled()
+  })
+
   it('паттерн сохраняется из песочницы: имя, ступень и порты', async () => {
     const fetcher = vi.fn().mockResolvedValue(reply({ id: 'proba', name: 'Проба' }, 201))
     vi.stubGlobal('fetch', fetcher)

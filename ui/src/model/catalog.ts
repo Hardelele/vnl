@@ -38,13 +38,36 @@ export class ApiError extends Error {
   }
 }
 
-/** Сервер не запущен -- частый и поправимый случай, поэтому отдельный тип. */
+/**
+ * Сервер не отвечает -- частый и поправимый случай, поэтому отдельный тип.
+ *
+ * Сюда же отнесён ответ, пришедший не от приложения: прокси, не дождавшийся
+ * службы, рисует свою страницу и отдаёт её с кодом 502. Для человека это то же
+ * самое, что молчащий сервер -- приложение сейчас недоступно, надо повторить, --
+ * и заводить ради этого третий род ошибки значило бы объяснять разными словами
+ * одну беду.
+ */
 export class OfflineError extends Error {
-  constructor(cause: unknown) {
-    super('сервер библиотеки не отвечает — запустите vnl serve')
+  constructor(cause: unknown, message = 'сервер библиотеки не отвечает — запустите vnl serve') {
+    super(message)
     this.name = 'OfflineError'
     this.cause = cause
   }
+}
+
+/**
+ * Чем объяснить ответ, который не разобрался как JSON.
+ *
+ * Приложение отвечает только JSON -- значит отвечало не оно. Чаще всего это
+ * прокси: служба перезапускается после выката, и `502 Bad Gateway` приходит
+ * страницей на HTML. Показывать в этом месте `Unexpected token '<'` -- значит
+ * показывать человеку внутренности разбора вместо того, что случилось.
+ */
+function notOurs(status: number): string {
+  if (status === 502 || status === 503 || status === 504) {
+    return `приложение сейчас недоступно (${status}) — похоже, служба перезапускается; повторите через несколько секунд`
+  }
+  return `ответ пришёл не от приложения (${status}): вместо данных страница прокси или чужой ответ`
 }
 
 export function catalogQueryString(query: CatalogQuery): string {
@@ -75,7 +98,19 @@ export async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new OfflineError(reason)
   }
   const text = await response.text()
-  const payload = text ? (JSON.parse(text) as unknown) : {}
+  let payload: unknown = {}
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown
+    } catch (reason) {
+      // Разбор сорвался -- значит отвечало не приложение, и разбирать в этом
+      // ответе нечего: ни `error` для человека, ни `login` для входа в нём нет.
+      // Поэтому и 401 отсюда не зовёт `onUnauthorized`: страница прокси с
+      // кодом 401 -- это не наш отказ «нужен вход», и кнопка входа от неё
+      // появиться не должна.
+      throw new OfflineError(reason, notOurs(response.status))
+    }
+  }
   if (!response.ok) {
     if (response.status === 401) {
       // Закрытый маршрут без сессии -- и он же ответ «сессия кончилась, пока
