@@ -533,3 +533,332 @@ def test_opening_a_block_is_not_a_change_of_physics(project, ffi):
 
     assert project.fingerprint() == before
     assert not hasattr(project, "open_block"), "раскрытие -- дело интерфейса"
+
+
+# --- параметры контакта внутри блока (#531) --------------------------------
+
+
+@pytest.fixture
+def delay() -> Pattern:
+    """«Задержка проведения» из библиотеки: один источник, два приёмника.
+
+    Настоящий паттерн, а не собранный здесь: весь его смысл в двух контактах
+    одного источника с `delay = 1 мс` и `delay = 10 мс`, и проверять правку
+    задержки надо ровно на них.
+    """
+    model, _ = load(
+        (EXAMPLES / "library" / "synaptic_delay.vnl").read_text(encoding="utf-8")
+    )
+    return Pattern.from_model(
+        model,
+        id="synaptic_delay",
+        name="Задержка проведения",
+        status="ready",
+        ports=[
+            Port("in", "in", ir.Site("IN", "soma", 0.5)),
+            Port("near", "out", ir.Site("NEAR", "soma", 0.5)),
+            Port("far", "out", ir.Site("FAR", "soma", 0.5)),
+        ],
+    )
+
+
+def first_spikes(project: Project) -> dict[str, float]:
+    """Момент первого разряда каждой клетки собранной сети."""
+    spikes = project.run().result.spikes
+    return {name: times[0] for name, times in spikes.items() if times}
+
+
+def test_contact_parameters_change_only_inside_this_block(project, delay):
+    """Снимок у каждого экземпляра свой -- как уже устроен порог."""
+    project.save_as_pattern(delay)  # чтобы было чему остаться нетронутым
+    project.insert_pattern(delay, instance_id="a")
+    project.insert_pattern(delay, instance_id="b")
+
+    project.set_contact("a", "c2", delay=4.0, weight=3.3, receptor="nmda")
+
+    edited = project.sandbox.instance("a").snapshot.body.contacts[1]
+    assert (edited.delay, edited.weight, edited.receptor) == (4.0, 3.3, "nmda")
+
+    neighbour = project.sandbox.instance("b").snapshot.body.contacts[1]
+    assert neighbour.delay == 10.0, "второй блок того же паттерна не задет"
+    assert project.store is not None
+    library = project.store.load_pattern("synaptic_delay").body.contacts[1]
+    assert library.delay == 10.0, "библиотека тоже не задета"
+
+
+def test_a_changed_contact_moves_the_spike_by_exactly_that_much(project, delay):
+    """Правка обязана доходить до симулятора, а не только до файла.
+
+    Проверяется не «стало другое число», а величина сдвига: задержка контакта
+    -- это время от спайка источника до открытия проводимости, и разница
+    первых разрядов NEAR и FAR равна разнице задержек. Урезали задержку на
+    6 мс -- ровно на столько должен съехать и разрыв.
+    """
+    project.insert_pattern(delay, instance_id="a")
+    project.stimulate(
+        SandboxStimulus(
+            id="drive",
+            target=Endpoint("a", "in"),
+            kind="spikes",
+            amplitude=3.0,
+            times=(20.0, 60.0, 100.0, 140.0, 180.0),
+        )
+    )
+    project.set_run(duration=340.0)
+
+    before = first_spikes(project)
+    gap_before = before["a/FAR"] - before["a/NEAR"]
+    assert round(gap_before, 3) == 9.0, "1 мс против 10 мс -- разрыв 9 мс"
+
+    project.set_contact("a", "c2", delay=4.0)
+
+    after = first_spikes(project)
+    assert round(after["a/FAR"] - after["a/NEAR"], 3) == 3.0
+    assert round(before["a/FAR"] - after["a/FAR"], 3) == 6.0
+    assert after["a/NEAR"] == before["a/NEAR"], "ближний приёмник не задет"
+
+
+def test_a_changed_contact_makes_the_result_stale(project, delay):
+    """Задержка -- это физика: прежний прогон после правки уже про другую сеть."""
+    project.insert_pattern(delay, instance_id="a")
+    project.stimulate(
+        SandboxStimulus(
+            id="drive", target=Endpoint("a", "in"), kind="spikes", times=(20.0,)
+        )
+    )
+    project.run()
+    assert not project.run_is_stale
+
+    project.set_contact("a", "c1", weight=3.0)
+    assert project.run_is_stale
+
+
+def test_a_contact_is_undone_in_one_step(project, delay):
+    project.insert_pattern(delay, instance_id="a")
+
+    project.set_contact("a", "c2", delay=4.0)
+    project.undo()
+
+    assert project.sandbox.instance("a").snapshot.body.contacts[1].delay == 10.0
+
+
+def test_contact_parameters_are_checked_the_same_way_as_a_link(project, delay, ffi):
+    """Связь и контакт -- одна вещь: то, что не примут у одной, не примут и у другого.
+
+    Своя таблица допустимого на каждой стороне означала бы, что задержка,
+    отвергнутая у связи холста, спокойно проедет внутрь блока.
+    """
+    project.insert_pattern(delay, instance_id="a")
+    project.insert_pattern(ffi, instance_id="f")
+    project.connect(Endpoint("f", "out"), Endpoint("a", "in"), link_id="x")
+    steps = len(project.history)
+
+    for bad, complaint in (
+        ({"delay": -1.0}, "задержка"),
+        ({"weight": -2.0}, "вес"),
+        ({"receptor": "барабан"}, "рецептор"),
+    ):
+        with pytest.raises(PatternError, match=complaint):
+            project.set_contact("a", "c1", **bad)
+        with pytest.raises(PatternError, match=complaint):
+            project.set_parameters("x", **bad)
+
+    with pytest.raises(PatternError, match="нет параметров"):
+        project.set_contact("a", "c1", colour="red")
+    with pytest.raises(PatternError, match="нет контакта"):
+        project.set_contact("a", "c9")
+    with pytest.raises(PatternError, match="нет блока"):
+        project.set_contact("нет такого", "c1", delay=1.0)
+
+    assert len(project.history) == steps, "отказ не оставляет шага отмены"
+
+
+# --- разбор блока на части (#532) ------------------------------------------
+
+
+@pytest.fixture
+def modulated() -> Pattern:
+    """Паттерн с нейромодулятором: у разбора есть и такая половина."""
+    model, _ = load(
+        (EXAMPLES / "library" / "neuromodulated_plasticity.vnl").read_text(
+            encoding="utf-8"
+        )
+    )
+    return Pattern.from_model(
+        model,
+        id="neuromodulated_plasticity",
+        name="Нейромодулируемая пластичность",
+        status="ready",
+        ports=[
+            Port("in", "in", ir.Site("IN", "soma", 0.5)),
+            Port("reward", "mod", ir.Site("VTA", "soma", 0.5)),
+            Port("out", "out", ir.Site("E", "soma", 0.5)),
+        ],
+    )
+
+
+def test_ungroup_replaces_the_block_with_its_parts(project, ffi):
+    """FFI разбирается на три клетки, три связи и свои типы."""
+    project.insert_pattern(ffi, instance_id="a", position=(300.0, 80.0))
+
+    names = project.ungroup("a")
+
+    sandbox = project.sandbox
+    assert names == ["IN", "E", "I"], "имена без приставки блока"
+    assert sandbox.instances == [], "коробки больше нет"
+    assert sorted(sandbox.neurons) == ["E", "I", "IN"]
+    assert [(link.source.instance, link.target.instance) for link in sandbox.links] == [
+        ("IN", "E"),
+        ("IN", "I"),
+        ("I", "E"),
+    ]
+    assert sorted(sandbox.cell_types) == ["pv", "pyr_l5", "relay"]
+    # Точка на клетке сохранена целиком: контакт FFI приходит на дендрит, и
+    # потерять это значило бы посчитать после разбора другую сеть.
+    assert sandbox.links[0].target.section == "dend.apical[1]"
+    assert sandbox.links[0].target.fraction == 0.6
+    assert project.check() == []
+
+
+def test_ungroup_scatters_the_cells_around_the_block(project, ffi):
+    """Стопка в одной точке выглядит как одна клетка -- её пришлось бы растаскивать."""
+    project.insert_pattern(ffi, instance_id="a", position=(300.0, 80.0))
+
+    project.ungroup("a")
+
+    places = [neuron.position for neuron in project.sandbox.neurons.values()]
+    assert len(set(places)) == 3, "клетки не легли друг на друга"
+    assert all(abs(x - 300.0) <= 200.0 and abs(y - 80.0) <= 200.0 for x, y in places)
+
+
+def test_ungroup_keeps_the_run_spike_for_spike(project, ffi):
+    """Разбор -- смена вида, а не схемы: при том же зерне сеть считается та же.
+
+    Сравниваются моменты каждого разряда, а не их число: сдвиг на один шаг
+    означал бы, что разбор поменял задержку или порядок доставки, и по одному
+    только счётчику это прошло бы незамеченным.
+    """
+    running_project(project, ffi)
+    before = project.run().result.spikes
+
+    project.ungroup("a")
+    after = project.run().result.spikes
+
+    assert set(after) == {name.removeprefix("a/") for name in before}
+    for name, times in after.items():
+        assert times == before[f"a/{name}"], f"{name} спайкает иначе"
+
+
+def test_ungroup_keeps_the_drive_and_the_recording_on_the_same_cell(project, ffi):
+    """Порта после разбора нет, а драйв обязан бить туда же, куда бил."""
+    running_project(project, ffi)
+    project.connect(Endpoint("a", "out"), Endpoint("a/I"), link_id="inner")
+
+    project.ungroup("a")
+
+    sandbox = project.sandbox
+    assert sandbox.stimuli[0].target == Endpoint("IN", None, "soma", 0.5)
+    assert sandbox.recordings[0].target == Endpoint("E", None, "soma", 0.5)
+    inner = next(link for link in sandbox.links if link.id == "inner")
+    assert (inner.source.instance, inner.target.instance) == ("E", "I")
+    assert project.check() == [], "ни один конец не повис"
+
+
+def test_ungroup_does_not_overwrite_the_cells_already_lying_there(project, ffi):
+    """Имена решаются при разборе, а не в `compose` на запуске.
+
+    В `compose` столкновение всплыло бы жалобой «имя занято блоком», и чинить
+    его было бы нечем: в песочнице к тому времени два объекта с одним именем.
+    """
+    relay = ir.CellType(id="relay", tags=("excitatory",))
+    project.add_neuron("IN", relay)
+    project.add_neuron("E", relay)
+    project.insert_pattern(ffi, instance_id="a")
+
+    names = project.ungroup("a")
+
+    assert names == ["IN2", "E2", "I"], "занятые имена обойдены"
+    assert project.sandbox.neurons["IN"].cell_type == "relay"
+    assert project.check() == []
+
+
+def test_ungroup_copies_the_cell_types_deeply(project, ffi):
+    """Иначе правка мембраны после разбора испортила бы соседний блок."""
+    project.insert_pattern(ffi, instance_id="a")
+    project.insert_pattern(ffi, instance_id="b")
+
+    project.ungroup("a")
+    project.set_cell("E", "pyr_l5", v_threshold=-41.0)
+
+    neighbour = project.sandbox.instance("b").snapshot.body.cell_types["pyr_l5"]
+    assert neighbour.point_model.v_threshold == -50.0, "соседний блок не задет"
+    assert project.store is not None
+    library = project.store.load_pattern("ffi").body.cell_types["pyr_l5"]
+    assert library.point_model.v_threshold == -50.0, "библиотека тоже"
+
+
+def test_ungroup_keeps_a_namesake_type_apart(project, ffi):
+    """Одноимённый, но другой тип разводится именем, а не подменяет чужой."""
+    project.add_neuron(
+        "X", ir.CellType(id="pyr_l5", tags=("excitatory",), point_model=ir.PointModel())
+    )
+    project.insert_pattern(ffi, instance_id="a")
+
+    project.ungroup("a")
+
+    assert "pyr_l5_2" in project.sandbox.cell_types
+    assert project.sandbox.neurons["X"].cell_type == "pyr_l5"
+    assert project.sandbox.neurons["E"].cell_type == "pyr_l5_2"
+    assert project.check() == []
+
+
+def test_ungroup_carries_the_modulator_with_its_sources(project, modulated):
+    """Модулятор блока -- часть его механизма, а не украшение схемы."""
+    project.insert_pattern(modulated, instance_id="m")
+
+    project.ungroup("m")
+
+    sandbox = project.sandbox
+    assert "dopamine" in sandbox.modulators
+    assert sandbox.modulators["dopamine"].sources == ("VTA",)
+    governed = [link for link in sandbox.links if link.plasticity.modulator]
+    assert governed and all(
+        link.plasticity.modulator == "dopamine" for link in governed
+    )
+    assert project.check() == []
+
+
+def test_undo_returns_the_block_whole(project, ffi):
+    """Один шаг на всю операцию: отмена возвращает блок, а не рассыпанные клетки."""
+    project.insert_pattern(ffi, instance_id="a")
+    before = project.fingerprint()
+
+    project.ungroup("a")
+    assert project.undo() == "разобран a"
+
+    assert [block.id for block in project.sandbox.instances] == ["a"]
+    assert project.sandbox.neurons == {} and project.sandbox.links == []
+    assert project.fingerprint() == before
+
+
+def test_ungrouped_cells_are_edited_like_ordinary_ones(project, ffi):
+    """После разбора это обычные объекты песочницы: порог, вес, задержка."""
+    running_project(project, ffi)
+    project.ungroup("a")
+
+    project.set_cell("E", "pyr_l5", v_threshold=-58.0)
+    link = next(link for link in project.sandbox.links if link.target.instance == "I")
+    project.set_parameters(link.id, weight=4.0, delay=2.5)
+
+    assert project.sandbox.cell_types["pyr_l5"].point_model.v_threshold == -58.0
+    assert (link.weight, link.delay) == (4.0, 2.5)
+    assert project.check() == []
+
+
+def test_ungroup_refuses_what_is_not_a_block(project, ffi):
+    project.add_neuron("X", ir.CellType(id="relay", tags=("excitatory",)))
+    steps = len(project.history)
+
+    with pytest.raises(PatternError, match="нет блока"):
+        project.ungroup("X")
+    assert len(project.history) == steps, "отказ не оставляет шага отмены"

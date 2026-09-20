@@ -492,6 +492,218 @@ def _slug(name: str) -> str:
     return "".join(out).strip("_") or "block"
 
 
+#: Шаг сетки, которой клетки разобранного блока раскладываются вокруг его
+#: места. Те же числа, которыми интерфейс разводит новые объекты холста
+#: (`free` в `ui/src/state/sandbox.ts`): разобранный блок не должен выглядеть
+#: иначе, чем положенные руками клетки.
+UNGROUP_STEP = (120.0, 90.0)
+
+#: Сколько клеток в ряду. Три -- чтобы блок из трёх лёг строкой, как он и
+#: нарисован в миниатюре, а блок из шести не вытянулся в ленту через весь холст.
+UNGROUP_COLUMNS = 3
+
+
+def ungroup_block(sandbox: Sandbox, block_id: str) -> list[str]:
+    """Блок -> его клетки, контакты и типы обычными объектами песочницы.
+
+    Операция обратная сборке, и половина её давно написана: `compose`
+    разворачивает блок в общую сеть на каждом запуске, а `extract_pattern`
+    собирает паттерн из выбранных объектов. Здесь то же разворачивание, только
+    насовсем и именами холста вместо имён собранной сети.
+
+    Чем это не `fork`: fork кладёт правимую копию в библиотеку, то есть
+    отвечает на вопрос «нужен такой же паттерн, но другой». Здесь вопрос
+    другой -- «от этого блока нужна половина, и прямо в этом проекте», -- и
+    библиотека к нему отношения не имеет.
+
+    Три вещи, которые нельзя сделать иначе:
+
+    - имена раздаёт общий `free_id`, тот же, которым заводят блок и клетку.
+      Коллизии решаются здесь, при разборе, а не в `compose` на запуске: там
+      они всплыли бы жалобой «имя занято блоком», а чинить их было бы уже
+      нечем -- в песочнице к тому времени два объекта с одним именем;
+    - типы клеток копируются глубоко. Ссылка, общая с чужим снимком, означала
+      бы, что правка порога после разбора молча меняет соседний блок того же
+      паттерна, -- ровно то, ради чего экземпляр и хранит снимок;
+    - связи, стимулы и записи, смотревшие в порт блока, переписываются на
+      точку соответствующей клетки. Потерять драйв при разборе нельзя: сеть
+      после него обязана считать то же самое, а порта, на котором висел
+      стимул, больше не существует.
+
+    Возвращает имена, которые получили клетки блока, -- в том порядке, в каком
+    они лежали внутри.
+    """
+    block = sandbox.instance(block_id)  # проверка до первой правки
+    inner = block.snapshot.body
+
+    # Блок убирается сразу: его имя освобождается, и клетка, названная как он,
+    # может его занять. Порт после этого разобрать уже нечем, поэтому ниже
+    # спрашивается сам снимок (`block.site_of`), а не `resolve_endpoint`.
+    sandbox.instances = [item for item in sandbox.instances if item.id != block_id]
+
+    types = {
+        type_id: _adopt_type(sandbox, type_id, cell_type)
+        for type_id, cell_type in inner.cell_types.items()
+    }
+
+    names: dict[str, str] = {}
+    places = _around(block.position, len(inner.instances))
+    for (neuron_id, neuron), position in zip(inner.instances.items(), places):
+        chosen = sandbox.free_id(neuron_id)
+        names[neuron_id] = chosen
+        sandbox.neurons[chosen] = SandboxNeuron(
+            id=chosen,
+            cell_type=types.get(neuron.cell_type, neuron.cell_type),
+            tags=tuple(neuron.tags),
+            position=position,
+        )
+
+    modulators: dict[str, str] = {}
+    for mod_id, modulator in inner.modulators.items():
+        chosen = _unique(mod_id, sandbox.modulators)
+        modulators[mod_id] = chosen
+        sandbox.modulators[chosen] = replace(
+            copy.deepcopy(modulator),
+            id=chosen,
+            sources=tuple(names.get(name, name) for name in modulator.sources),
+        )
+
+    # Сначала переписываются те концы, что смотрели в блок, и только потом
+    # добавляются новые связи: иначе клетка, занявшая освободившееся имя
+    # блока, попала бы под ту же перепись во второй раз.
+    for link in sandbox.links:
+        link.source = _rewired(link.source, block, names)
+        link.target = _rewired(link.target, block, names)
+    for stimulus in sandbox.stimuli:
+        stimulus.target = _rewired(stimulus.target, block, names)
+    for recording in sandbox.recordings:
+        recording.target = _rewired(recording.target, block, names)
+
+    taken = {link.id for link in sandbox.links}
+    for contact in inner.contacts:
+        link_id = _unique(contact.id, taken)
+        taken.add(link_id)
+        plasticity = copy.deepcopy(contact.plasticity)
+        if plasticity.modulator in modulators:
+            plasticity.modulator = modulators[plasticity.modulator]
+        sandbox.links.append(
+            Link(
+                id=link_id,
+                source=_point(contact.pre, names),
+                target=_point(contact.post, names),
+                receptor=contact.receptor,
+                weight=contact.weight,
+                delay=contact.delay,
+                dynamics=copy.deepcopy(contact.dynamics),
+                plasticity=plasticity,
+            )
+        )
+
+    sandbox.updated_at = _now()
+    return [names[neuron_id] for neuron_id in inner.instances]
+
+
+def _adopt_type(sandbox: Sandbox, type_id: str, cell_type: ir.CellType) -> str:
+    """Тип клетки из снимка -- в словарь песочницы. Копией, а не ссылкой.
+
+    Одноимённый, но другой тип разводится новым именем -- тем же правилом, что
+    и в `compose._adopt_cell_type`: молча подменить чужую мембрану своей хуже,
+    чем получить в проекте `pyr_l5_2`. Одноимённый и такой же переиспользуется:
+    два одинаковых типа под разными именами -- это две правды об одной клетке.
+    """
+    existing = sandbox.cell_types.get(type_id)
+    if existing is None:
+        sandbox.cell_types[type_id] = copy.deepcopy(cell_type)
+        return type_id
+    if existing == cell_type:
+        return type_id
+    counter = 2
+    while True:
+        unique = f"{type_id}_{counter}"
+        taken = sandbox.cell_types.get(unique)
+        if taken is None:
+            sandbox.cell_types[unique] = copy.deepcopy(cell_type)
+            return unique
+        if taken == cell_type:
+            return unique
+        counter += 1
+
+
+def _around(centre: tuple[float, float], count: int) -> list[tuple[float, float]]:
+    """Места клеток разобранного блока -- сеткой вокруг места самого блока.
+
+    Вокруг, а не в одну точку: стопка из трёх клеток на месте коробки выглядит
+    как одна клетка, и, прежде чем станет видно, что получилось, её пришлось бы
+    растаскивать мышью.
+
+    Сетка, а не кольцо: у блока из двух клеток кольцо вырождается в отрезок, а
+    у блока из восьми превращается в хоровод, по которому не прочесть, кто с
+    кем связан. Раскладку по-настоящему считает ELK, но она живёт в
+    интерфейсе и на схеме, а здесь нужно всего лишь не свалить клетки в кучу.
+    """
+    step_x, step_y = UNGROUP_STEP
+    columns = min(UNGROUP_COLUMNS, max(count, 1))
+    rows = -(-count // columns) if count else 1
+    places: list[tuple[float, float]] = []
+    for index in range(count):
+        column, row = index % columns, index // columns
+        places.append(
+            (
+                centre[0] + (column - (columns - 1) / 2) * step_x,
+                centre[1] + (row - (rows - 1) / 2) * step_y,
+            )
+        )
+    return places
+
+
+def _point(site: ir.Site, names: dict[str, str]) -> Endpoint:
+    """Точка внутри снимка -> конец связи песочницы. Порта у неё нет.
+
+    Портов не заводится намеренно: порт -- объявленная автором паттерна дверь
+    наружу, а разобранный блок наружу больше ничем не смотрит -- у него нет
+    ни внутри, ни снаружи.
+    """
+    return Endpoint(
+        instance=names.get(site.instance, site.instance),
+        section=site.section,
+        fraction=site.fraction,
+    )
+
+
+def _rewired(
+    endpoint: Endpoint, block: PatternInstance, names: dict[str, str]
+) -> Endpoint:
+    """Конец связи, смотревший в блок, -> тот же конец на его клетке.
+
+    Оба вида адреса ведут в одну точку: порт (`ffi.in`) спрашивается у снимка,
+    внутренний узел (`ffi/I`) уже назван именем нейрона. Чужие концы
+    возвращаются как есть -- сравнивать имена напрямую нельзя, `ffi/I` не равно
+    `ffi`, поэтому спрашивается владелец (`owner_of`).
+
+    Блок без порта (`Endpoint("ffi")`) сюда попадает адресом, которого и до
+    разбора не существовало: `compose` жаловался на него «источник в сети
+    отсутствует». Он и остаётся прежним -- чинить чужую поломку разбором
+    значило бы угадывать, какую из клеток блока имели в виду.
+    """
+    if owner_of(endpoint.instance) != block.id:
+        return endpoint
+    if endpoint.is_port:
+        site = block.site_of(endpoint.port or "")
+        return Endpoint(
+            instance=names.get(site.instance, site.instance),
+            section=site.section,
+            fraction=site.fraction,
+        )
+    _, _, inner_id = endpoint.instance.partition(NESTED)
+    if not inner_id:
+        return endpoint
+    return Endpoint(
+        instance=names.get(inner_id, inner_id),
+        section=endpoint.section,
+        fraction=endpoint.fraction,
+    )
+
+
 def extract_pattern(
     sandbox: Sandbox,
     selection: list[str],

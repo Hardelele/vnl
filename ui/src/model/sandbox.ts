@@ -16,6 +16,7 @@ import type {
   RecordedVar,
   RunSpec,
   Scheme,
+  Site,
 } from './types'
 
 /** Конец связи: порт блока или точка отдельного нейрона. */
@@ -53,6 +54,25 @@ export interface SandboxCell {
   pointModel: PointModel
 }
 
+/**
+ * Контакт внутри снимка блока.
+ *
+ * Поля те же, что у `SandboxLink`, потому что вещь одна: связь холста и
+ * контакт блока различаются только адресом -- у связи это объекты холста
+ * (`ffi.out`), здесь точки снимка (`IN.soma`). Приставки экземпляра в адресе
+ * нет: правится снимок, а не собранная сеть, -- и снимок у каждого блока свой,
+ * поэтому правка не задевает ни соседний блок, ни библиотеку.
+ */
+export interface SandboxContact {
+  id: string
+  pre: Site
+  post: Site
+  receptor: string
+  inhibitory: boolean
+  weight: number
+  delay: number
+}
+
 export interface SandboxBlock {
   id: string
   patternId: string
@@ -62,6 +82,7 @@ export interface SandboxBlock {
   counts: { neurons: number; contacts: number }
   scheme: Scheme
   cells: SandboxCell[]
+  contacts: SandboxContact[]
 }
 
 /**
@@ -222,13 +243,43 @@ export function connect(
   return send<SandboxState>(`${at(id)}/links`, 'POST', { source, target })
 }
 
+/**
+ * Что правится у связи -- и у контакта внутри блока.
+ *
+ * Один тип на оба случая нарочно: связь и контакт -- одна вещь с разными
+ * адресами, и два набора полей означали бы, что «вес» внутри блока значит не
+ * то же самое, что снаружи.
+ */
+export type ContactParams = { weight?: number; delay?: number; receptor?: string }
+
 export function setLinkParams(
   id: string,
   link: string,
-  params: { weight?: number; delay?: number; receptor?: string },
+  params: ContactParams,
 ): Promise<SandboxState> {
   return send<SandboxState>(
     `${at(id)}/links/${encodeURIComponent(link)}`,
+    'PATCH',
+    params,
+  )
+}
+
+/**
+ * Параметры контакта внутри блока (#531).
+ *
+ * Адрес объекта такой же, как у мембраны (`objects/<блок>/...`): панель
+ * свойств одного блока не должна ходить по двум разным семействам путей.
+ * Правится снимок экземпляра -- ни соседний блок того же паттерна, ни
+ * библиотека не меняются.
+ */
+export function setContactParams(
+  id: string,
+  object: string,
+  contact: string,
+  params: ContactParams,
+): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/objects/${encodeURIComponent(object)}/contacts/${encodeURIComponent(contact)}`,
     'PATCH',
     params,
   )
@@ -317,6 +368,20 @@ export function addStimulus(id: string, target: EndpointRef): Promise<SandboxSta
 
 export function addRecording(id: string, target: EndpointRef): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/recordings`, 'POST', { target })
+}
+
+/**
+ * Разобрать блок: вместо коробки -- его клетки, связи и типы (#532).
+ *
+ * Операция обратная вставке паттерна. Тела у запроса нет: разбирают блок
+ * целиком, а имена клеткам подбирает сервер -- он один знает, что в проекте
+ * уже занято, и столкновение всплыло бы иначе только на запуске.
+ */
+export function ungroupBlock(id: string, object: string): Promise<SandboxState> {
+  return send<SandboxState>(
+    `${at(id)}/objects/${encodeURIComponent(object)}/ungroup`,
+    'POST',
+  )
 }
 
 export function removeObject(id: string, object: string): Promise<SandboxState> {

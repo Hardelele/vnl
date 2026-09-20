@@ -31,11 +31,14 @@ import {
   save,
   saveAsPattern,
   setCellParams,
+  setContactParams,
   setLinkParams,
   setRecordingVar,
   setRunParams,
   setStimulusParams,
   undo,
+  ungroupBlock,
+  type ContactParams,
   type DriveParams,
   type PatternDraft,
   type SandboxRow,
@@ -129,6 +132,7 @@ export interface SandboxPorts {
   addNeuron: typeof addNeuron
   connect: typeof connect
   params: typeof setLinkParams
+  contact: typeof setContactParams
   rename: typeof renameBlock
   cell: typeof setCellParams
   move: typeof moveObject
@@ -137,6 +141,7 @@ export interface SandboxPorts {
   record: typeof addRecording
   recordVar: typeof setRecordingVar
   run: typeof setRunParams
+  ungroup: typeof ungroupBlock
   remove: typeof removeObject
   undo: typeof undo
   save: typeof save
@@ -152,6 +157,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   addNeuron,
   connect,
   params: setLinkParams,
+  contact: setContactParams,
   rename: renameBlock,
   cell: setCellParams,
   move: moveObject,
@@ -160,6 +166,7 @@ const DEFAULT_PORTS: SandboxPorts = {
   record: addRecording,
   recordVar: setRecordingVar,
   run: setRunParams,
+  ungroup: ungroupBlock,
   remove: removeObject,
   undo,
   save,
@@ -332,8 +339,19 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
     move: (object: string, position: [number, number]) =>
       act((id) => io.move(id, object, position)),
 
-    setParams: (link: string, params: { weight?: number; delay?: number; receptor?: string }) =>
+    setParams: (link: string, params: ContactParams) =>
       act((id) => io.params(id, link, params)),
+
+    /**
+     * Параметры контакта внутри блока (#531).
+     *
+     * Отдельная операция, а не `setParams` с другим адресом: связь песочницы
+     * живёт в `sandbox.links`, а контакт -- в снимке экземпляра, и маршруты у
+     * них разные. Поля при этом те же: связь есть связь, где бы она ни была
+     * нарисована.
+     */
+    setContact: (block: string, contact: string, params: ContactParams) =>
+      act((id) => io.contact(id, block, contact, params)),
 
     /** Подпись блока. Пустую не отправляем: сервер её всё равно не примет. */
     rename(block: string, label: string): Promise<void> {
@@ -358,6 +376,19 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
       act((id) => io.recordVar(id, recording, variable)),
 
     setRun: (params: Partial<RunSpec>) => act((id) => io.run(id, params)),
+
+    /**
+     * Разобрать блок на клетки и связи (#532).
+     *
+     * Выделение снимается: блока с этим именем больше нет, и панель свойств
+     * показывала бы пустоту. Раскрытие тоже забывается -- раскрывать стало
+     * нечего.
+     */
+    ungroup: (block: string) =>
+      act((id) => io.ungroup(id, block), {
+        selected: null,
+        opened: store.getState().opened.filter((item) => item !== block),
+      }),
 
     remove: (object: string) => act((id) => io.remove(id, object), { selected: null }),
 

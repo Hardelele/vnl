@@ -43,6 +43,7 @@ from .patterns import (
     extract_pattern,
     suggest_ports,
     touches,
+    ungroup_block,
 )
 from .sim import SimResult, simulate
 from .store import Store, to_plain
@@ -66,6 +67,31 @@ CELL_POSITIVE = ("tau_m", "tau_adaptation", "r_in")
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _check_contact_params(params: dict[str, Any]) -> None:
+    """Рецептор, вес и задержка -- проверка одна на связь холста и на контакт.
+
+    Общая нарочно. Связь песочницы и контакт внутри блока -- одна вещь с двумя
+    адресами (`patterns.Link` и есть `ir.Contact`, адресованный объектами
+    холста), и две таблицы допустимого разошлись бы на первой же правке: то,
+    что не примут у связи, молча проехало бы внутрь блока.
+
+    Задержка отрицательной не бывает: симулятор сдвигает приход события на
+    `delay` вперёд, и минус означал бы, что проводимость открылась раньше
+    спайка. Отрицательный вес -- не торможение: знак задаёт рецептор через
+    реверсал (`ir.RECEPTORS`), а вес меньше нуля дал бы возбуждающий синапс,
+    тянущий клетку от порога, -- ровно то, чего в модели нет.
+    """
+    if "receptor" in params and params["receptor"] not in ir.RECEPTORS:
+        raise PatternError(
+            f"рецептор {params['receptor']!r} неизвестен: "
+            f"{', '.join(ir.RECEPTORS)}"
+        )
+    if "delay" in params and float(params["delay"]) < 0:
+        raise PatternError("задержка не бывает отрицательной")
+    if "weight" in params and float(params["weight"]) < 0:
+        raise PatternError("вес не бывает отрицательным: знак задаёт рецептор")
 
 
 @dataclass
@@ -215,11 +241,40 @@ class Project:
         unknown = [key for key in params if not hasattr(link, key)]
         if unknown:
             raise PatternError(f"у связи нет параметров: {', '.join(unknown)}")
+        _check_contact_params(params)
         self._remember(f"параметры связи {link_id}")
         link = self._link(link_id)  # после снимка объект тот же
         for key, value in params.items():
             setattr(link, key, value)
         return link
+
+    def set_contact(self, block_id: str, contact_id: str, **params: Any) -> ir.Contact:
+        """Параметры контакта внутри блока: рецептор, вес, задержка.
+
+        Правится снимок экземпляра, а не библиотечный паттерн, -- ровно так
+        же, как уже устроен порог (`set_cell`). Снимок у каждого блока свой,
+        поэтому два экземпляра одного паттерна расходятся свободно, а
+        библиотеку правка не задевает вовсе. Без этой операции в «задержке
+        проведения» нельзя потрогать те самые `delay = 1 мс` и `delay = 10 мс`,
+        в которых весь смысл паттерна: снимок правился только мембраной.
+
+        Отдельного понятия «параметры контакта» здесь не заводится: проверки
+        общие со связью холста (`_check_contact_params`) -- связь и контакт
+        одна и та же вещь, у которой различается только адрес. Альтернатива --
+        своя проверка на каждой стороне -- означала бы, что задержка, которую
+        не примут у связи, спокойно проедет внутрь блока.
+        """
+        contact = self._contact(block_id, contact_id)
+        unknown = [key for key in params if not hasattr(contact, key)]
+        if unknown:
+            raise PatternError(f"у контакта нет параметров: {', '.join(unknown)}")
+        _check_contact_params(params)
+
+        self._remember(f"контакт {contact_id} в {block_id}")
+        contact = self._contact(block_id, contact_id)  # после снимка объект тот же
+        for key, value in params.items():
+            setattr(contact, key, value)
+        return contact
 
     def rename(self, block_id: str, label: str) -> PatternInstance:
         """Подпись блока на холсте.
@@ -379,6 +434,28 @@ class Project:
         sandbox.recordings = [
             r for r in sandbox.recordings if not touches(r.target, object_id)
         ]
+
+    def ungroup(self, block_id: str) -> list[str]:
+        """Разобрать блок: вместо коробки -- его клетки, связи и типы (#532).
+
+        Операция обратная вставке паттерна и симметричная `extract`: та
+        собирает паттерн из выбранного, эта раскладывает блок обратно. Нужна
+        там, где от паттерна нужна половина или его надо переделать на месте:
+        `fork` на этот вопрос не отвечает -- он кладёт правимую копию в
+        библиотеку, а речь про этот проект.
+
+        Шаг отмены один на всю операцию, поэтому «Отменить» возвращает блок
+        целиком, а не оставляет рассыпанные клетки: история хранит снимок
+        состояния, и снимается он здесь один раз -- до первой правки.
+
+        Само разворачивание живёт в `patterns.ungroup_block` рядом с `free_id`
+        и `extract_pattern`: имена холста раздаются там же, где раздаются имена
+        блокам и клеткам, и второе место, решающее «свободно ли имя», разошлось
+        бы с первым.
+        """
+        self.sandbox.instance(block_id)  # проверка до снимка истории
+        self._remember(f"разобран {block_id}")
+        return ungroup_block(self.sandbox, block_id)
 
     def stimulate(self, stimulus: SandboxStimulus) -> SandboxStimulus:
         self._remember(f"стимул {stimulus.id}")
@@ -548,6 +625,22 @@ class Project:
             if link.id == link_id:
                 return link
         raise PatternError(f"связи {link_id!r} нет")
+
+    def _contact(self, block_id: str, contact_id: str) -> ir.Contact:
+        """Контакт внутри снимка блока.
+
+        Ищется в `snapshot.body`, а не в собранной сети: в ней у контакта уже
+        приставка экземпляра (`ffi/c1`) и он копия -- правка такой копии
+        пропала бы при следующей сборке.
+        """
+        block = self.sandbox.instance(block_id)
+        for contact in block.snapshot.body.contacts:
+            if contact.id == contact_id:
+                return contact
+        known = ", ".join(c.id for c in block.snapshot.body.contacts) or "контактов нет"
+        raise PatternError(
+            f"в блоке {block_id!r} нет контакта {contact_id!r} ({known})"
+        )
 
     def _stimulus(self, stimulus_id: str) -> SandboxStimulus:
         for stimulus in self.sandbox.stimuli:

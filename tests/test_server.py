@@ -732,6 +732,47 @@ def test_removing_a_block_takes_its_links(base):
     assert after["links"] == [], "связь висела на удалённом блоке"
 
 
+def test_a_block_is_taken_apart_into_cells_and_links(base):
+    """Разбор -- смена вида, а не схемы: ответ отдаёт песочницу целиком (#532)."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    ask(
+        base,
+        "POST",
+        f"/api/sandboxes/{sandbox}/stimuli",
+        {"target": {"instance": first, "port": "in"}},
+    )
+    _, before = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+
+    status, after = ask(
+        base, "POST", f"/api/sandboxes/{sandbox}/objects/{first}/ungroup"
+    )
+    assert status == 200
+    assert [block["id"] for block in after["blocks"]] == [second]
+    assert sorted(neuron["id"] for neuron in after["neurons"]) == ["E", "I", "IN"]
+    assert len(after["links"]) == 3
+    assert after["problems"] == []
+    # Драйв бил в порт `in`, то есть в IN, -- туда же он бьёт и теперь.
+    assert after["stimuli"][0]["target"]["instance"] == "IN"
+    assert after["stimuli"][0]["target"]["port"] is None
+    # Тормозная клетка осталась тормозной: тип приехал вместе с ней.
+    assert next(item for item in after["neurons"] if item["id"] == "I")["inhibitory"]
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert [block["id"] for block in undone["blocks"]] == [first, second]
+    assert undone["neurons"] == [] and len(undone["links"]) == 0
+    assert undone["fingerprint"] == before["fingerprint"], "отмена вернула ту же сеть"
+
+
+def test_ungroup_refuses_what_is_not_a_block(base):
+    sandbox = sandbox_with_two_blocks(base)
+    ask(base, "POST", f"/api/sandboxes/{sandbox}/neurons", {"cell": "pyr"})
+
+    assert ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/pyr/ungroup")[0] == 400
+    assert ask(base, "POST", f"/api/sandboxes/{sandbox}/objects/нет/ungroup")[0] == 400
+
+
 def test_saving_puts_the_project_on_disk(base, tmp_path):
     sandbox = sandbox_with_two_blocks(base)
     _, saved = ask(base, "POST", f"/api/sandboxes/{sandbox}/save")
@@ -842,6 +883,80 @@ def test_cell_parameters_change_one_block_at_a_time(base):
 def threshold(block, type_id: str) -> float:
     cell = next(item for item in block["cells"] if item["type"] == type_id)
     return cell["pointModel"]["vThreshold"]
+
+
+def test_a_block_carries_the_contacts_of_its_snapshot(base):
+    """Чтобы контакт правился, нужен его адрес, рецептор, вес и задержка (#531).
+
+    Раньше у блока ехали только `scheme` и `counts`: по ним видно, кто с кем
+    связан, но не за что взяться. Поля те же, что у связи песочницы, -- связь и
+    контакт одна вещь с разными адресами.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    contacts = project["blocks"][0]["contacts"]
+
+    assert [contact["id"] for contact in contacts] == ["c1", "c2", "c3"]
+    inhibitory = next(item for item in contacts if item["id"] == "c3")
+    assert inhibitory["pre"]["instance"] == "I", "адрес -- точка снимка, без приставки"
+    assert inhibitory["post"]["instance"] == "E"
+    assert inhibitory["receptor"] == "gaba_a"
+    assert inhibitory["inhibitory"] is True, "тормозность считает сервер"
+    assert (inhibitory["weight"], inhibitory["delay"]) == (0.9, 1.4)
+
+    link = {"id", "source", "target", "receptor", "inhibitory", "weight", "delay"}
+    assert set(contacts[0]) - {"pre", "post"} == link - {"source", "target"}
+
+
+def test_a_contact_is_changed_one_block_at_a_time(base):
+    """Снимок у экземпляра свой, поэтому задержка правится поблочно."""
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first, second = (block["id"] for block in project["blocks"])
+    before = project["fingerprint"]
+
+    status, changed = ask(
+        base,
+        "PATCH",
+        f"/api/sandboxes/{sandbox}/objects/{first}/contacts/c3",
+        {"delay": 4.0, "weight": 2.5, "receptor": "gaba_b"},
+    )
+    assert status == 200
+    edited, untouched = changed["blocks"]
+    assert contact_of(edited, "c3")["delay"] == 4.0
+    assert contact_of(edited, "c3")["weight"] == 2.5
+    assert contact_of(edited, "c3")["receptor"] == "gaba_b"
+    assert contact_of(untouched, "c3")["delay"] == 1.4, "второй экземпляр не задет"
+    assert changed["fingerprint"] != before, "задержка -- это физика"
+    assert ask(base, "GET", "/api/patterns/ffi?body=1")[1]["body"]["contacts"][2][
+        "delay"
+    ] == 1.4, "библиотека не задета"
+
+    _, undone = ask(base, "POST", f"/api/sandboxes/{sandbox}/undo")
+    assert contact_of(undone["blocks"][0], "c3")["delay"] == 1.4
+    assert undone["fingerprint"] == before, "отмена вернула прежнюю сеть"
+
+
+def test_a_bad_contact_is_refused_the_same_way_as_a_bad_link(base):
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    at = f"/api/sandboxes/{sandbox}/objects/{first}/contacts/c1"
+
+    assert ask(base, "PATCH", at, {})[0] == 400
+    assert ask(base, "PATCH", at, {"delay": -1})[0] == 400
+    assert ask(base, "PATCH", at, {"weight": -1})[0] == 400
+    assert ask(base, "PATCH", at, {"receptor": "барабан"})[0] == 400
+    bad = f"/api/sandboxes/{sandbox}/objects/{first}/contacts/c9"
+    assert ask(base, "PATCH", bad, {"delay": 2})[0] == 400
+    # У отдельной клетки контактов нет: маршрут про объект, но контакт бывает
+    # только у блока, и отказ обязан это сказать, а не промолчать.
+    nowhere = f"/api/sandboxes/{sandbox}/objects/нет/contacts/c1"
+    assert ask(base, "PATCH", nowhere, {"delay": 2})[0] == 400
+
+
+def contact_of(block, contact_id: str):
+    return next(item for item in block["contacts"] if item["id"] == contact_id)
 
 
 def test_a_stimulus_is_editable_after_it_is_created(base):

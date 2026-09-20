@@ -516,6 +516,34 @@ def _block_cells(block: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _block_contacts(block: Any) -> list[dict[str, Any]]:
+    """Контакты снимка блока -- теми же полями, что и связь песочницы (#531).
+
+    Состав полей один, потому что вещь одна: связь холста и контакт внутри
+    блока различаются только адресом -- у связи он в объектах холста
+    (`ffi.out`), здесь в точках снимка (`IN.soma`). Завести для внутреннего
+    контакта свой набор полей значило бы объявить, что «вес» и «задержка»
+    внутри блока означают что-то другое.
+
+    Приставки экземпляра (`ffi/c1`) тут нет намеренно: правится снимок, а не
+    собранная сеть, и адрес обязан совпадать с тем, который примет
+    `Project.set_contact`. `dynamics` и `plasticity` не отдаются: их в панели
+    не правят, а `scheme` рядом уже сказала, кто с кем связан.
+    """
+    return [
+        {
+            "id": contact.id,
+            "pre": _site(contact.pre),
+            "post": _site(contact.post),
+            "receptor": contact.receptor,
+            "inhibitory": ir.is_inhibitory_receptor(contact.receptor),
+            "weight": contact.weight,
+            "delay": contact.delay,
+        }
+        for contact in block.snapshot.body.contacts
+    ]
+
+
 def sandbox_payload(project: Any) -> dict[str, Any]:
     """Всё состояние песочницы одним куском.
 
@@ -542,6 +570,7 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 },
                 "scheme": scheme_payload(block.snapshot.body),
                 "cells": _block_cells(block),
+                "contacts": _block_contacts(block),
             }
             for block in sandbox.instances
         ],
