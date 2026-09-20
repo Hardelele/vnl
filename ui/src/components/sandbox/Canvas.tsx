@@ -122,6 +122,12 @@ import {
 import { chargeFill, chargeLabel, momentOf } from '../../lib/charge'
 import { capLine, tipPoints } from '../../lib/marker'
 import {
+  NO_GLOSSARY,
+  driveBrief,
+  driveWindow,
+  recordedName,
+} from '../../model/glossary'
+import {
   edgePath,
   miniature,
   type ArcBox,
@@ -132,8 +138,14 @@ import {
 import { CELLS, LINKS, counted } from '../../lib/plural'
 import { schemeField, wire, type Point, type WireEnd, type WirePlace } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
-import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
-import type { CellKind } from '../../model/types'
+import type {
+  SandboxBlock,
+  SandboxDrive,
+  SandboxLink,
+  SandboxNeuron,
+  SandboxRecording,
+} from '../../model/sandbox'
+import type { CellKind, Glossary } from '../../model/types'
 import type { CanvasView, Pending, Selection } from '../../state/sandbox'
 import './canvas.css'
 
@@ -165,6 +177,28 @@ const PAD = { height: 20, inset: 6 }
 /** Ширина плашек с постоянной подписью: «▴ свернуть» и «разобрать на клетки». */
 const SHUT_WIDTH = 68
 const BREAK_WIDTH = 124
+
+/**
+ * Знак драйва и записи у цели (#502).
+ *
+ * `GAP` -- от края фигуры до острия: у порта кружок радиусом 5, и остриё
+ * обязано прийти в него, а не в пустоту рядом. `LEN` -- длина самой линии
+ * знака: короче она не читается стрелкой, длиннее спорит со связями.
+ * `STACK` -- шаг, которым знаки расходятся по высоте, когда на одну точку
+ * смотрят двое: у модуляторного порта бывает и драйв, и запись.
+ */
+const MARK = { gap: 9, len: 13, stack: 15 }
+/**
+ * Ширина знака подписи порта: ею знак отодвигается за имя порта.
+ *
+ * Имена портов нарисованы тем же 9-пиксельным моноширинным кеглем
+ * (`.cv-port-name`), и ширина знака в нём постоянна -- на то он и
+ * моноширинный. Мерить текст по-настоящему (`getComputedTextLength`) можно
+ * было бы только после отрисовки, то есть на кадр позже, и знак дёргался бы
+ * на каждом движении. Промах в пару пикселей здесь ничего не стоит: знак
+ * стоит на отступе, а не впритык.
+ */
+const GLYPH = 5.4
 
 /**
  * Пределы приближения.
@@ -205,6 +239,29 @@ export interface CanvasProps {
   blocks: SandboxBlock[]
   neurons: SandboxNeuron[]
   links: SandboxLink[]
+  /**
+   * Драйв и записи проекта -- то, без чего схема на холсте не полна (#502).
+   *
+   * Прежде холст их не получал вовсе, и нарисовать не мог физически. Между
+   * тем драйв -- единственное, от чего собранная сеть оживает: в теле
+   * паттерна стимулы запрещены, значит внешний вход человек обязан добавить
+   * сам, -- и не видеть его там, где он смотрит на схему, значит не видеть
+   * главного условия эксперимента.
+   *
+   * Необязательны: холст рисуется и там, где проекта ещё нет.
+   */
+  stimuli?: SandboxDrive[]
+  recordings?: SandboxRecording[]
+  /**
+   * Длительность прогона -- ради окна работы драйва.
+   *
+   * Окно показывается, только если оно короче прогона: драйв на весь прогон
+   * это умолчание, и писать про него нечего. Сравнивать не с чем без этого
+   * числа, а выдумывать его здесь нельзя -- оно часть проекта.
+   */
+  duration?: number
+  /** Расшифровка подписей: ею считаются числа знака и его объяснение (#541). */
+  glossary?: Glossary
   cells: Record<string, CellState>
   /**
    * Каталог типов клеток -- ради `note` (#541). На холсте клетка подписана
@@ -222,6 +279,15 @@ export interface CanvasProps {
   onPickBlock: (id: string) => void
   onPickNeuron: (id: string) => void
   onPickLink: (id: string) => void
+  /**
+   * Щелчок по знаку драйва или записи -- то же, что щелчок по связи (#502).
+   *
+   * Знак выбирает свой объект и открывает его в панели свойств: `DriveProps`
+   * и `RecordProps` там уже есть, и заводить ради холста второй способ
+   * править стимул было бы не нужно.
+   */
+  onPickDrive?: (id: string) => void
+  onPickRecord?: (id: string) => void
   /**
    * Конец связи: порт блока, точка клетки или внутренний узел блока.
    *
@@ -393,6 +459,49 @@ export function endpointEnd(
 }
 
 /**
+ * С какой стороны от цели стоит внешний знак: -1 слева, +1 справа.
+ *
+ * У порта -- с той, на которой он нарисован: входы слева, выходы и
+ * модуляторы справа. Иначе знак пришёл бы к порту через всю коробку.
+ *
+ * У клетки и у внутреннего узла порта нет, и сторону выбирает сам знак:
+ * драйв приходит слева, запись уходит вправо. Это то же чтение слева
+ * направо, которым на холсте идут связи, -- вход с той стороны, откуда
+ * приходят, выход с той, куда уходят. У клетки на правом краю ещё и сома,
+ * то есть единственная её дверь наружу, и щуп записи стоит рядом с ней.
+ */
+export function markSide(
+  endpoint: { instance: string; port: string | null },
+  blocks: SandboxBlock[],
+  fallback: -1 | 1,
+): -1 | 1 {
+  const block = blocks.find((item) => item.id === endpoint.instance)
+  const port = endpoint.port
+    ? block?.ports.find((item) => item.name === endpoint.port)
+    : undefined
+  if (!port) return fallback
+  return port.direction === 'in' ? -1 : 1
+}
+
+/**
+ * Насколько знак отодвинут от края фигуры.
+ *
+ * У порта -- за его имя: оно нарисовано снаружи коробки, ровно там, куда
+ * иначе встал бы знак, и две надписи легли бы одна на другую. У клетки
+ * снаружи не написано ничего, и отодвигать не за что.
+ */
+function markInset(
+  endpoint: { instance: string; port: string | null },
+  blocks: SandboxBlock[],
+): number {
+  const block = blocks.find((item) => item.id === endpoint.instance)
+  const port = endpoint.port
+    ? block?.ports.find((item) => item.name === endpoint.port)
+    : undefined
+  return port ? 9 + port.name.length * GLYPH : 0
+}
+
+/**
  * Имя блока в одну строку: длинное вылезает за коробку, а коробка фиксирована.
  *
  * Предел в 18 знаков был взят на глаз и на глаз же промахивался: имя из
@@ -412,6 +521,10 @@ export function Canvas({
   blocks,
   neurons,
   links,
+  stimuli = [],
+  recordings = [],
+  duration = Infinity,
+  glossary = NO_GLOSSARY,
   cells,
   palette = [],
   selected,
@@ -420,6 +533,8 @@ export function Canvas({
   onPickBlock,
   onPickNeuron,
   onPickLink,
+  onPickDrive,
+  onPickRecord,
   onPickEndpoint,
   onMove,
   onToggleBlock,
@@ -756,6 +871,46 @@ export function Canvas({
   }
 
   /**
+   * Знаки драйва и записи, разведённые по высоте (#502).
+   *
+   * Считаются одним списком на оба рода, потому что мешают они друг другу
+   * именно вместе: на модуляторный порт вешают и драйв, и запись, и два
+   * знака на одной высоте легли бы один на другой. Ряд считается по стороне
+   * и по точке, а не по объекту холста: у коробки пять портов, и знаки на
+   * разных портах расходиться не должны -- они и так на разной высоте.
+   *
+   * Знак без цели не рисуется: стимул на порт, которого в блоке нет, в
+   * проекте остаётся законным объектом (блок могли заменить), и своя строка
+   * в дереве объектов у него есть. На холсте ему просто не к чему прийти.
+   */
+  const marks = useMemo(() => {
+    const rows = new Map<string, number>()
+    const place = (
+      endpoint: { instance: string; port: string | null },
+      fallback: -1 | 1,
+    ): ReturnType<typeof markPlace> | null => {
+      const end = endpointEnd(endpoint, blocks, neurons, positionOf, insides)
+      if (!end) return null
+      const side = markSide(endpoint, blocks, fallback)
+      const key = `${Math.round(end.x)}|${Math.round(end.y)}|${side}`
+      const row = rows.get(key) ?? 0
+      rows.set(key, row + 1)
+      return markPlace(end, side, markInset(endpoint, blocks), row)
+    }
+
+    const drives = stimuli.map((drive) => ({
+      drive,
+      place: place(drive.target, -1),
+    }))
+    const probes = recordings.map((record) => ({
+      record,
+      place: place(record.target, 1),
+    }))
+    return { drives, probes }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stimuli, recordings, blocks, neurons, insides, drag])
+
+  /**
    * «Вписать»: показать всю схему целиком.
    *
    * Нужна затем же, зачем «целиком» на таймлайне: уехав прокруткой в угол
@@ -777,6 +932,26 @@ export function Canvas({
         height: DOT.height,
       })
     }
+    // Знаки драйва и записи стоят снаружи фигур и в «вписать» считаются
+    // наравне с ними (#502): вместить схему, у которой подпись драйва
+    // осталась за краем окна, значит не вместить схему. Ширина подписи
+    // прикидывается по числу знаков -- кегль моноширинный, и мерить её
+    // по-настоящему можно было бы только после отрисовки, то есть на кадр
+    // позже.
+    const around = (place: ReturnType<typeof markPlace>, text: string) => {
+      // Полоса в обе стороны от подписи: с какой стороны фигуры стоит знак,
+      // здесь уже не важно -- важно, чтобы подпись целиком оказалась внутри.
+      const width = text.length * GLYPH + 12
+      const left = Math.min(place.label.x - width, place.from.x, place.to.x)
+      const right = Math.max(place.label.x + width, place.from.x, place.to.x)
+      spots.push({ x: left, y: place.y - 16, width: right - left, height: 28 })
+    }
+    for (const { drive, place } of marks.drives) {
+      if (place) around(place, driveBrief(glossary, drive))
+    }
+    for (const { record, place } of marks.probes) {
+      if (place) around(place, record.var)
+    }
     if (!spots.length) return null
     return {
       left: Math.min(...spots.map((item) => item.x)),
@@ -784,7 +959,29 @@ export function Canvas({
       right: Math.max(...spots.map((item) => item.x + item.width)),
       bottom: Math.max(...spots.map((item) => item.y + item.height)),
     }
-  }, [blocks, neurons, insides])
+  }, [blocks, neurons, insides, marks, glossary])
+
+  /**
+   * Каким цветом знак драйва: тем же правилом, что у порта и у связи.
+   *
+   * Модуляторная цель -- `--mod`, как `.cv-port.is-mod`: драйв на `gate` у
+   * растормаживания делает не то же самое, что драйв на `in`, и читаться
+   * они должны по-разному. Иначе решает рецептор, и решает его не браузер:
+   * `inhibitory` приходит из `ir.RECEPTORS` вместе со словарём. Рода без
+   * рецептора (ток входит помимо синапса) остаются `exc` -- они клетку
+   * деполяризуют, и второго цвета под них не заводится.
+   */
+  const driveTone = (drive: SandboxDrive): 'exc' | 'inh' | 'mod' => {
+    const block = blocks.find((item) => item.id === drive.target.instance)
+    const port = drive.target.port
+      ? block?.ports.find((item) => item.name === drive.target.port)
+      : undefined
+    if (port?.direction === 'mod') return 'mod'
+    const receptor = (glossary.receptors ?? []).find(
+      (item) => item.id === drive.receptor,
+    )
+    return receptor?.inhibitory ? 'inh' : 'exc'
+  }
 
   const fit = (): void => {
     if (!size || !bounds) return
@@ -1200,6 +1397,44 @@ export function Canvas({
         )
       })}
 
+      {/* Знаки драйва и записи -- последними, поверх фигур: они стоят
+          снаружи, и перекрывать их коробкой значило бы прятать вход в
+          схему за самой схемой. */}
+      {marks.drives.map(({ drive, place }) =>
+        place ? (
+          <DriveMark
+            key={drive.id}
+            place={place}
+            brief={driveBrief(glossary, drive)}
+            window={driveWindow(drive, duration)}
+            hint={`${drive.id} → ${
+              drive.target.port
+                ? `${drive.target.instance}.${drive.target.port}`
+                : drive.target.instance
+            } · ${drive.protocol}${
+              glossary.stimulus ? `\n\n${glossary.stimulus}` : ''
+            }`}
+            tone={driveTone(drive)}
+            selected={selected?.kind === 'stimulus' && selected.id === drive.id}
+            onPick={() => onPickDrive?.(drive.id)}
+          />
+        ) : null,
+      )}
+      {marks.probes.map(({ record, place }) =>
+        place ? (
+          <RecordMark
+            key={record.id}
+            place={place}
+            label={record.var}
+            hint={`${record.id} · ${recordedName(glossary, record.var)}${
+              glossary.recording ? `\n\n${glossary.recording}` : ''
+            }`}
+            selected={selected?.kind === 'recording' && selected.id === record.id}
+            onPick={() => onPickRecord?.(record.id)}
+          />
+        ) : null,
+      )}
+
       {/* Пустой холст зовёт положить клетку, а не показывает пустоту. Надпись
           стоит посреди окна, а не посреди координат: уехав прокруткой, человек
           иначе видел бы просто ничего и не знал бы, что делать (#545). */}
@@ -1244,6 +1479,165 @@ export function Canvas({
  * холсте нельзя. Знак на конце тот же, что в миниатюре: возбуждение -- остриё,
  * торможение -- плашка.
  */
+/**
+ * Место одного внешнего знака: откуда идёт линия и куда приходит её конец.
+ *
+ * Конец -- на краю фигуры, а не в её середине: у порта это сам кружок, у
+ * клетки -- её бок. `tip` -- единичный вектор входа, тот же, что у связи:
+ * знаки на концах общие на весь проект (`lib/marker`), и повернуть их надо
+ * тем же способом, каким их поворачивает связь.
+ */
+function markPlace(
+  end: WireEnd,
+  side: -1 | 1,
+  inset: number,
+  row: number,
+): { from: Point; to: Point; tip: Point; y: number; label: Point } {
+  const edge = end.x + side * end.halfWidth
+  const y = end.y + row * MARK.stack
+  const to = { x: edge + side * (inset + MARK.gap), y }
+  return {
+    from: { x: to.x + side * MARK.len, y },
+    to,
+    // Знак смотрит внутрь: вектор направлен от `from` к `to`.
+    tip: { x: -side, y: 0 },
+    y,
+    // Подпись прижата к фигуре, а не к дальнему концу знака, и поднята на
+    // строку выше. Иначе она уезжала бы наружу ровно настолько, насколько
+    // знак отодвинут за имя порта, -- и у объекта, лежащего у левого края
+    // окна, первой пропадала бы именно она. Строкой выше она не спорит ни с
+    // именем порта, ни с самим знаком: те стоят на высоте точки.
+    label: { x: edge + side * 4, y: y - 9 },
+  }
+}
+
+/**
+ * Драйв на холсте: короткая внешняя стрелка в цель и главные числа рядом.
+ *
+ * До #502 холст про драйв не знал вовсе -- `stimuli` в него не передавались.
+ * Человек нажимал «Драйв на in», коробка и кружок порта не менялись ничем, и
+ * единственным подтверждением была строка в другой вкладке. Дальше он
+ * запускал прогон и получал либо мёртвые дорожки, либо неожиданно частые
+ * спайки, и приписать это было нечему: холст, на котором собирают
+ * эксперимент, не показывал главного его условия.
+ *
+ * Знак -- те же остриё и плашка, что у связи (`lib/marker`), и цвет теми же
+ * токенами: возбуждающий рецептор `--exc`, тормозный `--inh`, модуляторный
+ * порт `--mod` -- ровно как `.cv-port`. Своего значка драйву не заводится
+ * (#554): на схеме уже есть знак «сюда приходит возбуждение», и второй,
+ * означающий то же самое, читался бы как что-то ещё. Внешним знак делает не
+ * форма, а то, что он начинается ниоткуда: линия висит в воздухе снаружи
+ * схемы, и это и есть «вход снаружи».
+ */
+function DriveMark({
+  place,
+  brief,
+  window: when,
+  hint,
+  tone,
+  selected,
+  onPick,
+}: {
+  place: ReturnType<typeof markPlace>
+  brief: string
+  window: string | null
+  hint: string
+  tone: 'exc' | 'inh' | 'mod'
+  selected: boolean
+  onPick: () => void
+}) {
+  const { from, to, tip, y, label } = place
+  // Подпись растёт наружу от схемы: прижми её к другой стороне -- и она
+  // легла бы поверх коробки, ради которой знак и нарисован. `from` -- дальний
+  // от схемы конец знака, по нему и видно, куда это «наружу».
+  const outward = from.x < to.x ? 'end' : 'start'
+  return (
+    <g
+      className={`cv-drive is-${tone}${selected ? ' is-on' : ''}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation()
+        onPick()
+      }}
+    >
+      {/* Подсказка говорит и протокол словами, и что такое драйв вообще:
+          на знак смотрят раньше, чем узнают слово, и объяснение приходит
+          с сервера тем же словарём, что все прочие (#541, #553). */}
+      <title>{hint}</title>
+      <line className="cv-mark-hit" x1={from.x} y1={y} x2={to.x} y2={y} />
+      <line className="cv-mark-wire" x1={from.x} y1={y} x2={to.x} y2={y} />
+      {tone === 'inh' ? (
+        <line className="cv-mark-cap" {...capLine(to, tip)} />
+      ) : (
+        <polygon className="cv-mark-cap" points={tipPoints(to, tip)} />
+      )}
+      {/* Числа над линией, а не на ней: линия короткая, и подпись поперёк
+          неё съела бы сам знак. Сторона та же, с которой пришёл знак, --
+          иначе подпись уехала бы на схему. */}
+      <text className="cv-mark-name" x={label.x} y={label.y} textAnchor={outward}>
+        {brief}
+      </text>
+      {when ? (
+        <text className="cv-mark-sub" x={label.x} y={y + 12} textAnchor={outward}>
+          {when}
+        </text>
+      ) : null}
+    </g>
+  )
+}
+
+/**
+ * Запись на холсте: щуп на точке и величина, которую он собирает.
+ *
+ * Знак свой, не от связи, и это не нарушение общего словаря (#554), а
+ * признание того, что вещь другая. Остриё и плашка говорят «сюда приходит
+ * сигнал», а запись ничего не приносит и ни на что не влияет: она смотрит.
+ * Нарисовать её остриём значило бы сказать неправду о том, что на схеме
+ * происходит. Поэтому кружок на конце ветки -- щуп, и цвет у него не
+ * рецепторный, а тусклый: запись не часть физики.
+ */
+function RecordMark({
+  place,
+  label,
+  hint,
+  selected,
+  onPick,
+}: {
+  place: ReturnType<typeof markPlace>
+  label: string
+  hint: string
+  selected: boolean
+  onPick: () => void
+}) {
+  const { from, to, y } = place
+  const left = from.x < to.x
+  return (
+    <g
+      className={`cv-record${selected ? ' is-on' : ''}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation()
+        onPick()
+      }}
+    >
+      <title>{hint}</title>
+      <line className="cv-mark-hit" x1={from.x} y1={y} x2={to.x} y2={y} />
+      <line className="cv-mark-wire" x1={from.x} y1={y} x2={to.x} y2={y} />
+      <circle className="cv-probe" cx={from.x} cy={y} r={4} />
+      <text
+        className="cv-mark-name"
+        x={from.x + (left ? -7 : 7)}
+        y={y + 3}
+        textAnchor={left ? 'end' : 'start'}
+      >
+        {label}
+      </text>
+    </g>
+  )
+}
+
 function InnerEdge({ edge }: { edge: MiniEdge }) {
   return (
     <g className={`cv-in-link is-${edge.kind}`}>

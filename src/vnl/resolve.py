@@ -467,47 +467,24 @@ class _Resolver:
         return out
 
 
-def _check_adex(resolver: _Resolver, cell_type: ir.CellType) -> None:
-    """Проверки, без которых клетка `adex` считается не тем, чем выглядит.
+def _check_point_model(resolver: _Resolver, cell_type: ir.CellType) -> None:
+    """Мембрана: отказы из `ir.point_model_problems` плюс своё предупреждение.
 
-    Каждая из них ловит случай, где уравнение остаётся считаемым, но перестаёт
-    быть тем, что человек описал. Молчать про такое хуже, чем отказать:
-    получится числовой ответ, по которому нельзя догадаться, что спросили не
-    то. Проверять здесь, а не в симуляторе, затем, что `vnl check` обязан
-    сказать это до прогона.
+    Отказы считаются не здесь нарочно (#527). Те же правила спрашивает правка
+    мембраны в песочнице, и держи их разбор у себя -- на холсте собиралось бы
+    то, чего файл потом не примет. Проверять при разборе, а не в симуляторе,
+    по-прежнему обязательно: `vnl check` должен сказать это до прогона.
+
+    Предупреждение остаётся здесь, а не уезжает в общий список: оно про то,
+    что посчитается, но не так, как человек, скорее всего, думал, -- отказывать
+    по нему нельзя, а сказать есть куда только разбору, у которого для этого
+    есть адрес места в файле.
     """
     where = f"тип клетки {cell_type.id}"
     point = cell_type.point_model
-    if point.delta_t <= 0.0:
-        resolver.error(
-            where,
-            f"delta_t = {point.delta_t:g} мВ: резкость разгона обязана быть "
-            "положительной, иначе экспоненциального члена нет вовсе и клетка "
-            "сводится к lif с порогом на v_peak",
-        )
-    if point.tau_w <= 0.0:
-        resolver.error(
-            where,
-            f"tau_w = {point.tau_w:g} мс: постоянная тока адаптации обязана "
-            "быть положительной, иначе ток ничего не помнит и ни пачки, ни "
-            "отдачи из него не получится",
-        )
-    if point.v_peak <= point.v_threshold:
-        resolver.error(
-            where,
-            f"v_peak = {point.v_peak:g} мВ не выше v_t = {point.v_threshold:g} мВ: "
-            "разряд признавался бы раньше, чем начинается разгон, и "
-            "экспоненциальный член никогда не заработал бы",
-        )
-    if point.v_reset >= point.v_peak:
-        resolver.error(
-            where,
-            f"v_reset = {point.v_reset:g} мВ не ниже v_peak = {point.v_peak:g} мВ: "
-            "после сброса клетка сразу выше потенциала разряда и будет "
-            "разряжаться до конца прогона независимо от входа; для пачки "
-            "v_reset ставят между v_t и v_peak",
-        )
-    if point.adaptation:
+    for problem in ir.point_model_problems(point):
+        resolver.error(where, problem)
+    if point.kind == "adex" and point.adaptation:
         resolver.warn(
             where,
             f"adaptation = {point.adaptation:g} мВ у adex не читается: "
@@ -523,16 +500,7 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
     resolver = _Resolver(parsed)
 
     for cell_type in parsed.cell_types.values():
-        kind = cell_type.point_model.kind
-        if kind not in ir.POINT_MODELS:
-            known = ", ".join(ir.POINT_MODELS)
-            resolver.error(
-                f"тип клетки {cell_type.id}",
-                f"точечная модель {kind!r} не реализована (есть: {known}); "
-                "считать её как другую значило бы молча подменить физику",
-            )
-        elif kind == "adex":
-            _check_adex(resolver, cell_type)
+        _check_point_model(resolver, cell_type)
 
     for instance in parsed.instances.values():
         if instance.cell_type not in parsed.cell_types:

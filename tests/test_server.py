@@ -1205,6 +1205,44 @@ def test_cell_parameters_change_one_block_at_a_time(base):
     assert ask(base, "PATCH", bad, {})[0] == 400
 
 
+def test_the_second_kind_of_cell_is_assembled_from_the_canvas(base):
+    """`adex` собирается и считается, не притрагиваясь к файлу (#527).
+
+    Приёмка карточки целиком: вид переключается тем же маршрутом, что и
+    порог, его собственные числа приезжают правкой, а собранная схема
+    запускается. Отдельного маршрута под вид нет и не должно быть -- в IR он
+    такое же поле типа клетки.
+    """
+    sandbox = sandbox_with_two_blocks(base)
+    _, project = ask(base, "GET", f"/api/sandboxes/{sandbox}")
+    first = project["blocks"][0]["id"]
+    where = f"/api/sandboxes/{sandbox}/objects/{first}/cells/pyr_l5"
+
+    status, changed = ask(base, "PATCH", where, {"kind": "adex"})
+    assert status == 200
+    point = next(
+        cell for cell in changed["blocks"][0]["cells"] if cell["type"] == "pyr_l5"
+    )["pointModel"]
+    assert point["kind"] == "adex"
+    # Числа второго вида приходят в том же `pointModel`, а не отдельно: панель
+    # свойств не должна спрашивать про мембрану дважды.
+    assert {"deltaT", "vPeak", "tauW", "wCoupling", "wIncrement"} <= set(point)
+
+    status, tuned = ask(base, "PATCH", where, {"tauW": 60.0, "wIncrement": 0.25})
+    assert status == 200
+    tuned_point = next(
+        cell for cell in tuned["blocks"][0]["cells"] if cell["type"] == "pyr_l5"
+    )["pointModel"]
+    assert (tuned_point["tauW"], tuned_point["wIncrement"]) == (60.0, 0.25)
+
+    # Ноль в `tau_w` отбивается здесь ровно так же, как его отбивает разбор
+    # файла, -- и теми же словами: правило одно (`ir.point_model_problems`).
+    status, refused = ask(base, "PATCH", where, {"tauW": 0})
+    assert status == 400
+    assert "ток ничего не помнит" in refused["error"]
+    assert ask(base, "PATCH", where, {"kind": "хиджкин"})[0] == 400
+
+
 def threshold(block, type_id: str) -> float:
     cell = next(item for item in block["cells"] if item["type"] == type_id)
     return cell["pointModel"]["vThreshold"]
@@ -1833,6 +1871,23 @@ def test_the_glossary_explains_the_labels_on_the_screen(base):
         for param in item["params"]
     ), "число без объяснения -- такой же шифр, как род без объяснения"
     assert glossary["drive"], "у самого поля «род» объяснение своё"
+
+    # Что такое драйв и что такое запись -- отдельно от того, какими они
+    # бывают (#502). На знак у клетки смотрят раньше, чем узнают слово, и
+    # объяснение самой вещи приходит тем же ответом, что объяснения родов.
+    assert "паттерн" in glossary["stimulus"], (
+        "про драйв сказано главное: во вставленном блоке его нет"
+    )
+    assert glossary["recording"], "запись объясняется так же, как драйв"
+
+    # Виды точечной модели -- тем же ответом и по тому же правилу (#527):
+    # список тот, который исполняет солвер, и объяснение есть у каждого вида.
+    # Без него в поле выбора стояли бы два слова, `lif` и `adex`, за которыми
+    # не видно разницы, -- а разница в том, какой солвер считает клетку.
+    models = {item["id"]: item for item in glossary["models"]}
+    assert set(models) == set(ir.POINT_MODELS)
+    assert all(item["note"] for item in models.values())
+    assert glossary["cell"]["kind"], "у самого поля «вид» объяснение своё"
 
 
 def test_a_builtin_cell_carries_its_own_explanation(base):

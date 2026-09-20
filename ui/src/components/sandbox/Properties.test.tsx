@@ -44,10 +44,21 @@ const GLOSSARY: Glossary = {
       inhibitory: true,
     },
   ],
-  cell: { tauM: 'За сколько мембрана забывает заряд.' },
+  cell: {
+    tauM: 'За сколько мембрана забывает заряд.',
+    kind: 'Какую мембрану считать: lif или adex.',
+    tauW: 'Только adex: за сколько рассасывается ток адаптации.',
+  },
+  // Виды точечной модели -- те же, что отдаёт `ir.POINT_MODELS` (#527).
+  models: [
+    { id: 'lif', note: 'Линейная до порога.' },
+    { id: 'adex', note: 'С разгоном у порога и током адаптации.' },
+  ],
   contact: { receptor: 'Чем контакт действует на цель.', weight: 'Сила контакта.' },
   port: { in: 'Вход.', out: 'Выход.', mod: 'Модуляция.' },
   // Роды драйва -- те же, что отдаёт сервер: панель рисует поля по ним (#508).
+  stimulus: 'Внешний вход схемы: в паттернах его нет, драйв добавляют сами.',
+  recording: 'Щуп на точке: собирает величину в дорожку, на сеть не влияет.',
   drive: 'Чем гонят схему. От рода зависит, повторится ли картина растра.',
   drives: [
     {
@@ -192,6 +203,11 @@ const PALETTE: CellKind[] = [
       refractory: 2,
       adaptation: 1.5,
       tauAdaptation: 100,
+      deltaT: 2,
+      vPeak: -40,
+      tauW: 144,
+      wCoupling: 4,
+      wIncrement: 0.0805,
     },
     morphology: { name: 'point', isPoint: true, sections: [] },
   },
@@ -207,6 +223,11 @@ const POINT: PointModel = {
   refractory: 2,
   adaptation: 0,
   tauAdaptation: 100,
+  deltaT: 2,
+  vPeak: -40,
+  tauW: 144,
+  wCoupling: 4,
+  wIncrement: 0.0805,
 }
 
 function port(name: string, direction: PatternPort['direction'], cell: string): PatternPort {
@@ -908,5 +929,119 @@ describe('стимул и запись в свойствах своей клет
       (node) => node.getAttribute('title'),
     )
     expect(buttons).toEqual(['Драйв на dis/PYR', 'Драйв на dis/SST'])
+  })
+})
+
+describe('вид точечной модели в панели свойств (#527)', () => {
+  /** Клетка с нужным видом мембраны: остальное -- как приходит с сервера. */
+  function withKind(point: Partial<PointModel>): SandboxState {
+    return {
+      ...PROJECT,
+      neurons: [{ ...CELL, pointModel: { ...POINT, ...point } }],
+      blocks: [
+        {
+          ...BLOCK,
+          cells: [
+            {
+              type: 'pyr',
+              neurons: ['PYR'],
+              inhibitory: false,
+              pointModel: { ...POINT, ...point },
+            },
+          ],
+        },
+      ],
+    } as unknown as SandboxState
+  }
+
+  it('вид выбирается списком с сервера, а не угадывается по числам', async () => {
+    await mount({ selection: { kind: 'neuron', id: 'X' }, project: withKind({}) })
+
+    const select = host.querySelector('select') as HTMLSelectElement
+    expect([...select.options].map((option) => option.value)).toEqual(['lif', 'adex'])
+    expect(select.value).toBe('lif')
+    // Объяснено и само поле, и выбранный вид -- два разных вопроса (#541):
+    // «что такое вид модели вообще» висит на подписи, «что значит lif» -- на
+    // самом списке, где виден только выбранный пункт.
+    const label = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'Вид модели',
+    )
+    expect(label?.querySelector('span')?.getAttribute('title')).toContain(
+      'Какую мембрану считать',
+    )
+    expect(select.title).toContain('Линейная до порога')
+    const adex = [...select.options].find((option) => option.value === 'adex')
+    expect(adex?.title).toContain('разгоном у порога')
+  })
+
+  it('у lif лишних полей не появляется', async () => {
+    await mount({ selection: { kind: 'neuron', id: 'X' }, project: withKind({}) })
+
+    const labels = fields()
+    expect(labels).toContain('Порог, мВ')
+    expect(labels.some((label) => label.startsWith('τ_w'))).toBe(false)
+    expect(labels.some((label) => label.startsWith('Δ_t'))).toBe(false)
+  })
+
+  it('у adex видны и правятся его собственные числа', async () => {
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      project: withKind({ kind: 'adex' }),
+    })
+
+    const labels = fields()
+    expect(labels).toEqual(
+      expect.arrayContaining([
+        'Δ_t разгона, мВ',
+        'v_peak разряда, мВ',
+        'τ_w тока адаптации, мс',
+        'a — ток за потенциалом, нСм',
+        'b — ток на разряд, нА',
+      ]),
+    )
+    // Числа те, что в проекте, а не подставленные панелью.
+    const tauW = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'τ_w тока адаптации, мс',
+    )
+    expect((tauW?.querySelector('input') as HTMLInputElement).value).toBe('144')
+  })
+
+  it('поля второго вида объясняются тем же ключом, каким берутся числа', async () => {
+    await mount({
+      selection: { kind: 'neuron', id: 'X' },
+      project: withKind({ kind: 'adex' }),
+    })
+
+    const tauW = [...host.querySelectorAll('.sb-field')].find(
+      (node) => node.querySelector('span')?.textContent === 'τ_w тока адаптации, мс',
+    ) as HTMLElement
+    expect(tauW.title).toContain('ток адаптации')
+  })
+
+  it('сказано, что правка задевает всех клеток этого типа', async () => {
+    // Смена вида -- правка типа клетки, а не одного нейрона: в IR мембрана
+    // висит на типе. Знать это надо до правки, а не после прогона.
+    await mount({ selection: { kind: 'neuron', id: 'X' }, project: withKind({}) })
+
+    const notes = [...host.querySelectorAll('.sb-note')].map((node) => node.textContent)
+    expect(notes.join(' ')).toContain('все клетки этого типа')
+  })
+
+  it('тип клетки внутри блока правится тем же набором полей', async () => {
+    // Вторая копия полей разошлась бы с первой на первом же новом параметре:
+    // у клетки поле появилось бы, у блока нет.
+    await mount({
+      selection: { kind: 'block', id: 'dis' },
+      project: withKind({ kind: 'adex' }),
+    })
+
+    expect(fields()).toEqual(
+      expect.arrayContaining(['Вид модели', 'τ_w тока адаптации, мс']),
+    )
+    // В свёрнутой строке типа стоит вид: «-50 мВ» у lif и у adex значат разное.
+    const kinds = [...host.querySelectorAll('.sb-group .sb-kind')].map(
+      (node) => node.textContent,
+    )
+    expect(kinds).toContain('adex · -50 мВ')
   })
 })

@@ -12,9 +12,16 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Canvas } from './Canvas'
+import { Canvas, portPoint } from './Canvas'
 import type { CellState } from '../../model/sim'
-import type { SandboxBlock, SandboxLink, SandboxNeuron } from '../../model/sandbox'
+import type {
+  SandboxBlock,
+  SandboxDrive,
+  SandboxLink,
+  SandboxNeuron,
+  SandboxRecording,
+} from '../../model/sandbox'
+import type { Glossary } from '../../model/types'
 import { START_VIEW, type CanvasView } from '../../state/sandbox'
 
 const POINT = {
@@ -27,6 +34,11 @@ const POINT = {
   refractory: 2,
   adaptation: 0,
   tauAdaptation: 100,
+  deltaT: 2,
+  vPeak: -40,
+  tauW: 144,
+  wCoupling: 4,
+  wIncrement: 0.0805,
 }
 
 function neuron(id: string, inhibitory: boolean, x: number): SandboxNeuron {
@@ -883,5 +895,255 @@ describe('холст -- окно в схему (#545)', () => {
     await mount({ blocks: [], neurons: [] })
 
     expect(host.querySelector('.cv-fit')?.hasAttribute('disabled')).toBe(true)
+  })
+})
+
+describe('драйв и запись на холсте (#502)', () => {
+  /** Словарь -- тот же, что отдаёт сервер: своих чисел и слов здесь нет. */
+  const GLOSSARY = {
+    schema: 1,
+    receptors: [
+      { id: 'ampa', note: 'Быстрое возбуждение.', reversal: 0, tauDecay: 2, inhibitory: false },
+      { id: 'gaba_a', note: 'Быстрое торможение.', reversal: -70, tauDecay: 6, inhibitory: true },
+    ],
+    cell: {},
+    models: [],
+    contact: {},
+    port: {},
+    recorded: [{ id: 'v', name: 'мембранный потенциал', unit: 'мВ' }],
+    stimulus: 'Внешний вход схемы: в паттернах его нет.',
+    recording: 'Щуп на точке схемы.',
+    drive: '',
+    drives: [
+      {
+        id: 'poisson',
+        name: 'пуассоновский',
+        note: 'Случайные моменты со средней частотой.',
+        receptor: true,
+        template: false,
+        params: [
+          { name: 'rate', label: 'Средняя частота', unit: 'Гц', default: 250, step: 10, form: 'number', note: '' },
+          { name: 'amplitude', label: 'Вес', unit: 'нСм', default: 1.5, step: 0.1, form: 'number', note: '' },
+        ],
+      },
+      {
+        id: 'train',
+        name: 'поезд',
+        note: 'Ровный гребень.',
+        receptor: true,
+        template: true,
+        params: [
+          { name: 'n', label: 'Импульсов', unit: '', default: 8, step: 1, form: 'int', note: '' },
+          { name: 'freq', label: 'Частота', unit: 'Гц', default: 20, step: 1, form: 'number', note: '' },
+          { name: 'recovery', label: 'Тест восстановления', unit: 'мс', default: 0, step: 10, form: 'number', note: '' },
+          { name: 'amplitude', label: 'Вес', unit: 'нСм', default: 1.5, step: 0.1, form: 'number', note: '' },
+        ],
+      },
+    ],
+    sensor: '',
+    sensors: [],
+    motor: '',
+    motors: [],
+    value: { min: 0, max: 1 },
+  } as unknown as Glossary
+
+  /** Блок с модуляторным портом: на него драйв ложится третьим цветом. */
+  const GATED: SandboxBlock = {
+    ...FFI,
+    ports: [
+      ...FFI.ports,
+      { name: 'gate', direction: 'mod', site: { instance: 'I', section: 'soma', fraction: 0.5 }, note: '' },
+    ],
+  }
+
+  function drive(patch: Record<string, unknown> = {}): SandboxDrive {
+    return {
+      id: 'drive1',
+      target: { instance: 'E', port: null, section: 'soma', fraction: 0.5 },
+      kind: 'poisson',
+      receptor: 'ampa',
+      rate: 250,
+      amplitude: 1.5,
+      times: [],
+      protocol: 'пуассоновский, в среднем 250 Гц',
+      start: 0,
+      stop: 400,
+      n: 0,
+      freq: 0,
+      isi: 0,
+      duration: 0,
+      bursts: 0,
+      burst_period: 0,
+      repeats: 1,
+      period: 0,
+      recovery: 0,
+      ...patch,
+    } as unknown as SandboxDrive
+  }
+
+  function record(patch: Record<string, unknown> = {}): SandboxRecording {
+    return {
+      id: 'r1',
+      target: { instance: 'E', port: null, section: 'soma', fraction: 0.5 },
+      var: 'v',
+      ...patch,
+    } as unknown as SandboxRecording
+  }
+
+  function marks(kind: 'drive' | 'record'): string[] {
+    return [...host.querySelectorAll('.cv-' + kind + ' .cv-mark-name')].map(
+      (node) => node.textContent ?? '',
+    )
+  }
+
+  it('драйв виден на холсте числами, а не только строкой в дереве', async () => {
+    // Прежде `stimuli` в холст не передавались вовсе: человек нажимал «Драйв
+    // на in», и ни коробка, ни кружок порта не менялись ничем.
+    await mount({ stimuli: [drive()], glossary: GLOSSARY, duration: 400 })
+
+    expect(marks('drive')).toEqual(['250 Гц · 1.5 нСм'])
+  })
+
+  it('числа берутся из реестра родов, а не из списка имён в коде', async () => {
+    // У поезда главные числа свои, и какие именно -- знает сервер. Нули
+    // пропускаются: в протоколе ноль значит «этого в нём нет».
+    await mount({
+      stimuli: [drive({ kind: 'train', freq: 20, n: 8, recovery: 0 })],
+      glossary: GLOSSARY,
+      duration: 400,
+    })
+
+    expect(marks('drive')).toEqual(['20 Гц · 1.5 нСм'])
+  })
+
+  it('окно показывается, только если драйв короче прогона', async () => {
+    await mount({ stimuli: [drive()], glossary: GLOSSARY, duration: 400 })
+    expect(host.querySelector('.cv-mark-sub')).toBeNull()
+
+    await mount({
+      stimuli: [drive({ start: 100, stop: 260 })],
+      glossary: GLOSSARY,
+      duration: 400,
+    })
+    expect(host.querySelector('.cv-mark-sub')?.textContent).toBe('100–260 мс')
+  })
+
+  it('цвет знака -- по рецептору и по цели, теми же токенами, что у порта', async () => {
+    await mount({
+      blocks: [GATED],
+      neurons: [neuron('E', false, 120)],
+      stimuli: [
+        drive(),
+        drive({ id: 'd2', receptor: 'gaba_a' }),
+        drive({ id: 'd3', target: { instance: 'ffi', port: 'gate' } }),
+      ],
+      glossary: GLOSSARY,
+      duration: 400,
+    })
+
+    const tones = [...host.querySelectorAll('.cv-drive')].map((node) =>
+      node.getAttribute('class'),
+    )
+    expect(tones[0]).toContain('is-exc')
+    expect(tones[1]).toContain('is-inh')
+    // Модуляторная цель -- `is-mod`, как `.cv-port.is-mod`: драйв на `gate`
+    // делает не то же самое, что драйв на `in`.
+    expect(tones[2]).toContain('is-mod')
+  })
+
+  it('запись стоит у своей точки и названа своей величиной', async () => {
+    await mount({ recordings: [record({ var: 'g_exc' })], glossary: GLOSSARY })
+
+    expect(marks('record')).toEqual(['g_exc'])
+    // Щуп, а не остриё: запись ничего не приносит и ни на что не влияет, и
+    // знак «сюда приходит сигнал» сказал бы о схеме неправду.
+    expect(host.querySelector('.cv-record .cv-probe')).not.toBeNull()
+    expect(host.querySelector('.cv-record .cv-mark-cap')).toBeNull()
+  })
+
+  it('знак выбирается щелчком, как связь', async () => {
+    const picked: string[] = []
+    await mount({
+      stimuli: [drive()],
+      recordings: [record({ target: { instance: 'I', port: null } })],
+      glossary: GLOSSARY,
+      duration: 400,
+      onPickDrive: (id) => picked.push('drive:' + id),
+      onPickRecord: (id) => picked.push('record:' + id),
+    })
+
+    await act(async () => {
+      host
+        .querySelector('.cv-drive .cv-mark-hit')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      host
+        .querySelector('.cv-record .cv-mark-hit')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(picked).toEqual(['drive:drive1', 'record:r1'])
+  })
+
+  it('выбранный знак подсвечен так же, как выбранная связь', async () => {
+    await mount({
+      stimuli: [drive()],
+      glossary: GLOSSARY,
+      duration: 400,
+      selected: { kind: 'stimulus', id: 'drive1' },
+    })
+
+    expect(host.querySelector('.cv-drive')?.getAttribute('class')).toContain('is-on')
+  })
+
+  it('драйв на точку, которой на холсте нет, знака не рисует', async () => {
+    // Стимул на порт, которого в блоке не осталось, -- законный объект
+    // проекта со своей строкой в дереве. На холсте ему просто не к чему
+    // прийти, и линия в пустоте сказала бы о схеме неправду.
+    await mount({
+      stimuli: [drive({ target: { instance: 'нет-такого', port: null } })],
+      glossary: GLOSSARY,
+      duration: 400,
+    })
+
+    expect(host.querySelectorAll('.cv-drive')).toHaveLength(0)
+  })
+
+  it('подсказка знака говорит и протокол словами, и что такое драйв', async () => {
+    await mount({ stimuli: [drive()], glossary: GLOSSARY, duration: 400 })
+
+    const hint = host.querySelector('.cv-drive title')?.textContent ?? ''
+    expect(hint).toContain('в среднем 250 Гц')
+    expect(hint).toContain('в паттернах его нет')
+  })
+
+  it('два знака на одной точке расходятся по высоте, а не ложатся друг на друга', async () => {
+    await mount({
+      stimuli: [drive(), drive({ id: 'd2' })],
+      glossary: GLOSSARY,
+      duration: 400,
+    })
+
+    const ys = [...host.querySelectorAll('.cv-drive .cv-mark-wire')].map((node) =>
+      Number(node.getAttribute('y1')),
+    )
+    expect(ys).toHaveLength(2)
+    expect(ys[0]).not.toBe(ys[1])
+  })
+
+  it('знак драйва отодвинут за имя порта, а не лежит на нём', async () => {
+    // Имя порта нарисовано снаружи коробки -- ровно там, куда иначе встал бы
+    // знак. Две надписи в одном месте не читаются ни одна.
+    await mount({
+      blocks: [FFI],
+      neurons: [],
+      stimuli: [drive({ target: { instance: 'ffi', port: 'in' } })],
+      glossary: GLOSSARY,
+      duration: 400,
+    })
+
+    const wire = host.querySelector('.cv-drive .cv-mark-wire') as SVGLineElement
+    const port = portPoint(FFI, 'in')!
+    // Остриё слева от порта и дальше, чем его подпись (9 + 2 знака).
+    expect(Number(wire.getAttribute('x2'))).toBeLessThan(port.x - 9 - 2 * 5)
   })
 })

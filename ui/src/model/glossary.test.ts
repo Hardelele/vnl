@@ -10,7 +10,16 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { NO_GLOSSARY, driveHint, driveKinds, loadGlossary } from './glossary'
+import {
+  NO_GLOSSARY,
+  driveBrief,
+  driveHint,
+  driveKinds,
+  driveWindow,
+  loadGlossary,
+} from './glossary'
+import type { SandboxDrive } from './sandbox'
+import type { Glossary } from './types'
 
 function reply(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -97,5 +106,115 @@ describe('роды драйва из словаря (#553)', () => {
     const old = { ...NO_GLOSSARY, drives: undefined } as unknown as typeof NO_GLOSSARY
     expect(driveKinds(old)).toEqual([])
     expect(driveHint(old, 'poisson')).toBeUndefined()
+  })
+})
+
+describe('драйв главными числами -- для знака на холсте (#502)', () => {
+  const KINDS = [
+    {
+      id: 'poisson',
+      name: 'пуассоновский',
+      note: '',
+      receptor: true,
+      template: false,
+      params: [
+        { name: 'rate', label: 'Средняя частота', unit: 'Гц', default: 250, step: 10, form: 'number', note: '' },
+        { name: 'amplitude', label: 'Вес', unit: 'нСм', default: 1.5, step: 0.1, form: 'number', note: '' },
+      ],
+    },
+    {
+      id: 'current',
+      name: 'ток',
+      note: '',
+      receptor: false,
+      template: false,
+      params: [
+        { name: 'amplitude', label: 'Ток', unit: 'нА', default: 0.2, step: 0.05, form: 'number', note: '' },
+      ],
+    },
+    {
+      id: 'spikes',
+      name: 'список спайков',
+      note: '',
+      receptor: true,
+      template: false,
+      params: [
+        { name: 'times', label: 'Моменты', unit: 'мс', default: 0, step: 1, form: 'times', note: '' },
+        { name: 'amplitude', label: 'Вес', unit: 'нСм', default: 1.5, step: 0.1, form: 'number', note: '' },
+      ],
+    },
+    {
+      id: 'train',
+      name: 'поезд',
+      note: '',
+      receptor: true,
+      template: true,
+      params: [
+        { name: 'n', label: 'Импульсов', unit: '', default: 8, step: 1, form: 'int', note: '' },
+        { name: 'freq', label: 'Частота', unit: 'Гц', default: 20, step: 1, form: 'number', note: '' },
+        { name: 'recovery', label: 'Тест восстановления', unit: 'мс', default: 0, step: 10, form: 'number', note: '' },
+        { name: 'amplitude', label: 'Вес', unit: 'нСм', default: 1.5, step: 0.1, form: 'number', note: '' },
+      ],
+    },
+  ]
+  const GLOSSARY = { ...NO_GLOSSARY, drives: KINDS } as unknown as Glossary
+
+  function drive(patch: Record<string, unknown>): SandboxDrive {
+    return {
+      id: 'd',
+      target: { instance: 'E', port: null, section: 'soma', fraction: 0.5 },
+      kind: 'poisson',
+      receptor: 'ampa',
+      rate: 0,
+      amplitude: 0,
+      times: [],
+      protocol: '',
+      start: 0,
+      stop: 400,
+      n: 0,
+      freq: 0,
+      isi: 0,
+      duration: 0,
+      bursts: 0,
+      burst_period: 0,
+      repeats: 1,
+      period: 0,
+      recovery: 0,
+      ...patch,
+    } as unknown as SandboxDrive
+  }
+
+  it('у каждого рода свои числа -- те, что назвал реестр', () => {
+    expect(driveBrief(GLOSSARY, drive({ rate: 250, amplitude: 1.5 }))).toBe(
+      '250 Гц · 1.5 нСм',
+    )
+    expect(
+      driveBrief(GLOSSARY, drive({ kind: 'current', amplitude: 1.5 })),
+    ).toBe('1.5 нА')
+    expect(
+      driveBrief(
+        GLOSSARY,
+        drive({ kind: 'spikes', times: [10, 20, 30, 40, 50, 60, 70, 80], amplitude: 3 }),
+      ),
+    ).toBe('8 сп. · 3 нСм')
+  })
+
+  it('нули не пишутся: в протоколе ноль значит «этого в нём нет»', () => {
+    // Иначе поезд читался бы «20 Гц · 0 мс · 1.5 нСм» -- лишним числом про
+    // то, чего не происходит.
+    expect(
+      driveBrief(GLOSSARY, drive({ kind: 'train', n: 8, freq: 20, amplitude: 1.5 })),
+    ).toBe('20 Гц · 1.5 нСм')
+  })
+
+  it('рода нет в словаре -- показывается то, что есть в проекте', () => {
+    // Словарь приходит от сервера, а сервер бывает старее страницы. Выдумать
+    // числа за неизвестный род нельзя, но и молчать не надо: имя у него есть.
+    expect(driveBrief(NO_GLOSSARY, drive({ kind: 'tbs' }))).toBe('tbs')
+  })
+
+  it('окно пишется только там, где оно короче прогона', () => {
+    expect(driveWindow(drive({ start: 0, stop: 400 }), 400)).toBeNull()
+    expect(driveWindow(drive({ start: 100, stop: 260 }), 400)).toBe('100–260 мс')
   })
 })

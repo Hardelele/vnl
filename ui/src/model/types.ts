@@ -27,16 +27,48 @@ export interface Morphology {
   sections: Section[]
 }
 
+/**
+ * Параметры мембраны -- те же, что в `api.POINT_FIELDS`, и в том же порядке.
+ *
+ * Полей ровно пятнадцать, а не девять, как было до #527: пять последних читает
+ * только `adex`, но приходят они всегда. Условный состав ответа означал бы,
+ * что интерфейс не знает заранее, какие ключи придут, -- а не приди они
+ * вовсе, `adex` нельзя было бы ни настроить, ни даже увидеть.
+ */
 export interface PointModel {
+  /** Вид точечной модели: `lif` или `adex`. Не число, а другой солвер. */
   kind: string
   vRest: number
   vReset: number
+  /** У `lif` -- порог; у `adex` -- точка, с которой начинается разгон. */
   vThreshold: number
   tauM: number
   rIn: number
   refractory: number
   adaptation: number
   tauAdaptation: number
+  /** Резкость разгона у порога, мВ. Дальше -- только `adex`. */
+  deltaT: number
+  /** Потенциал, на котором разряд признан состоявшимся, мВ. */
+  vPeak: number
+  /** За сколько рассасывается ток адаптации, мс. */
+  tauW: number
+  /** Насколько ток адаптации следит за подпороговым потенциалом, нСм (`a`). */
+  wCoupling: number
+  /** Сколько тока адаптации добавляет один разряд, нА (`b`). */
+  wIncrement: number
+}
+
+/**
+ * Вид точечной модели из реестра сервера (`ir.POINT_MODELS`, #527).
+ *
+ * Как и рецепторы: своего списка в браузере нет -- какие мембраны симулятор
+ * действительно считает, знает сервер, и он же отвергает вид, которого нет.
+ * Имя рода -- он сам (`lif`, `adex`): ровно этим словом вид пишется в схеме.
+ */
+export interface PointModelKind {
+  id: string
+  note: string
 }
 
 export interface CellType {
@@ -112,9 +144,20 @@ export interface Glossary {
   schema: number
   receptors: Receptor[]
   cell: Record<string, string>
+  /** Виды точечной модели с объяснениями -- для поля «Вид» (#527). */
+  models: PointModelKind[]
   contact: Record<string, string>
   port: Record<string, string>
   recorded: RecordedKind[]
+  /**
+   * Что такое драйв и что такое запись -- объяснения самих вещей (#502).
+   *
+   * Отдельно от `drive`: там сказано, чем роды драйва отличаются друг от
+   * друга, а это ответ на вопрос, который задают раньше, -- глядя на знак у
+   * клетки и не зная ещё самого слова.
+   */
+  stimulus: string
+  recording: string
   /** Что такое род драйва вообще -- объяснение самого поля (#553). */
   drive: string
   drives: DriveKindInfo[]
