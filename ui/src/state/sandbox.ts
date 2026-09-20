@@ -42,8 +42,10 @@ import {
   setCellParams,
   setContactParams,
   setLinkParams,
+  setMotorParams,
   setRecordingVar,
   setRunParams,
+  setSensorParams,
   setStimulusParams,
   redo,
   undo,
@@ -67,7 +69,7 @@ import { createStore } from './store'
  * внутри каждого поля.
  */
 export interface Selection {
-  kind: 'block' | 'neuron' | 'link' | 'stimulus' | 'recording'
+  kind: 'block' | 'neuron' | 'link' | 'stimulus' | 'recording' | 'sensor' | 'motor'
   id: string
 }
 
@@ -211,6 +213,8 @@ export interface SandboxPorts {
   stimulate: typeof addStimulus
   sensor: typeof addSensor
   motor: typeof addMotor
+  sensorParams: typeof setSensorParams
+  motorParams: typeof setMotorParams
   driveParams: typeof setStimulusParams
   record: typeof addRecording
   recordVar: typeof setRecordingVar
@@ -245,6 +249,8 @@ const DEFAULT_PORTS: SandboxPorts = {
   stimulate: addStimulus,
   sensor: addSensor,
   motor: addMotor,
+  sensorParams: setSensorParams,
+  motorParams: setMotorParams,
   driveParams: setStimulusParams,
   record: addRecording,
   recordVar: setRecordingVar,
@@ -307,8 +313,12 @@ function sameEnd(
 /**
  * Куда положить следующий объект, чтобы он не лёг поверх соседа.
  *
- * Считаются и блоки, и клетки: место на холсте у них одно, и нумеровать их
- * по отдельности значило бы класть первую клетку ровно на первый блок.
+ * Считаются и блоки, и клетки, и двери наружу: место на холсте у них одно, и
+ * нумеровать их по отдельности значило бы класть первую клетку ровно на первый
+ * блок. Двери попали в счёт вместе с фигурой (#571): пока их на холсте не
+ * рисовали, они места и не занимали, а теперь сенсор, положенный вторым,
+ * ложился ровно на мотор, положенный первым, -- и одного из двух было не
+ * видно вовсе.
  *
  * Кладётся в видимую часть, а не по абсолютной сетке от нуля: холст стал
  * окном, и объект, положенный по старой сетке «три в ряд», после десятка
@@ -322,7 +332,11 @@ function sameEnd(
  * известно только число объектов, было бы второй раскладкой.
  */
 function free(project: SandboxState | null, view: CanvasView): [number, number] {
-  const index = (project?.blocks.length ?? 0) + (project?.neurons.length ?? 0)
+  const index =
+    (project?.blocks.length ?? 0) +
+    (project?.neurons.length ?? 0) +
+    (project?.sensors.length ?? 0) +
+    (project?.motors.length ?? 0)
   const cols = Math.max(1, Math.floor((view.width - SLOT.margin) / SLOT.x))
   const rows = Math.max(1, Math.floor((view.height - SLOT.margin) / SLOT.y))
   const slot = index % (cols * rows)
@@ -766,6 +780,56 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
         const { project, view } = store.getState()
         return io.motor(id, { instance, port }, { position: free(project, view) })
       }),
+
+    /**
+     * Положить сенсор из палитры -- так же, как кладут клетку (#571).
+     *
+     * Без связи и без цели: сенсор -- такая же деталь схемы, как клетка, и
+     * кладут её на холст, а соединяют потом. Прежде завести сенсор можно было
+     * только из свойств выбранной клетки, и человек, не знающий про ту кнопку,
+     * не находил границу с миром вовсе -- ровно та же беда, что была с
+     * раскрытием блока (#549).
+     *
+     * Второй дороги это не заводит: `addSensor` рядом делает то же самое плюс
+     * стрелку, потому что там цель уже названа щелчком по клетке. Здесь цели
+     * нет, и выдумывать её за человека нельзя -- он ещё не сказал, к чему
+     * тянуть.
+     *
+     * Свежий сенсор сразу становится выбранным: панель свойств -- это
+     * подтверждение того, что он появился, и место, где правят его род и
+     * числа. Имя выбирает сервер, поэтому ищется он по ответу.
+     */
+    async insertSensor(): Promise<void> {
+      const { project, view } = store.getState()
+      if (!project) return
+      const had = new Set(project.sensors.map((item) => item.id))
+      await act((id) => io.sensor(id, { position: free(project, view) }))
+      const fresh = store.getState().project?.sensors.find((item) => !had.has(item.id))
+      if (fresh) store.setState({ selected: { kind: 'sensor', id: fresh.id } })
+    },
+
+    /**
+     * Положить мотор, смотрящий на выбранную клетку (#571).
+     *
+     * Цель обязательна, и это не недоделка палитры, а устройство самой вещи:
+     * мотор без клетки не существует -- он и есть «смотрю на эту точку».
+     * Сенсор же снаружи и до всякой схемы полон, поэтому кладётся один.
+     * Поэтому в палитре у мотора спрошена клетка, а у сенсора нет.
+     */
+    async insertMotor(instance: string, port: string | null): Promise<void> {
+      const { project, view } = store.getState()
+      if (!project) return
+      const had = new Set(project.motors.map((item) => item.id))
+      await act((id) => io.motor(id, { instance, port }, { position: free(project, view) }))
+      const fresh = store.getState().project?.motors.find((item) => !had.has(item.id))
+      if (fresh) store.setState({ selected: { kind: 'motor', id: fresh.id } })
+    },
+
+    /** Род и числа сенсора и мотора. Те же правила, что у драйва и записи. */
+    setSensor: (sensor: string, params: { kind?: string; to?: number }) =>
+      act((id) => io.sensorParams(id, sensor, params)),
+    setMotor: (motor: string, params: { kind?: string; window?: number }) =>
+      act((id) => io.motorParams(id, motor, params)),
 
     /**
      * Запись с точки. Созданная сразу становится выбранной -- как и драйв.

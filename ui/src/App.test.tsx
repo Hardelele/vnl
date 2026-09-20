@@ -903,6 +903,47 @@ describe('дорога с карточки в песочницу (#526)', () => 
     expect(asked.some((call) => call.path.endsWith('/undo'))).toBe(false)
   })
 
+  it('сенсор и мотор кладут из палитры, как клетку (#571)', async () => {
+    // Жалоба владельца: «плюсом я не вижу сейчас в клетках сенсоров. Может
+    // быть, они где-то есть, но я их пока не вижу. И моторов тоже не вижу».
+    // Завести их можно было только из свойств выбранной клетки -- то есть
+    // человек, не знающий про ту кнопку, границы с миром не находил.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    // Рядом с палитрой клеток, куда за деталью схемы и идут.
+    // Экран открывается на «Библиотеке», когда в песочницу приходят с
+    // карточки; палитра клеток -- соседняя вкладка, и граница с миром лежит
+    // в ней, рядом с тем, что кладут на холст.
+    await pickTab('Клетки')
+    const left = host.querySelector('.sb-left') as HTMLElement
+    expect(left.textContent).toContain('Граница с миром')
+    const rows = [...left.querySelectorAll('.sb-row')]
+    const sensor = rows.find((item) => item.textContent?.includes('Сенсор')) as HTMLElement
+    const motor = rows.find((item) => item.textContent?.includes('Мотор')) as HTMLElement
+    expect(sensor).not.toBeUndefined()
+    expect(motor).not.toBeUndefined()
+
+    await act(async () => {
+      ;(sensor.querySelector('.sb-plus') as HTMLButtonElement).click()
+    })
+    // Кладётся один и без цели: соединяют его потом, как клетку с клеткой.
+    const put = asked.find((call) => call.path.endsWith('/sensors'))
+    expect(put?.method).toBe('POST')
+    expect(put?.body.source).toBeUndefined()
+
+    // А мотор без клетки не существует -- он и есть «смотрю на эту точку», и
+    // пока клетка не выбрана, кнопка говорит об этом, а не молчит.
+    const plus = motor.querySelector('.sb-plus') as HTMLButtonElement
+    expect(plus.disabled).toBe(true)
+    expect(plus.title).toContain('выберите её')
+  })
+
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {
     serve([
       ['/api/session', ANONYMOUS],

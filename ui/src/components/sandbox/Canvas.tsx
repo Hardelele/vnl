@@ -138,12 +138,15 @@ import {
 import { CELLS, LINKS, counted } from '../../lib/plural'
 import { schemeField, wire, type Point, type WireEnd, type WirePlace } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
+import { where } from '../../model/sandbox'
 import type {
   SandboxBlock,
   SandboxDrive,
   SandboxLink,
+  SandboxMotor,
   SandboxNeuron,
   SandboxRecording,
+  SandboxSensor,
 } from '../../model/sandbox'
 import type { CellKind, Glossary } from '../../model/types'
 import type { CanvasView, Pending, Selection } from '../../state/sandbox'
@@ -166,6 +169,23 @@ const HEADER = 26
 const INNER = { width: OPEN.width, height: OPEN.height - HEADER, padding: 42 }
 /** Фигура клетки. Уже блока: у неё нет ни портов, ни счётчиков внутри. */
 const DOT = { width: 74, height: 38 }
+/**
+ * Фигура двери наружу -- сенсора и мотора (#571).
+ *
+ * Не клетка и не порт, и это не оформление: у сенсора нет мембраны, порога и
+ * заряда, а у порта нет ни рода, ни чисел -- притвориться ни тем ни другим
+ * дверь не может, не соврав о том, что на схеме происходит.
+ *
+ * Пятиугольник, а не прямоугольник: у двери есть сторона, обращённая в схему,
+ * и форма обязана её называть. Сенсор острым концом смотрит в схему -- он в
+ * неё вносит; у мотора тот же край вдавлен внутрь -- он из неё принимает.
+ * Две фигуры складываются одна в другую, как два куска головоломки, и
+ * различаются издали, когда подпись уже не читается.
+ *
+ * Ширина та же, что у клетки с небольшим запасом: имя двери (`sensor1`) не
+ * короче имени клетки, а высота меньше -- заряда и числа над ней не бывает.
+ */
+const DOOR = { width: 78, height: 30, notch: 11 }
 /**
  * Плашка действия блока: «▾ 3 кл. · 2 св.», «▴ свернуть», «разобрать на клетки».
  *
@@ -253,6 +273,20 @@ export interface CanvasProps {
   stimuli?: SandboxDrive[]
   recordings?: SandboxRecording[]
   /**
+   * Граница с миром: сенсоры и моторы (#571).
+   *
+   * До этой задачи холст про них не знал вовсе, и они были единственной вещью
+   * схемы, которой на схеме нет: драйв и запись рисуются с #502, а дверь
+   * наружу жила только строкой в дереве объектов. Хуже того, связь от сенсора
+   * к клетке тоже не рисовалась -- `endpointEnd` не знал, где стоит её
+   * источник, и возвращал `null`.
+   *
+   * Необязательны: холст рисуется и там, где границы с миром нет, и схема без
+   * неё выглядит ровно как раньше.
+   */
+  sensors?: SandboxSensor[]
+  motors?: SandboxMotor[]
+  /**
    * Длительность прогона -- ради окна работы драйва.
    *
    * Окно показывается, только если оно короче прогона: драйв на весь прогон
@@ -288,6 +322,13 @@ export interface CanvasProps {
    */
   onPickDrive?: (id: string) => void
   onPickRecord?: (id: string) => void
+  /**
+   * Щелчок по двери наружу открывает её свойства -- как у всякого объекта
+   * схемы (#571). Без них дверь остаётся фигурой, которую видно, но нельзя
+   * разглядеть: род и числа правятся только в панели.
+   */
+  onPickSensor?: (id: string) => void
+  onPickMotor?: (id: string) => void
   /**
    * Конец связи: порт блока, точка клетки или внутренний узел блока.
    *
@@ -328,6 +369,11 @@ export function blockBox(open: boolean): { width: number; height: number } {
 /** Размер фигуры клетки. Нужен раскладке: ELK двигает то, что нарисовано. */
 export function cellBox(): { width: number; height: number } {
   return DOT
+}
+
+/** Размер фигуры двери наружу -- сенсора и мотора (#571). Нужен там же. */
+export function doorBox(): { width: number; height: number } {
+  return DOOR
 }
 
 /** Точка порта на краю блока: входы слева, выходы и модуляция справа. */
@@ -418,6 +464,7 @@ export function endpointEnd(
   neurons: SandboxNeuron[],
   positionOf: (id: string, fallback: [number, number]) => [number, number],
   insides: Insides = new Map(),
+  doors: Door[] = [],
 ): WireEnd | null {
   const inner = innerRef(endpoint.instance, blocks)
   if (inner) {
@@ -453,9 +500,61 @@ export function endpointEnd(
     return { ...point, halfWidth: 0, halfHeight: 0 }
   }
   const neuron = neurons.find((item) => item.id === endpoint.instance)
-  if (!neuron) return null
-  const [x, y] = positionOf(neuron.id, neuron.position)
-  return { x, y, halfWidth: DOT.width / 2, halfHeight: DOT.height / 2 }
+  if (neuron) {
+    const [x, y] = positionOf(neuron.id, neuron.position)
+    return { x, y, halfWidth: DOT.width / 2, halfHeight: DOT.height / 2 }
+  }
+  // Дверь наружу -- такой же конец связи, как клетка: сенсор соединяют с
+  // клеткой обычной связью, у которой источник он сам. Не знай холст, где он
+  // стоит, связь возвращала бы `null` и не рисовалась вовсе -- ровно так и
+  // было до #571: стрелку от сенсора не видел никто.
+  const door = doors.find((item) => item.id === endpoint.instance)
+  if (!door) return null
+  const [x, y] = positionOf(door.id, door.position)
+  return { x, y, halfWidth: DOOR.width / 2, halfHeight: DOOR.height / 2 }
+}
+
+/**
+ * Дверь наружу на холсте -- сенсор или мотор: всё, что нужно, чтобы её
+ * нарисовать и провести к ней связь.
+ *
+ * Общий вид на оба рода: место и имя у них устроены одинаково, а различаются
+ * они тем, что снаружи от фигуры, -- у сенсора стрелка в схему, у мотора щуп
+ * на клетке. Разводить их на два вида ради одного поля значило бы писать
+ * `endpointEnd` дважды.
+ */
+export interface Door {
+  id: string
+  position: [number, number]
+}
+
+/**
+ * Очертание двери: пятиугольник, обращённый в схему.
+ *
+ * У сенсора острый конец справа -- он вносит в схему; у мотора тот же край
+ * вдавлен внутрь -- он из неё принимает. Считается по центру фигуры, как у
+ * клетки: место двери в проекте -- это её середина, и `move` двигает ровно
+ * его.
+ */
+export function doorPoints(x: number, y: number, sensor: boolean): string {
+  const halfWidth = DOOR.width / 2
+  const halfHeight = DOOR.height / 2
+  const points: Array<[number, number]> = sensor
+    ? [
+        [x - halfWidth, y - halfHeight],
+        [x + halfWidth - DOOR.notch, y - halfHeight],
+        [x + halfWidth, y],
+        [x + halfWidth - DOOR.notch, y + halfHeight],
+        [x - halfWidth, y + halfHeight],
+      ]
+    : [
+        [x - halfWidth, y - halfHeight],
+        [x + halfWidth, y - halfHeight],
+        [x + halfWidth, y + halfHeight],
+        [x - halfWidth, y + halfHeight],
+        [x - halfWidth + DOOR.notch, y],
+      ]
+  return points.map(([px, py]) => `${px},${py}`).join(' ')
 }
 
 /**
@@ -523,6 +622,8 @@ export function Canvas({
   links,
   stimuli = [],
   recordings = [],
+  sensors = [],
+  motors = [],
   duration = Infinity,
   glossary = NO_GLOSSARY,
   cells,
@@ -535,6 +636,8 @@ export function Canvas({
   onPickLink,
   onPickDrive,
   onPickRecord,
+  onPickSensor,
+  onPickMotor,
   onPickEndpoint,
   onMove,
   onToggleBlock,
@@ -689,6 +792,16 @@ export function Canvas({
     drag && drag.id === id ? drag.position : fallback
 
   /**
+   * Сенсоры и моторы одним списком -- то, чем они одинаковы: фигура и место.
+   * По нему `endpointEnd` находит конец связи от сенсора, а `figures` --
+   * препятствие на пути чужого провода.
+   */
+  const doors = useMemo<Door[]>(
+    () => [...sensors, ...motors].map(({ id, position }) => ({ id, position })),
+    [sensors, motors],
+  )
+
+  /**
    * Фигуры холста прямоугольниками -- то, мимо чего связь обязана пройти.
    *
    * Ключ -- имя объекта, за который фигуру таскают: у порта и у внутреннего
@@ -711,9 +824,16 @@ export function Canvas({
       const [x, y] = positionOf(neuron.id, neuron.position)
       map.set(neuron.id, { x, y, width: DOT.width, height: DOT.height })
     }
+    // Двери наравне с клетками: связь от сенсора обязана обходить чужие
+    // фигуры так же, как всякая другая, -- и сама быть той фигурой, которую
+    // обходят соседние.
+    for (const door of doors) {
+      const [x, y] = positionOf(door.id, door.position)
+      map.set(door.id, { x, y, width: DOOR.width, height: DOOR.height })
+    }
     return map
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, neurons, insides, drag])
+  }, [blocks, neurons, doors, insides, drag])
 
   /**
    * Поле для дуг -- общий прямоугольник схемы.
@@ -778,6 +898,20 @@ export function Canvas({
         .map(([, box]) => box),
       field,
       ...(routing.get(link.id) ?? {}),
+    }
+  }
+
+  /**
+   * Что обходит линия мотора: всё, кроме него самого и фигуры, на которую он
+   * смотрит. Тем же правилом, что у связи, -- линия из фигуры и выходит.
+   */
+  const placeOfDoor = (door: string, target: string): WirePlace => {
+    const mine = new Set([door, ownerOf(target, blocks)])
+    return {
+      others: [...figures.entries()]
+        .filter(([id]) => !mine.has(id))
+        .map(([, box]) => box),
+      field,
     }
   }
 
@@ -889,7 +1023,7 @@ export function Canvas({
       endpoint: { instance: string; port: string | null },
       fallback: -1 | 1,
     ): ReturnType<typeof markPlace> | null => {
-      const end = endpointEnd(endpoint, blocks, neurons, positionOf, insides)
+      const end = endpointEnd(endpoint, blocks, neurons, positionOf, insides, doors)
       if (!end) return null
       const side = markSide(endpoint, blocks, fallback)
       const key = `${Math.round(end.x)}|${Math.round(end.y)}|${side}`
@@ -908,7 +1042,7 @@ export function Canvas({
     }))
     return { drives, probes }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stimuli, recordings, blocks, neurons, insides, drag])
+  }, [stimuli, recordings, blocks, neurons, doors, insides, drag])
 
   /**
    * «Вписать»: показать всю схему целиком.
@@ -930,6 +1064,16 @@ export function Canvas({
         y: neuron.position[1] - DOT.height / 2,
         width: DOT.width,
         height: DOT.height,
+      })
+    }
+    // Двери наружу считаются наравне с фигурами схемы: вместить схему, у
+    // которой сенсор остался за краем окна, значит не вместить схему.
+    for (const door of doors) {
+      spots.push({
+        x: door.position[0] - DOOR.width / 2,
+        y: door.position[1] - DOOR.height / 2,
+        width: DOOR.width,
+        height: DOOR.height,
       })
     }
     // Знаки драйва и записи стоят снаружи фигур и в «вписать» считаются
@@ -959,7 +1103,7 @@ export function Canvas({
       right: Math.max(...spots.map((item) => item.x + item.width)),
       bottom: Math.max(...spots.map((item) => item.y + item.height)),
     }
-  }, [blocks, neurons, insides, marks, glossary])
+  }, [blocks, neurons, doors, insides, marks, glossary])
 
   /**
    * Каким цветом знак драйва: тем же правилом, что у порта и у связи.
@@ -1015,6 +1159,7 @@ export function Canvas({
           link={link}
           blocks={blocks}
           neurons={neurons}
+          doors={doors}
           insides={insides}
           positionOf={positionOf}
           place={placeOf(link)}
@@ -1397,6 +1542,81 @@ export function Canvas({
         )
       })}
 
+      {/* Двери наружу и то, чем они держатся за схему (#571).
+
+          Связь от сенсора рисуется выше, вместе со всеми связями: это и есть
+          обычная связь, у которой источник -- сам сенсор, и знаки у неё те
+          же, что у всякой другой (#554). А мотор связью не подключён -- он
+          смотрит, как запись, -- и линия к нему кончается щупом, а не
+          остриём: сказать остриём «сюда приходит сигнал» было бы неправдой о
+          том, что на схеме происходит. */}
+      {motors.map((motor) => (
+        <MotorWatch
+          key={`watch-${motor.id}`}
+          motor={motor}
+          from={endpointEnd(
+            { instance: motor.id, port: null },
+            blocks,
+            neurons,
+            positionOf,
+            insides,
+            doors,
+          )}
+          to={endpointEnd(motor.source, blocks, neurons, positionOf, insides, doors)}
+          place={placeOfDoor(motor.id, motor.source.instance)}
+        />
+      ))}
+
+      {[...sensors, ...motors].map((door) => {
+        const sensor = 'to' in door
+        const [x, y] = positionOf(door.id, door.position)
+        const chosen =
+          selected?.kind === (sensor ? 'sensor' : 'motor') && selected.id === door.id
+        const waiting = pending?.instance === door.id
+        return (
+          <g
+            key={door.id}
+            className={`cv-door is-${sensor ? 'sensor' : 'motor'}${
+              chosen ? ' is-on' : ''
+            }${waiting ? ' is-waiting' : ''}`}
+            onPointerDown={(event) => startDrag(event, door.id, door.position)}
+            onClick={() =>
+              sensor ? onPickSensor?.(door.id) : onPickMotor?.(door.id)
+            }
+          >
+            {/* Подсказка на всей фигуре: род словами считает сервер
+                (`describe_sensor`), и второго объяснения здесь нет. */}
+            <title>
+              {sensor ? 'сенсор' : 'мотор'} {door.id}: {door.story}
+              {sensor
+                ? '. Щёлкните по нему, потом по клетке, чтобы соединить'
+                : `. Смотрит на ${where(door.source)}`}
+            </title>
+            <polygon points={doorPoints(x, y, sensor)} />
+            <text x={x} y={y + 4} textAnchor="middle">
+              {short(door.id, 10)}
+            </text>
+            {/* Точка подключения -- только у сенсора: связь выходит из него.
+                Мотор ничего не отдаёт в схему, и кружок на нём обещал бы
+                дверь, которой нет. */}
+            {sensor ? (
+              <g
+                className={`cv-soma${waiting ? ' is-waiting' : ''}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onPickEndpoint(door.id, null)
+                }}
+              >
+                <circle cx={x + DOOR.width / 2} cy={y} r={5}>
+                  <title>выход сенсора {door.id}: щёлкните, чтобы соединить</title>
+                </circle>
+              </g>
+            ) : null}
+          </g>
+        )
+      })}
+
       {/* Знаки драйва и записи -- последними, поверх фигур: они стоят
           снаружи, и перекрывать их коробкой значило бы прятать вход в
           схему за самой схемой. */}
@@ -1638,6 +1858,43 @@ function RecordMark({
   )
 }
 
+/**
+ * Линия от мотора к клетке, на которую он смотрит (#571).
+ *
+ * Не связь: мотор ничего в клетку не вливает -- он читает её разряды, как
+ * запись. Поэтому на конце щуп, а не остриё, и цвет тусклый: мотор не часть
+ * физики схемы, он её граница. Ровно те же знаки, что у записи (#502, #554),
+ * и это не совпадение -- вещь та же самая, только величина уходит наружу, а
+ * не на дорожку.
+ *
+ * Без цели линия не рисуется: мотор, смотрящий на исчезнувшую клетку, в
+ * проекте остаётся законным объектом, и своя строка в дереве у него есть. На
+ * холсте ему просто не к чему прийти.
+ */
+function MotorWatch({
+  motor,
+  from,
+  to,
+  place,
+}: {
+  motor: SandboxMotor
+  from: WireEnd | null
+  to: WireEnd | null
+  place: WirePlace
+}) {
+  if (!from || !to) return null
+  const line = wire(from, to, place)
+  return (
+    <g className="cv-watch">
+      <title>
+        {motor.id} смотрит на {where(motor.source)}: {motor.story}
+      </title>
+      <path className="cv-mark-wire" d={line.path} fill="none" />
+      <circle className="cv-probe" cx={line.end.x} cy={line.end.y} r={4} />
+    </g>
+  )
+}
+
 function InnerEdge({ edge }: { edge: MiniEdge }) {
   return (
     <g className={`cv-in-link is-${edge.kind}`}>
@@ -1655,6 +1912,7 @@ function Link({
   link,
   blocks,
   neurons,
+  doors,
   insides,
   positionOf,
   place,
@@ -1664,14 +1922,16 @@ function Link({
   link: SandboxLink
   blocks: SandboxBlock[]
   neurons: SandboxNeuron[]
+  /** Двери наружу: у связи от сенсора источник -- он сам (#571). */
+  doors: Door[]
   insides: Insides
   positionOf: (id: string, fallback: [number, number]) => [number, number]
   place: WirePlace
   selected: boolean
   onPick: () => void
 }) {
-  const from = endpointEnd(link.source, blocks, neurons, positionOf, insides)
-  const to = endpointEnd(link.target, blocks, neurons, positionOf, insides)
+  const from = endpointEnd(link.source, blocks, neurons, positionOf, insides, doors)
+  const to = endpointEnd(link.target, blocks, neurons, positionOf, insides, doors)
   if (!from || !to) return null
 
   // Связь ведётся дугой -- той же, что в миниатюре (`arc`, #554). Две прямые

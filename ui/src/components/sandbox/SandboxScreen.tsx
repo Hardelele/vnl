@@ -27,6 +27,7 @@ import { useEffect, useRef, useState } from 'react'
 import { historyCommand, objectCommand } from '../../lib/keys'
 import { CELLS, counted } from '../../lib/plural'
 import { driveHint, receptorHint } from '../../model/glossary'
+import { where } from '../../model/sandbox'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
 import type { CellState } from '../../model/sim'
 import type { Glossary } from '../../model/types'
@@ -42,7 +43,7 @@ import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
 import { ProjectBar } from './ProjectBar'
-import { Properties, where } from './Properties'
+import { Properties } from './Properties'
 import { RunSettings } from './RunSettings'
 import { SavePattern } from './SavePattern'
 import './sandbox.css'
@@ -410,6 +411,14 @@ export function SandboxScreen({
   const own = project.cellTypes.filter((kind) => !known.has(kind.type))
   /** Сессия считает не эту схему: её результат уже про другую сеть. */
   const stale = Boolean(simId && built && built !== project.fingerprint)
+  /**
+   * На какую клетку положить мотор: выбранную, если выбрана клетка (#571).
+   *
+   * Клетка, а не любой выбранный объект: мотор читает разряды, а разряды есть
+   * у клетки. У блока их несколько, и «мотор на блок» был бы адресом, которого
+   * не существует, -- ровно тем же, чем был бы «драйв на блок».
+   */
+  const chosenNeuron = selected?.kind === 'neuron' ? selected.id : null
 
   return (
     <div className="sb">
@@ -495,7 +504,14 @@ export function SandboxScreen({
           title="Расставить объекты по слоям"
           onClick={() =>
             void control.arrange(() =>
-              arrangement(project.blocks, project.neurons, project.links, opened),
+              arrangement(
+                project.blocks,
+                project.neurons,
+                project.links,
+                opened,
+                project.sensors,
+                project.motors,
+              ),
             )
           }
         >
@@ -690,6 +706,75 @@ export function SandboxScreen({
                 <p className="sb-hint">Каталог типов клеток пуст.</p>
               ) : null}
 
+              {/* Граница с миром -- здесь же, в палитре (#571).
+                  Сенсор и мотор заводились только из свойств выбранной
+                  клетки, и человек, не знающий про ту кнопку, не находил их
+                  вовсе -- ровно та же беда, что была с раскрытием блока
+                  (#549). Это такие же детали, которые кладут на холст,
+                  просто кладутся они на границу, а не внутрь схемы, -- и
+                  искать их идут туда же, куда за клеткой.
+
+                  Кнопка в свойствах клетки остаётся: там цель уже названа
+                  щелчком, и сенсор приходит сразу со стрелкой. Второй
+                  реализации это не заводит -- обе дороги зовут `Project`. */}
+              <div className="sb-section">Граница с миром</div>
+              <p className="sb-note">
+                Сенсор вносит в схему величину снаружи, мотор выносит наружу
+                частоту клетки. На холсте у них своя фигура: у сенсора острый
+                конец смотрит в схему, у мотора вдавлен.
+              </p>
+              <div className="sb-row">
+                <span className="sb-mini sb-cell-shape">
+                  <svg viewBox="0 0 40 24" role="img" aria-label="сенсор">
+                    <polygon className="sb-door-shape" points="4,6 30,6 36,12 30,18 4,18" />
+                  </svg>
+                </span>
+                <span className="sb-row-text" title={glossary.sensor}>
+                  <span className="sb-row-name">Сенсор</span>
+                  <span className="mono sb-level">дверь снаружи внутрь</span>
+                </span>
+                <button
+                  type="button"
+                  className="sb-plus"
+                  title="Положить сенсор на холст. Соединяется с клеткой так же, как клетка с клеткой: щелчок по его выходу, потом по клетке"
+                  onClick={() => pick(() => void control.insertSensor())}
+                >
+                  +
+                </button>
+              </div>
+              <div className="sb-row">
+                <span className="sb-mini sb-cell-shape">
+                  <svg viewBox="0 0 40 24" role="img" aria-label="мотор">
+                    <polygon className="sb-door-shape" points="4,6 36,6 36,18 4,18 10,12" />
+                  </svg>
+                </span>
+                <span className="sb-row-text" title={glossary.motor}>
+                  <span className="sb-row-name">Мотор</span>
+                  <span className="mono sb-level">
+                    {chosenNeuron ? `смотрит на ${chosenNeuron}` : 'выберите клетку'}
+                  </span>
+                </span>
+                {/* Цель обязательна, и это не недоделка палитры, а устройство
+                    самой вещи: мотор без клетки не существует -- он и есть
+                    «смотрю на эту точку». Сенсор же снаружи и до всякой схемы
+                    полон, поэтому кладётся один. */}
+                <button
+                  type="button"
+                  className="sb-plus"
+                  disabled={!chosenNeuron}
+                  title={
+                    chosenNeuron
+                      ? `Положить мотор, смотрящий на клетку ${chosenNeuron}`
+                      : 'Мотор смотрит на клетку — выберите её на холсте или в «Объектах»'
+                  }
+                  onClick={() =>
+                    pick(() => void control.insertMotor(chosenNeuron as string, null))
+                  }
+                >
+                  +
+                </button>
+              </div>
+
               {/* Типы клеток самого проекта -- отдельным разделом под
                   каталогом (#564). Они попадают в проект из разобранного
                   паттерна (#532) и каталогу не принадлежат: `target` в нём
@@ -836,34 +921,32 @@ export function SandboxScreen({
                 />
               ))}
               {/* Двери наружу -- такие же объекты проекта, как стимул и запись,
-                  и в дереве стоят рядом с ними: иначе про сенсор, заведённый
-                  из свойств клетки, нельзя узнать вообще ничего -- фигуры на
-                  холсте у него нет, а подключён он обычной связью, которая
-                  строкой выше уже названа своими концами.
+                  и в дереве стоят рядом с ними.
 
-                  Не выбираются: править у них в этой задаче нечего -- числа
-                  сервер задаёт умолчаниями рода («частота, 100 Гц при 1»), а
-                  всё, что с ними делают, -- привязывают к кнопке. Заводить
-                  ради прототипа, который могут отвергнуть целиком, ещё два
-                  рода выделения и две ветки панели свойств значило бы
-                  построить под него подсистему -- ровно то, чего в карточке
-                  просили не делать. */}
+                  Теперь они и выбираются (#571): у сенсора появилась фигура на
+                  холсте, и щелчок по строке обязан открывать то же самое, что
+                  щелчок по фигуре, -- иначе в дереве был бы второй, более
+                  бедный способ смотреть на тот же объект. В #562 они не
+                  выбирались нарочно: править у них было нечего, пока род и
+                  числа задавал только сервер умолчаниями. */}
               {project.sensors.map((sensor) => (
-                <Door
+                <Row
                   key={sensor.id}
                   label={`${sensor.id} · ${sensor.story}`}
                   kind="сенсор"
                   hint={glossary.sensor}
-                  onDrop={() => void control.remove(sensor.id)}
+                  on={selected?.kind === 'sensor' && selected.id === sensor.id}
+                  onPick={() => pick(() => control.select({ kind: 'sensor', id: sensor.id }))}
                 />
               ))}
               {project.motors.map((motor) => (
-                <Door
+                <Row
                   key={motor.id}
                   label={`${motor.id} · ${where(motor.source)} · ${motor.story}`}
                   kind="мотор"
                   hint={glossary.motor}
-                  onDrop={() => void control.remove(motor.id)}
+                  on={selected?.kind === 'motor' && selected.id === motor.id}
+                  onPick={() => pick(() => control.select({ kind: 'motor', id: motor.id }))}
                 />
               ))}
             </div>
@@ -882,6 +965,12 @@ export function SandboxScreen({
             // растр пуст в начале, а равное прогону писать не о чем.
             stimuli={project.stimuli}
             recordings={project.recordings}
+            // Граница с миром едет на холст наравне с драйвом и записями
+            // (#571): до этого она была единственной вещью схемы, которой на
+            // схеме нет, -- и даже стрелка от сенсора к клетке не рисовалась,
+            // потому что холст не знал, где стоит её источник.
+            sensors={project.sensors}
+            motors={project.motors}
             duration={project.run.duration}
             glossary={glossary}
             cells={cells}
@@ -896,6 +985,8 @@ export function SandboxScreen({
             // второй способ править стимул заводить не из чего.
             onPickDrive={(id) => control.select({ kind: 'stimulus', id })}
             onPickRecord={(id) => control.select({ kind: 'recording', id })}
+            onPickSensor={(id) => control.select({ kind: 'sensor', id })}
+            onPickMotor={(id) => control.select({ kind: 'motor', id })}
             onPickEndpoint={(instance, port) =>
               void control.touchEndpoint(instance, port)
             }
@@ -1190,37 +1281,6 @@ function Row({
       <span className="sb-row-name">{label}</span>
       <span className="mono sb-kind">{kind}</span>
     </button>
-  )
-}
-
-/**
- * Строка двери наружу: сенсор или мотор (#562).
- *
- * Своя, а не `Row`: `Row` -- это выбор объекта, а сенсор и мотор в этом
- * прототипе не выбираются (разбор выше, там же где они рисуются). Поэтому
- * здесь не кнопка выбора с подписью, а подпись с одним действием -- убрать.
- */
-function Door({
-  label,
-  kind,
-  hint,
-  onDrop,
-}: {
-  label: string
-  kind: string
-  hint?: string
-  onDrop: () => void
-}) {
-  return (
-    <div className="sb-row" title={hint}>
-      <span className="sb-row-text">
-        <span className="sb-row-name">{label}</span>
-      </span>
-      <span className="mono sb-kind">{kind}</span>
-      <button type="button" className="sb-plus" title={`Убрать ${kind} ${label}`} onClick={onDrop}>
-        ×
-      </button>
-    </div>
   )
 }
 

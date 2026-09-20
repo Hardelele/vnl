@@ -18,8 +18,10 @@ import type {
   SandboxBlock,
   SandboxDrive,
   SandboxLink,
+  SandboxMotor,
   SandboxNeuron,
   SandboxRecording,
+  SandboxSensor,
 } from '../../model/sandbox'
 import type { Glossary } from '../../model/types'
 import { START_VIEW, type CanvasView } from '../../state/sandbox'
@@ -98,6 +100,36 @@ const LINK: SandboxLink = {
   inhibitory: false,
   weight: 1,
   delay: 1,
+}
+
+/** Сенсор снаружи схемы и связь от него в клетку -- обычная связь (#571). */
+const SENSOR: SandboxSensor = {
+  id: 'sensor1',
+  kind: 'rate',
+  story: 'частота, 100 Гц при 1',
+  to: 100,
+  position: [40, 220],
+}
+
+const FROM_SENSOR: SandboxLink = {
+  id: 'l4',
+  source: { instance: 'sensor1', port: null, section: 'soma', fraction: 0.5 },
+  target: { instance: 'E', port: null, section: 'soma', fraction: 0.5 },
+  receptor: 'ampa',
+  inhibitory: false,
+  weight: 1,
+  delay: 1,
+}
+
+/** Мотор смотрит на клетку: связью он не подключён -- он читает её разряды. */
+const MOTOR: SandboxMotor = {
+  id: 'motor1',
+  kind: 'rate',
+  story: 'частота за окно 50 мс',
+  unit: 'Гц',
+  window: 50,
+  source: { instance: 'I', port: null, section: 'soma', fraction: 0.5 },
+  position: [560, 220],
 }
 
 /** Возврат: та же пара клеток, но связь идёт справа налево. */
@@ -1145,5 +1177,97 @@ describe('драйв и запись на холсте (#502)', () => {
     const port = portPoint(FFI, 'in')!
     // Остриё слева от порта и дальше, чем его подпись (9 + 2 знака).
     expect(Number(wire.getAttribute('x2'))).toBeLessThan(port.x - 9 - 2 * 5)
+  })
+})
+
+describe('граница с миром на холсте (#571)', () => {
+  it('сенсор и мотор рисуются своей фигурой, а не клеткой', async () => {
+    // У двери нет мембраны, и притворяться клеткой ей нельзя: заряда,
+    // порога и медиатора у неё не бывает. Отсюда и другая фигура --
+    // пятиугольник, обращённый в схему.
+    await mount({ sensors: [SENSOR], motors: [MOTOR] })
+
+    const doors = [...host.querySelectorAll('.cv-door')]
+    expect(doors.length).toBe(2)
+    expect(doors.map((door) => door.getAttribute('class'))).toEqual([
+      'cv-door is-sensor',
+      'cv-door is-motor',
+    ])
+    // Фигура -- многоугольник, а не прямоугольник клетки.
+    expect(doors[0]?.querySelector('polygon')).not.toBeNull()
+    expect(doors[0]?.querySelector('rect')).toBeNull()
+    // У сенсора острый конец справа, у мотора тот же край вдавлен: фигуры
+    // различаются издали, когда подпись уже не читается.
+    const sensorPoints = doors[0]?.querySelector('polygon')?.getAttribute('points') ?? ''
+    const motorPoints = doors[1]?.querySelector('polygon')?.getAttribute('points') ?? ''
+    expect(sensorPoints).not.toBe(motorPoints)
+  })
+
+  it('стрелка от сенсора к клетке рисуется теми же знаками, что связь', async () => {
+    // Главная поломка: `endpointEnd` не знал, где стоит сенсор, и связь от
+    // него возвращала `null` -- то есть не рисовалась вовсе.
+    await mount({ sensors: [SENSOR], links: [FROM_SENSOR] })
+
+    const link = host.querySelector('.cv-link') as SVGGElement
+    expect(link).not.toBeNull()
+    expect(link.querySelector('.cv-wire')?.getAttribute('d')).toBeTruthy()
+    // Знак на конце -- общий на весь проект: возбуждение остриём (#554).
+    expect(link.querySelector('polygon.cv-cap')).not.toBeNull()
+  })
+
+  it('мотор держится за клетку щупом, а не остриём', async () => {
+    // Мотор ничего в клетку не вливает -- он смотрит, как запись. Остриё
+    // сказало бы «сюда приходит сигнал», то есть соврало бы о схеме.
+    await mount({ motors: [MOTOR] })
+
+    const watch = host.querySelector('.cv-watch') as SVGGElement
+    expect(watch).not.toBeNull()
+    expect(watch.querySelector('.cv-probe')).not.toBeNull()
+    expect(watch.querySelector('polygon')).toBeNull()
+    expect(watch.querySelector('title')?.textContent).toContain('смотрит на I')
+  })
+
+  it('щелчок по двери открывает её свойства', async () => {
+    const sensor = vi.fn()
+    const motor = vi.fn()
+    await mount({
+      sensors: [SENSOR],
+      motors: [MOTOR],
+      onPickSensor: sensor,
+      onPickMotor: motor,
+    })
+
+    const doors = [...host.querySelectorAll('.cv-door')] as SVGGElement[]
+    await act(async () => {
+      doors[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(sensor).toHaveBeenCalledWith('sensor1')
+    await act(async () => {
+      doors[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(motor).toHaveBeenCalledWith('motor1')
+  })
+
+  it('у сенсора есть точка подключения, у мотора её нет', async () => {
+    // Связь выходит из сенсора; мотор в схему не отдаёт ничего, и кружок на
+    // нём обещал бы дверь, которой нет.
+    const picked = await mount({ sensors: [SENSOR], motors: [MOTOR] })
+
+    const doors = [...host.querySelectorAll('.cv-door')] as SVGGElement[]
+    expect(doors[1]?.querySelector('.cv-soma')).toBeNull()
+    const out = doors[0]?.querySelector('.cv-soma') as SVGGElement
+    await act(async () => {
+      out.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    // Порта у сенсора нет: конец связи -- он сам, как и у клетки.
+    expect(picked).toEqual([['sensor1', null]])
+  })
+
+  it('схема без границы с миром выглядит ровно как раньше', async () => {
+    await mount({ links: [LINK] })
+
+    expect(host.querySelector('.cv-door')).toBeNull()
+    expect(host.querySelector('.cv-watch')).toBeNull()
+    expect(host.querySelectorAll('.cv-link').length).toBe(1)
   })
 })
