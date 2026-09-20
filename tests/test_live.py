@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from vnl import protocols
-from vnl.live import Pool, Session, SessionError
+from vnl.live import Pool, PoolFull, Session, SessionError
 from vnl.resolve import load
 from vnl.sim.lif import simulate
 
@@ -161,6 +161,134 @@ def test_a_pool_hands_out_and_closes_sessions():
 
     pool.close_all()
     assert len(pool) == 0
+
+
+# --- предел пула и срок простоя (#517) ------------------------------------
+#
+# Сессия -- это модель в памяти, накопленные трассы и считающий поток. Пока
+# стенд был на своей машине, брошенная сессия никому не мешала; после #516 её
+# открывает любой прохожий, а закрытая вкладка `DELETE /api/sim/<id>` не шлёт.
+#
+# Часы у пула свои (довод `now`), поэтому ниже никто не спит: проверяется само
+# правило, а не скорость машины. Сторож, который зовёт `sweep` по таймеру,
+# здесь не проверяется нарочно -- в нём нет ничего, кроме этого таймера.
+
+
+class Clock:
+    """Часы, которые идут, когда их просят. Настоящие здесь ни к чему."""
+
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def tick(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def test_the_pool_pushes_out_the_one_nobody_asked_about():
+    """Предел числа вытесняет ту, о которой дольше всех не спрашивали.
+
+    Не самую раннюю: открытая первой -- не значит брошенная, человек мог
+    открыть её первой и смотреть до сих пор.
+    """
+    clock = Clock()
+    pool = Pool(limit=2, grace=60.0, idle=0, now=clock)
+    first = pool.open(model())
+    clock.tick(10)
+    second = pool.open(model())
+
+    # Про первую спросили только что, про вторую -- давно.
+    clock.tick(100)
+    assert pool.get(first.id) is first
+    clock.tick(10)
+
+    third = pool.open(model())
+    assert len(pool) == 2
+    assert [item.id for item in (first, third)] == [first.id, third.id]
+    assert second.closed, "вытесненная сессия перестаёт считать, а не просто теряется"
+    assert pool.get(first.id) is first
+    with pytest.raises(SessionError, match="вытеснила новая"):
+        pool.get(second.id)
+    pool.close_all()
+
+
+def test_a_pool_full_of_watched_sessions_refuses_a_newcomer():
+    """Сессию, на которую человек смотрит, предел не убивает.
+
+    Отказ новому неприятен, но обратим -- человек повторит через минуту. Отнять
+    сессию у того, кто работает, необратимо: трассы и поданное в них не
+    восстановить. Иначе на людном стенде семнадцатый посетитель гасил бы экран
+    шестнадцатому.
+    """
+    clock = Clock()
+    pool = Pool(limit=2, grace=60.0, idle=0, now=clock)
+    first = pool.open(model())
+    second = pool.open(model())
+    clock.tick(30)  # меньше срока защиты: обе ещё «смотрят»
+
+    with pytest.raises(PoolFull, match="через минуту"):
+        pool.open(model())
+    assert len(pool) == 2
+    assert not first.closed and not second.closed
+    pool.close_all()
+
+
+def test_a_forgotten_session_closes_itself():
+    """Срок простоя закрывает брошенную вкладку, даже если никто не приходил.
+
+    Одним пределом числа этого не добиться: он срабатывает только тогда, когда
+    кто-то открывает новую сессию, а брошенная жжёт ядро и без посетителей.
+    """
+    clock = Clock()
+    pool = Pool(limit=0, idle=100.0, now=clock)
+    forgotten = pool.open(model())
+    watched = pool.open(model())
+
+    clock.tick(90)
+    pool.get(watched.id)  # спросили -- значит смотрят
+    clock.tick(20)
+
+    assert pool.sweep() == 1
+    assert len(pool) == 1
+    assert forgotten.closed and not watched.closed
+    with pytest.raises(SessionError, match="долго не спрашивали"):
+        pool.get(forgotten.id)
+    pool.close_all()
+
+
+def test_a_session_that_never_existed_says_less():
+    """Про закрытую пул объясняет, про незнакомую -- нет.
+
+    Объяснение нужно затем, что интерфейс показывает его человеку вместо
+    пустого экрана. Но рассказывать прохожему, какие сессии тут когда-то были,
+    незачем: перебор идентификаторов не должен ничего сообщать.
+    """
+    pool = Pool(limit=1, grace=0, idle=0, now=Clock())
+    first = pool.open(model())
+    pool.open(model())
+    assert "вытеснила" in pool.no_such(first.id)
+    assert "закрыта или не открывалась" in pool.no_such("sim404")
+    pool.close_all()
+
+
+def test_the_right_to_a_session_is_not_a_reason_to_keep_it():
+    """Вопрос о праве (`origin_of`) отметку о просмотре не двигает.
+
+    Иначе запрос, который тут же получит отказ, отодвигал бы вытеснение -- и
+    аноним, стучащийся в чужую сессию, продлевал бы ей жизнь.
+    """
+    clock = Clock()
+    pool = Pool(limit=2, grace=5.0, idle=0, now=clock)
+    first = pool.open(model(), origin="pattern")
+    clock.tick(10)
+    pool.open(model())
+    pool.origin_of(first.id)
+
+    pool.open(model())
+    assert first.closed
+    pool.close_all()
 
 
 # --- заряд клетки ---------------------------------------------------------

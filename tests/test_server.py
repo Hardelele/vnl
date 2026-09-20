@@ -554,6 +554,91 @@ def test_a_closed_simulation_is_gone(base):
     assert ask(base, "GET", "/api/health")[1]["simulations"] == 0
 
 
+# --- у пула есть предел (#517) --------------------------------------------
+#
+# Сессия живёт, пока её не закроют, а закрытая вкладка ничего не закрывает:
+# после #516 симуляцию паттерна открывает любой прохожий. Правило проверяется
+# здесь по HTTP, потому что человеку важны именно коды ответа: вытеснение --
+# это 404 с причиной, полный пул -- 503 «приходите позже», и путать их нельзя.
+
+
+@pytest.fixture
+def crowded(tmp_path, monkeypatch):
+    """Сервер, который держит разом только две сессии.
+
+    Предел приходит из окружения, как на стенде: подбирают его по памяти
+    машины, а не правкой кода.
+    """
+    monkeypatch.setenv("VNL_SIM_LIMIT", "2")
+    Store(tmp_path).save_pattern(ffi_pattern())
+    server = create_server(tmp_path, port=0, quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", (
+            server.RequestHandlerClass.service.pool
+        )
+    finally:
+        server.RequestHandlerClass.service.pool.close_all()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_the_limit_comes_from_the_environment_and_is_visible(crowded):
+    base, _ = crowded
+    _, health = ask(base, "GET", "/api/health")
+    assert health["simulationsLimit"] == 2
+    ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    assert ask(base, "GET", "/api/health")[1]["simulations"] == 1
+
+
+def test_a_forgotten_session_makes_room_for_a_new_one(crowded):
+    """Третья открывается, и место ей освобождает брошенная.
+
+    Срок защиты обнулён: изобразить в тесте «на неё смотрят» нечем, а правило
+    выбора жертвы проверено там, где живут часы пула (`test_live`).
+    """
+    base, pool = crowded
+    pool.grace = 0
+    _, first = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    _, second = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    status, third = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+
+    assert status == 201
+    assert ask(base, "GET", "/api/health")[1]["simulations"] == 2
+    # Вытесненная отвечает 404 -- и говорит, куда делась: пустой экран без
+    # объяснения интерфейс показать не должен.
+    status, payload = ask(base, "GET", f"/api/sim/{first['id']}")
+    assert status == 404
+    assert "вытеснила новая" in payload["error"]
+    # Остальные работают как работали.
+    assert ask(base, "GET", f"/api/sim/{second['id']}")[0] == 200
+    assert ask(base, "GET", f"/api/sim/{third['id']}")[0] == 200
+
+
+def test_a_pool_full_of_watched_sessions_answers_come_back_later(crowded):
+    """Сессия, на которую смотрят, переживает чужое «открыть ещё одну».
+
+    Это и есть цена отказа: он обратим, а отнятая сессия -- нет. Код 503, а не
+    400 и не 404: запрос верный, места нет сейчас.
+    """
+    base, _ = crowded
+    _, first = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    _, second = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+
+    status, payload = ask(base, "POST", "/api/sim", {"pattern": "ffi"})
+    assert status == 503
+    assert "через минуту" in payload["error"]
+    assert ask(base, "GET", f"/api/sim/{first['id']}")[0] == 200
+    assert ask(base, "GET", f"/api/sim/{second['id']}")[0] == 200
+    assert ask(base, "GET", "/api/health")[1]["simulations"] == 2
+
+    # Закрыли одну -- место освободилось, и никаких «попробуйте позже».
+    ask(base, "DELETE", f"/api/sim/{first['id']}")
+    assert ask(base, "POST", "/api/sim", {"pattern": "ffi"})[0] == 201
+
+
 # --- песочница ------------------------------------------------------------
 
 

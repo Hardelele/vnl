@@ -29,8 +29,11 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time as clock
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -52,9 +55,55 @@ SNAPSHOT_EVERY = 20.0
 #: Как часто фоновый поток добавляет времени. Реже -- рывками, чаще -- впустую.
 TICK_SECONDS = 0.1
 
+#: Сколько живых сессий стенд держит разом (#517). Шестнадцать -- это шестнадцать
+#: моделей с трассами и шестнадцать считающих потоков в одном процессе; стенд
+#: без воркеров и реплик (`deploy/readme.md`) больше и не потянет. Меняется
+#: переменной `VNL_SIM_LIMIT`: на своей машине предел не мешает, а на стенде
+#: его подбирают по памяти машины, а не по коду.
+MAX_SESSIONS = 16
+#: Сколько сессия живёт без единого вопроса о ней, секунд. Четверть часа -- это
+#: заведомо больше перерыва на подумать и заведомо меньше рабочего дня с
+#: забытой вкладкой. Меняется переменной `VNL_SIM_IDLE`.
+IDLE_SECONDS = 900.0
+#: Сколько сессия защищена от вытеснения после последнего вопроса о ней.
+#: Живую интерфейс опрашивает каждые 150 мс, но на паузе не спрашивает вовсе --
+#: человек, остановивший прогон и разглядывающий кадр, для пула выглядит
+#: ушедшим. Пять минут -- запас на это разглядывание.
+GRACE_SECONDS = 300.0
+#: Как часто сторож обходит пул в поисках брошенных сессий.
+SWEEP_SECONDS = 30.0
+#: Сколько закрытых сессий пул помнит по имени, чтобы объяснить, куда они делись.
+GONE_MEMORY = 128
+
+
+def _setting(name: str, fallback: float) -> float:
+    """Число из окружения. Мусор -- это значение по умолчанию, а не падение.
+
+    Служба не должна не подняться из-за опечатки в `VNL_SIM_LIMIT`: предел --
+    настройка нагрузки, а не условие работы. Про опечатку говорим в лог, чтобы
+    она не осталась незамеченной.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return fallback
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"{name}={raw!r} -- не число, беру {fallback}", file=sys.stderr)
+        return fallback
+
 
 class SessionError(RuntimeError):
     pass
+
+
+class PoolFull(RuntimeError):
+    """Открыть ещё одну сессию сейчас нельзя: все живые кому-то нужны.
+
+    Свой род ошибки, а не `SessionError`: та означает «такой сессии нет» и
+    отвечает 404, а это -- «приходите позже» и отвечает 503. Один код на два
+    разных ответа заставил бы интерфейс гадать по тексту.
+    """
 
 
 @dataclass
@@ -72,6 +121,7 @@ class Session:
         model: ir.Model,
         source: str = "",
         origin: Origin = "sandbox",
+        owner: str | None = None,
         pace: float = DEFAULT_PACE,
         snapshot_every: float = SNAPSHOT_EVERY,
     ) -> None:
@@ -83,8 +133,18 @@ class Session:
         #: песочница -- сессия неизвестного происхождения обязана оказаться
         #: закрытой, а не открытой.
         self.origin: Origin = origin
+        #: Чью песочницу она считает (#520). У витрины паттерна владельца нет и
+        #: быть не должно: карточку открывают по ссылке и без входа. Хранится
+        #: у сессии по той же причине, что и происхождение, -- в `/api/sim/<id>`
+        #: об этом не сказано ничего, а спросить нужно на каждом запросе.
+        self.owner = owner
         self.pace = pace
         self.snapshot_every = snapshot_every
+        #: Когда о сессии спрашивали в последний раз -- по монотонным часам,
+        #: а не по настенным: перевод времени не должен вытеснять сессии.
+        #: Только что открытая считается спрошенной: её и открыли затем, чтобы
+        #: смотреть.
+        self.touched = clock.monotonic()
 
         self._lock = threading.RLock()
         self._gate = threading.Condition(self._lock)
@@ -264,6 +324,12 @@ class Session:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2)
 
+    @property
+    def closed(self) -> bool:
+        """Закрыта ли она. Спрашивают снаружи: закрыть её может не только тот,
+        кто открывал, -- предел пула и срок простоя тоже закрывают (#517)."""
+        return self._closed
+
     # --- фоновый ход времени ---------------------------------------------
 
     def _ensure_thread(self) -> None:
@@ -406,12 +472,67 @@ class Session:
 
 
 class Pool:
-    """Открытые сессии. Одна на паттерн или песочницу, пока её не закрыли."""
+    """Открытые сессии. Одна на паттерн или песочницу, пока её не закрыли.
 
-    def __init__(self) -> None:
+    Предел числа и срок простоя (#517). Сессия -- это модель в памяти, все
+    накопленные трассы и фоновый поток, который считает время. Пока стенд стоял
+    на своей машине, этого хватало: закрыл вкладку -- и ладно, процесс всё
+    равно твой. После #516 симуляцию паттерна открывает любой прохожий, а
+    закрытая вкладка сессию не закрывает: `DELETE /api/sim/<id>` никто не
+    пошлёт. Пул без предела растёт, пока не кончится память, и считает
+    прогоны, на которые никто не смотрит.
+
+    Правил здесь два, и они про разное:
+
+    - **срок простоя** (`idle`). Сессию, о которой давно не спрашивали, сторож
+      закрывает сам. Это ответ на брошенную вкладку: она перестаёт жечь ядро,
+      даже если на стенд больше никто не пришёл. Одним пределом числа этого не
+      добиться -- он срабатывает только когда кто-то открывает новую;
+    - **предел числа** (`limit`). Он ограничивает память и число потоков
+      сверху, чего срок простоя не делает: пятнадцать минут хватит, чтобы
+      открыть сколько угодно сессий.
+
+    Кого вытеснять, решает время последнего вопроса о сессии, а не время её
+    открытия и не происхождение. Открытая раньше всех -- не значит брошенная:
+    человек мог открыть её первой и смотреть до сих пор. А происхождение
+    (паттерн или песочница) нарочно не участвует: заброшенная песочница ничем
+    не лучше заброшенной витрины, и живая витрина ничем не хуже живой
+    песочницы. Вопрос один -- смотрит ли кто-нибудь, -- и «когда спрашивали»
+    и есть единственный доступный на него ответ.
+
+    Сессию, на которую смотрят, предел не убивает: вытесняется только та, о
+    которой не спрашивали дольше `grace`. Если таких нет -- пул полон людьми,
+    и отказать надо новому (`PoolFull`), а не отобрать у того, кто работает.
+    Иначе семнадцатый посетитель гасил бы экран шестнадцатому, и на людном
+    стенде симуляция просто перестала бы работать у всех сразу.
+    """
+
+    def __init__(
+        self,
+        limit: int | None = None,
+        idle: float | None = None,
+        grace: float = GRACE_SECONDS,
+        sweep_every: float = SWEEP_SECONDS,
+        now: Callable[[], float] = clock.monotonic,
+    ) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, Session] = {}
         self._counter = 0
+        self.limit = int(_setting("VNL_SIM_LIMIT", MAX_SESSIONS)) if limit is None else limit
+        self.idle = _setting("VNL_SIM_IDLE", IDLE_SECONDS) if idle is None else idle
+        self.grace = grace
+        self._sweep_every = sweep_every
+        # Часы отдельным доводом: тест, который ждёт настоящие минуты, проверяет
+        # заодно и скорость машины. Правило вытеснения при этом проверяется то
+        # самое, а не его упрощённая копия.
+        self._now = now
+        # Почему сессии больше нет. Без этого вытесненная не отличается от
+        # никогда не существовавшей, и интерфейс говорит человеку «сессии нет»
+        # там, где правда -- «её закрыли за вас, откройте заново».
+        self._gone: dict[str, str] = {}
+        self._gone_order: list[str] = []
+        self._guard: threading.Thread | None = None
+        self._stop = threading.Event()
 
     def open(
         self,
@@ -420,11 +541,24 @@ class Pool:
         origin: Origin = "sandbox",
         **options: Any,
     ) -> Session:
+        # Место под новую освобождается до её создания, а не после: иначе в
+        # памяти на мгновение оказывалось бы на одну модель больше предела --
+        # ровно в тот момент, когда её и не хватает.
+        for retired in self._retire(room=True):
+            retired.close()
         with self._lock:
+            if 0 < self.limit <= len(self._sessions):
+                raise PoolFull(
+                    "стенд уже считает столько симуляций, сколько может "
+                    f"({self.limit}), и все они кому-то нужны прямо сейчас. "
+                    "Попробуйте через минуту."
+                )
             self._counter += 1
             id = f"sim{self._counter}"
             session = Session(id, model, source=source, origin=origin, **options)
+            session.touched = self._now()
             self._sessions[id] = session
+            self._ensure_guard()
             return session
 
     def origin_of(self, id: str) -> Origin | None:
@@ -433,6 +567,10 @@ class Pool:
         Отдельно от `get`, потому что спрашивают об этом до всякой работы с
         сессией и на другой вопрос: можно ли пускать сюда без входа. «Нет
         такой» здесь -- не ошибка, а такой же ответ «нельзя».
+
+        Временем последнего вопроса это не считается: спрашивают тут не о
+        сессии, а о праве на неё, и запрос, который сейчас же получит отказ,
+        не должен отодвигать вытеснение.
         """
         with self._lock:
             session = self._sessions.get(id)
@@ -441,9 +579,26 @@ class Pool:
     def get(self, id: str) -> Session:
         with self._lock:
             session = self._sessions.get(id)
+            if session is not None:
+                # Спросили -- значит на неё смотрят. Это и есть та отметка, по
+                # которой предел выбирает, кем пожертвовать.
+                session.touched = self._now()
         if session is None:
-            raise SessionError(f"сессии {id!r} нет: она закрыта или не открывалась")
+            raise SessionError(self.no_such(id))
         return session
+
+    def no_such(self, id: str) -> str:
+        """Почему сессии нет -- одним текстом на все отказы.
+
+        Вытесненная и закрытая по простою называют причину: интерфейс покажет
+        её рядом с транспортом, и «пусто» перестанет выглядеть поломкой.
+        Незнакомая говорит общее -- рассказывать прохожему, какие сессии тут
+        когда-то были, незачем.
+        """
+        why = self._gone.get(id)
+        if why:
+            return f"сессии {id!r} больше нет: {why}"
+        return f"сессии {id!r} нет: она закрыта или не открывалась"
 
     def close(self, id: str) -> None:
         session = self.get(id)
@@ -452,11 +607,102 @@ class Pool:
         session.close()
 
     def close_all(self) -> None:
+        self._stop.set()
+        guard = self._guard
+        if guard is not None and guard is not threading.current_thread():
+            guard.join(timeout=2)
         with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
+            self._guard = None
         for session in sessions:
             session.close()
+
+    def sweep(self) -> int:
+        """Закрыть сессии, о которых давно не спрашивали. Сколько закрыл.
+
+        Отдельным методом, а не только внутри сторожа: в тесте ждать настоящие
+        минуты нельзя, а проверять надо само правило, а не таймер вокруг него.
+        """
+        retired = self._retire()
+        for session in retired:
+            session.close()
+        return len(retired)
+
+    # --- вытеснение -------------------------------------------------------
+
+    def _retire(self, room: bool = False) -> list[Session]:
+        """Кого пора закрыть. Сами сессии закрывает вызвавший.
+
+        Закрытие вынесено наружу нарочно: `Session.close` дожидается фонового
+        потока, а держать на это время замок пула значило бы останавливать
+        всех остальных из-за одной уходящей сессии.
+        """
+        now = self._now()
+        out: list[Session] = []
+        with self._lock:
+            if self.idle > 0:
+                for id, session in list(self._sessions.items()):
+                    if now - session.touched >= self.idle:
+                        out.append(
+                            self._forget(
+                                id,
+                                "её долго не спрашивали, и она закрылась сама. "
+                                "Откройте прогон заново.",
+                            )
+                        )
+            while room and 0 < self.limit <= len(self._sessions):
+                oldest = min(
+                    self._sessions.values(), key=lambda item: item.touched
+                )
+                if now - oldest.touched < self.grace:
+                    # Все до одной нужны кому-то прямо сейчас. Отказ новому
+                    # выдаст `open`: отобрать сессию у работающего человека
+                    # хуже, чем не дать открыть ещё одну.
+                    break
+                out.append(
+                    self._forget(
+                        oldest.id,
+                        "её вытеснила новая -- стенд держит ограниченное число "
+                        "живых симуляций. Откройте прогон заново.",
+                    )
+                )
+        return out
+
+    def _forget(self, id: str, why: str) -> Session:
+        """Убрать сессию из пула, запомнив причину. Зовётся под замком."""
+        session = self._sessions.pop(id)
+        self._gone[id] = why
+        self._gone_order.append(id)
+        # Память о причинах ограничена: она нужна ровно до того мгновения,
+        # когда интерфейс спросит про свою сессию и получит объяснение.
+        while len(self._gone_order) > GONE_MEMORY:
+            self._gone.pop(self._gone_order.pop(0), None)
+        return session
+
+    def _ensure_guard(self) -> None:
+        """Сторож простоя. Зовётся под замком, при открытии первой сессии.
+
+        Один поток на весь пул, а не таймер на сессию: сессий десятки, и
+        столько же спящих потоков стоили бы дороже того, что они стерегут.
+        Пустой пул сторожа не заводит вовсе -- на своей машине, где симуляцию
+        открывают и закрывают руками, лишнего потока в процессе не появится.
+        """
+        if self.idle <= 0 or self._stop.is_set():
+            return
+        if self._guard is not None and self._guard.is_alive():
+            return
+        self._guard = threading.Thread(
+            target=self._watch, name="vnl-sim-pool", daemon=True
+        )
+        self._guard.start()
+
+    def _watch(self) -> None:
+        while not self._stop.wait(self._sweep_every):
+            try:
+                self.sweep()
+            except Exception as exc:  # noqa: BLE001 -- сторож падать не должен
+                print(f"сторож сессий споткнулся: {exc}", file=sys.stderr)
 
     def __len__(self) -> int:
         with self._lock:
