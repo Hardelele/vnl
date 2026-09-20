@@ -117,6 +117,11 @@ export function blockBox(open: boolean): { width: number; height: number } {
   return open ? OPEN : BOX
 }
 
+/** Размер фигуры клетки. Нужен раскладке: ELK двигает то, что нарисовано. */
+export function cellBox(): { width: number; height: number } {
+  return DOT
+}
+
 /** Точка порта на краю блока: входы слева, выходы и модуляция справа. */
 export function portPoint(
   block: SandboxBlock,

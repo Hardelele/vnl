@@ -543,6 +543,29 @@ class Api:
         project.move(str(body.get("id") or ""), (float(position[0]), float(position[1])))
         return api.sandbox_payload(project)
 
+    def arrange(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Разложить схему: готовые места всем объектам сразу.
+
+        Места приходят посчитанными, а не считаются здесь: раскладывается то,
+        что видно на холсте, -- размеры фигур и раскрытие блока живут в
+        интерфейсе и на сервер не уходят вовсе. Зато шаг отмены один на всю
+        раскладку, и это уже свойство проекта (`Project.arrange`), а не
+        интерфейса: двадцать отдельных сдвигов дали бы двадцать шагов истории.
+        """
+        raw = body.get("places")
+        if not isinstance(raw, dict):
+            raise PatternError(
+                'нечего раскладывать: ожидались места объектов '
+                '-- {"places": {"<объект>": [x, y]}}'
+            )
+        places = {
+            str(name): (float(position[0]), float(position[1]))
+            for name, position in raw.items()
+        }
+        project = self._project(sandbox_id)
+        project.arrange(places)
+        return api.sandbox_payload(project)
+
     def run_params(self, sandbox_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """Длительность, шаг, зерно и уровень -- то, что меняют первым делом."""
         params: dict[str, Any] = {}
@@ -837,6 +860,14 @@ def routes(service: Api) -> list[Route]:
             "POST",
             re.compile(r"^/api/sandboxes/([^/]+)/move$"),
             service.move_object,
+            wants="body",
+        ),
+        # Раскладка -- не «сдвинуть ещё раз»: у неё один шаг отмены на всю
+        # схему, поэтому и маршрут свой, а не `move` в цикле.
+        Route(
+            "POST",
+            re.compile(r"^/api/sandboxes/([^/]+)/arrange$"),
+            service.arrange,
             wants="body",
         ),
         Route(

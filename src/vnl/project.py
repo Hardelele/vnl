@@ -407,6 +407,34 @@ class Project:
         self._remember(f"перемещён {object_id}")
         target.position = position
 
+    def arrange(self, places: dict[str, tuple[float, float]]) -> None:
+        """Расставить объекты холста по готовым местам -- один шаг отмены на всю
+        раскладку.
+
+        Раскладка -- это одно действие человека («Разложить»), а не двадцать
+        сдвигов, и «Отменить» обязано возвращать прежние места целиком. Отсюда
+        `batch`: двадцать вызовов `move` подряд сложили бы двадцать шагов
+        истории, и откат пришлось бы жать по разу на узел.
+
+        Сами места считает тот, кто знает размеры фигур, -- холст (ELK в
+        браузере, `components/sandbox/arrange.ts`). Здесь их только применяют:
+        место на холсте физику не меняет, поэтому отпечаток собранной сети
+        остаётся прежним и прогон от раскладки не стареет.
+        """
+        if not places:
+            raise PatternError("раскладывать нечего: не названо ни одного объекта")
+        known = self.sandbox.taken_ids()
+        # Проверка до снимка истории: отказ не должен оставлять за собой шаг
+        # отмены, который ничего не отменяет.
+        missing = [name for name in places if name not in known]
+        if missing:
+            raise PatternError(
+                "на холсте нет объектов: " + ", ".join(sorted(missing))
+            )
+        with self.batch("разложены объекты"):
+            for object_id, position in places.items():
+                self.move(object_id, position)
+
     def remove(self, object_id: str) -> None:
         """Убрать блок, нейрон или связь вместе со всем, что на них висело.
 

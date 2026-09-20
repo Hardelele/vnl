@@ -362,6 +362,21 @@ export function moveObject(
   return send<SandboxState>(`${at(id)}/move`, 'POST', { id: object, position })
 }
 
+/** Куда встают объекты после раскладки: имя объекта -> его место на холсте. */
+export type Places = Record<string, [number, number]>
+
+/**
+ * Разложить схему: места всем объектам сразу (#543).
+ *
+ * Отдельная операция, а не `moveObject` в цикле: раскладка -- одно действие
+ * человека, и «Отменить» обязано возвращать прежние места целиком. Считает
+ * места интерфейс (ELK знает размеры фигур только здесь), применяет их проект
+ * -- одним шагом истории.
+ */
+export function arrangeObjects(id: string, places: Places): Promise<SandboxState> {
+  return send<SandboxState>(`${at(id)}/arrange`, 'POST', { places })
+}
+
 export function addStimulus(id: string, target: EndpointRef): Promise<SandboxState> {
   return send<SandboxState>(`${at(id)}/stimuli`, 'POST', { target })
 }
