@@ -26,6 +26,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { objectCommand } from '../../lib/keys'
 import { CELLS, counted } from '../../lib/plural'
+import type { CellDraft } from '../../model/cells'
 import { driveHint, receptorHint } from '../../model/glossary'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
 import type { CellState } from '../../model/sim'
@@ -42,6 +43,7 @@ import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
 import { ProjectFields, Properties, RunFields, where } from './Properties'
+import { CellToCatalog } from './CellToCatalog'
 import { SavePattern } from './SavePattern'
 import './sandbox.css'
 
@@ -93,6 +95,14 @@ export function SandboxScreen({
   /** Открыта ли форма сохранения. Имя и порты спрашивают до записи. */
   const [saving, setSaving] = useState(false)
   /**
+   * Какой тип проекта кладут в каталог, если кладут (#567).
+   *
+   * Идентификатор, а не флажок: форма спрашивает про конкретную клетку и
+   * показывает, что под её именем уже лежит в каталоге. Состояние экрана, а
+   * не проекта -- в проекте от этой операции не меняется ничего.
+   */
+  const [adopting, setAdopting] = useState<string | null>(null)
+  /**
    * Что приехало с карточки -- строкой для человека (#526).
    *
    * Состояние экрана, а не проекта: после вставки проект выглядит так же, как
@@ -131,6 +141,9 @@ export function SandboxScreen({
   const savedId = useSandbox((state) => state.saved?.id ?? null)
   const savedName = useSandbox((state) => state.saved?.name ?? null)
   const savedLevel = useSandbox((state) => state.saved?.levelName ?? null)
+  /** Что легло в каталог последним (#567): в проекте этого не видно. */
+  const adoptedId = useSandbox((state) => state.adopted?.id ?? null)
+  const adoptedName = useSandbox((state) => state.adopted?.name ?? null)
   /** Идёт запрос к проекту. Имя своё: `busy` ниже -- про симуляцию. */
   const keeping = useSandbox((state) => state.busy)
   const allowed = useSession(canChange)
@@ -539,6 +552,27 @@ export function SandboxScreen({
       {/* Что приехало с карточки. Стоит здесь же, где «паттерн лежит в
           библиотеке»: обе строки про то, чего на холсте не видно (#526). */}
       {brought ? <p className="sb-warn">{brought}</p> : null}
+      {/* То же самое про каталог клеток (#567). Проект после этого ровно тот
+          же, и без прямой строки человек не узнает, случилось ли что-нибудь. */}
+      {adoptedId && adoptedName ? (
+        <p className="sb-warn">
+          Клетка «{adoptedName}» лежит в каталоге под именем{' '}
+          <span className="mono">{adoptedId}</span> — она есть в палитре слева и
+          в любом другом проекте. В проекте уехала копия: правка порога здесь её
+          больше не тронет.
+        </p>
+      ) : null}
+      {adopting ? (
+        <CellToCatalog
+          type={adopting}
+          // Что уже лежит под этим именем -- из той же палитры, по которой
+          // рисуется список слева: второго списка клеток в интерфейсе нет.
+          standing={palette.find((cell) => cell.id === adopting)}
+          busy={keeping}
+          onCancel={() => setAdopting(null)}
+          onPut={(draft) => void adopt(draft)}
+        />
+      ) : null}
       {saving ? (
         <SavePattern
           projectName={project.name}
@@ -687,7 +721,16 @@ export function SandboxScreen({
                     есть только имя типа.
                   </p>
                   {own.map((kind) => (
-                    <div className="sb-row" key={kind.type}>
+                    /* Строка в два этажа: сверху клетка и «+», снизу «в
+                       каталог». В одну строку они не встают -- панель шириной
+                       238 px, и подпись типа («glutamate −50 мВ · 1 клетка»)
+                       переносится на три строки; кнопка словом оказывалась бы
+                       посреди этого переноса. Значком её не сделать: «+» рядом
+                       уже значит «ещё одну такую клетку сюда», и второй значок
+                       пришлось бы объяснять наведением -- то есть после того,
+                       как на него нажали (#567). */
+                    <div className="sb-own" key={kind.type}>
+                    <div className="sb-row">
                       <span className="sb-mini sb-cell-shape">
                         <svg viewBox="0 0 40 24" role="img" aria-label={kind.type}>
                           <rect
@@ -719,6 +762,22 @@ export function SandboxScreen({
                       >
                         +
                       </button>
+                      </div>
+                      {/* «в каталог» -- не вариант «+». Та кнопка кладёт ещё
+                          одну такую клетку в этот проект, эта уносит тип за
+                          его пределы: ничего на холст не кладёт и в проекте
+                          не меняет ни поля, а пополняет каталог, общий на все
+                          проекты (#567). */}
+                      <div className="sb-own-act">
+                        <button
+                          type="button"
+                          className="sb-adopt-btn"
+                          title={`Положить тип ${kind.type} в каталог клеток: он станет доступен и в других проектах. Спросим имя и объяснение — без них строка каталога ничего не говорит`}
+                          onClick={() => pick(() => setAdopting(kind.type))}
+                        >
+                          в каталог
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </>
@@ -948,6 +1007,17 @@ export function SandboxScreen({
       // там, где его вставляют, а не после переключения вкладок.
       void catalogController.refresh()
     }
+  }
+
+  /**
+   * Положить тип проекта в каталог (#567). Форма закрывается на удачном ответе.
+   *
+   * Палитру перечитывать не нужно: ответ маршрута -- весь каталог, и состояние
+   * песочницы уже заменило им `cells`. Второй запрос спросил бы то же самое
+   * ещё раз и мог бы принести другое -- каталог правят и мимо этого экрана.
+   */
+  async function adopt(draft: CellDraft): Promise<void> {
+    if (await control.putCellIntoCatalog(draft)) setAdopting(null)
   }
 
   async function start(): Promise<void> {

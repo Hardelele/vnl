@@ -801,3 +801,73 @@ describe('подтверждение драйва и записи приходи
     expect(control.store.getState().selected).toEqual({ kind: 'recording', id: 'r9' })
   })
 })
+
+describe('тип проекта в каталоге (#567)', () => {
+  const CELL = {
+    id: 'target',
+    name: 'Клетка-мишень',
+    note: 'куда сходится схема',
+    tags: ['excitatory'],
+    transmitter: 'glutamate',
+    inhibitory: false,
+    builtin: false,
+    source: 'песочница «Проба»',
+    pointModel: POINT,
+    morphology: { name: 'point', isPoint: true, sections: [] },
+  }
+
+  it('заменяет палитру ответом сервера и не трогает проект', async () => {
+    const adopt = vi.fn().mockResolvedValue([CELL])
+    const control = await opened({ adopt })
+    const was = control.store.getState().project
+
+    const done = await control.putCellIntoCatalog({
+      type: 'target',
+      name: 'Клетка-мишень',
+      note: 'куда сходится схема',
+    })
+
+    expect(done).toBe(true)
+    expect(adopt).toHaveBeenCalledWith('s1', {
+      type: 'target',
+      name: 'Клетка-мишень',
+      note: 'куда сходится схема',
+    })
+    // Палитра -- целиком с сервера: порядок каталога (встроенные первыми,
+    // своя перекрывает встроенную) держит он, а не интерфейс.
+    expect(control.store.getState().cells.map((cell) => cell.id)).toEqual(['target'])
+    // Проект тот же самый: в каталог уехала копия типа, в песочнице не
+    // изменилось ни поля.
+    expect(control.store.getState().project).toBe(was)
+    expect(control.store.getState().adopted).toEqual({
+      id: 'target',
+      name: 'Клетка-мишень',
+    })
+  })
+
+  it('отказ оставляет форму открытой и называет причину', async () => {
+    const adopt = vi
+      .fn()
+      .mockRejectedValue(new ApiError('в каталоге уже есть встроенная клетка', 400))
+    const control = await opened({ adopt })
+
+    const done = await control.putCellIntoCatalog({
+      type: 'pv',
+      name: 'Свой PV',
+      note: 'из блока',
+    })
+
+    expect(done).toBe(false)
+    expect(control.store.getState().error).toContain('уже есть')
+    expect(control.store.getState().adopted).toBeNull()
+  })
+
+  it('без открытого проекта ничего не посылает', async () => {
+    const adopt = vi.fn()
+    const control = createSandboxController({ adopt })
+
+    await control.putCellIntoCatalog({ type: 'target', name: 'М', note: 'н' })
+
+    expect(adopt).not.toHaveBeenCalled()
+  })
+})

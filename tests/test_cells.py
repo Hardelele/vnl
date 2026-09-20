@@ -3,7 +3,7 @@
 import pytest
 
 from vnl import ir
-from vnl.cells import BUILTIN, Cell, catalog
+from vnl.cells import BUILTIN, Cell, CellError, adopt, catalog
 from vnl.project import Project
 from vnl.patterns import Sandbox
 from vnl.store import Store
@@ -329,3 +329,91 @@ def test_a_file_without_cell_declarations_is_refused(tmp_path, capsys):
 
     assert main(["cell", "add", str(source), "--root", str(tmp_path / "store")]) == 1
     assert "нет ни одного объявления cell" in capsys.readouterr().err
+
+
+# --- тип проекта уезжает в каталог (#567) ---------------------------------
+
+
+def project_type(id: str = "target", threshold: float = -50.0) -> ir.CellType:
+    """Тип, каким он приезжает в проект из разобранного паттерна: без имени."""
+    return ir.CellType(
+        id=id,
+        tags=("excitatory",),
+        transmitter="glutamate",
+        point_model=ir.PointModel(v_threshold=threshold),
+    )
+
+
+def test_a_project_type_becomes_a_catalog_cell_with_a_name_and_a_note():
+    """Приёмка #567: у каталожной записи есть то, чего у типа не было."""
+    cell = adopt(
+        project_type(),
+        "Клетка-мишень",
+        "Куда сходится схема: на ней и смотрят, сработало ли торможение.",
+        catalog(),
+    )
+    assert cell.id == "target"
+    assert cell.name == "Клетка-мишень"
+    assert cell.note.startswith("Куда сходится")
+    assert cell.builtin is False, "своя, а не встроенная"
+
+    # И она видна в палитре наравне со встроенными.
+    table = catalog([cell])
+    assert len(table) == len(BUILTIN) + 1
+    assert table.get("target").builtin is False
+
+
+def test_a_catalog_cell_without_a_name_is_refused():
+    """Имя обязательно: по одному `target` клетку в списке не выбрать."""
+    with pytest.raises(CellError, match="имя"):
+        adopt(project_type(), "   ", "объяснение есть", catalog())
+
+
+def test_a_catalog_cell_without_a_note_is_refused():
+    """Объяснение тоже обязательно -- ради него #541 и делался."""
+    with pytest.raises(CellError, match="объяснение"):
+        adopt(project_type(), "Клетка-мишень", "", catalog())
+
+
+def test_a_name_taken_by_a_builtin_cell_is_refused_until_it_is_confirmed():
+    """Молча подменить пирамиду копией из чужого паттерна нельзя."""
+    with pytest.raises(CellError, match="встроенная клетка"):
+        adopt(project_type("pyr"), "Своя пирамида", "из чужого блока", catalog())
+
+    # Но перекрытие остаётся возможным -- подтверждённое.
+    cell = adopt(
+        project_type("pyr", -45.0),
+        "Своя пирамида",
+        "из чужого блока",
+        catalog(),
+        replace=True,
+    )
+    assert catalog([cell]).get("pyr").type.point_model.v_threshold == pytest.approx(
+        -45.0
+    )
+
+
+def test_a_name_already_taken_by_an_own_cell_is_refused_too():
+    """Своя запись под тем же именем -- такое же столкновение, как встроенная."""
+    mine = adopt(project_type(), "Мишень", "первая", catalog())
+    with pytest.raises(CellError, match="своя клетка"):
+        adopt(project_type(), "Мишень ещё раз", "вторая", catalog([mine]))
+
+
+def test_the_catalog_keeps_a_copy_and_not_the_project_type(tmp_path):
+    """Приёмка #567: правка порога в старом проекте каталожную запись не трогает.
+
+    Держать тот же объект было бы дешевле, но `Project.set_cell` правит
+    мембрану на месте, и каталог менялся бы от работы в проекте, о котором он
+    ничего не знает.
+    """
+    store = Store(tmp_path)
+    mine = project_type()
+    store.save_cell(adopt(mine, "Мишень", "куда сходится схема", catalog()))
+
+    # Так порог правит песочница: по полю точечной модели, на месте.
+    mine.point_model.v_threshold = -41.0
+
+    kept = catalog(store.cells()).get("target")
+    assert kept.type.point_model.v_threshold == pytest.approx(-50.0)
+    assert kept.type is not mine

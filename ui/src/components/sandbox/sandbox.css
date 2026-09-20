@@ -563,6 +563,48 @@
   color: var(--ink);
 }
 
+/* Строка типа проекта: два этажа, граница у обёртки. Без неё черта легла бы
+   между клеткой и её же кнопкой -- то есть разделила бы одну строку на две
+   разные (#567). */
+.sb-own {
+  border-bottom: 1px solid var(--line);
+}
+
+.sb-own > .sb-row {
+  border-bottom: 0;
+}
+
+/* Нижний этаж выровнен по подписи, а не по краю панели: клеймо клетки слева
+   60 px, и кнопка под ним читалась бы как отдельная строка списка. */
+.sb-own-act {
+  padding: 0 var(--space-3) 7px
+    calc(var(--space-3) + 60px + var(--space-2));
+}
+
+/* «в каталог» (#567). Словом, а не значком: «+» на строке уже занят и значит
+   «ещё одну такую клетку сюда», а это действие уносит тип за пределы проекта
+   -- второй значок пришлось бы объяснять наведением, то есть после того, как
+   на него нажали. Кегль мелкий и цвет приглушённый: кладут клетку часто, а в
+   каталог -- однажды. */
+.sb-adopt-btn {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sb-adopt-btn:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+
 .sb-field {
   display: flex;
   align-items: center;
@@ -797,6 +839,11 @@
 .sb-save {
   margin: 0 var(--space-3) var(--space-2);
   padding-bottom: var(--space-2);
+  /* Форма не сжимается. Полоса сообщений над холстом -- колонка с `max-height:
+     34%`, и без этого флекс отбирал у формы высоту, а `overflow: hidden`
+     панели срезал низ -- вместе с кнопками «Сохранить» и «Отмена». Прокрутка
+     уже есть у самой полосы: не влезло -- листается, а не пропадает. */
+  flex: none;
 }
 
 /* Поля формы -- во всю оставшуюся ширину. В правой панели свойств 150
@@ -992,4 +1039,63 @@
 .bb-hotkey:focus {
   border-color: var(--accent);
   color: var(--ink);
+}
+
+/* Форма «в каталог» (#567). Панель та же, что у «Сохранить как паттерн», --
+   это две формы одного экрана, и разъехаться их рамкам незачем. Ширина
+   ограничена: на широком окне поле имени растянулось бы на весь экран, и
+   короткая строка в нём читалась бы не как поле, а как полоса. */
+.sb-adopt {
+  max-width: 560px;
+}
+
+.sb-adopt .sb-note {
+  padding-bottom: var(--space-1);
+}
+
+/* Поле, которому 150 пикселей мало. Имя и объяснение каталожной клетки --
+   строки, которые читают, пока пишут: объяснение длиной в предложение в
+   поле шириной в число набирают вслепую. Поэтому подпись сверху, поле во всю
+   ширину -- в отличие от полей мембраны, где справа стоит число из четырёх
+   знаков и подпись с ним уживается в строку. */
+.sb-field.sb-wide {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.sb-field.sb-wide input[type='text'],
+.sb-field.sb-wide textarea {
+  width: 100%;
+}
+
+.sb-field textarea {
+  min-height: 54px;
+  padding: var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  /* Тянется только по высоте: ширину держит форма, и вытянутое вбок поле
+     вылезало бы за панель. */
+  resize: vertical;
+}
+
+/* Вопрос о перекрытии: галочка слева, объяснение во всю строку. Прижимать его
+   вправо, как значение поля, нельзя -- это не значение, а предупреждение, и
+   читается оно целиком. */
+.sb-field.sb-adopt-clash {
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+
+.sb-adopt-clash input[type='checkbox'] {
+  flex: none;
+  width: auto;
+  height: auto;
+  margin-top: 2px;
 }
