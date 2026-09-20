@@ -266,3 +266,62 @@ describe('сессия и схема, из которой она собрана'
     expect(control.store.getState().error).toBeNull()
   })
 })
+
+describe('подача величины сенсорам (#562)', () => {
+  it('уходит словарём и приносит границу тем же ответом', async () => {
+    // Словарём, потому что две кнопки, нажатые разом, обязаны лечь на один и
+    // тот же момент модельного времени.
+    const sense = vi.fn().mockResolvedValue(
+      update({ sensors: { key: 1 }, motors: { out: 40 } }),
+    )
+    const control = createSimController({
+      open: vi.fn().mockResolvedValue(update()),
+      sense,
+    })
+    await control.open({ sandbox: 'p1' })
+
+    await control.sense({ key: 1 })
+
+    expect(sense).toHaveBeenCalledWith('sim1', { key: 1 })
+    expect(control.store.getState().sensors).toEqual({ key: 1 })
+    expect(control.store.getState().motors).toEqual({ out: 40 })
+  })
+
+  it('схема без границы отвечает как раньше: полей нет -- и величин нет', async () => {
+    const control = createSimController({
+      open: vi.fn().mockResolvedValue(update({ sensors: { key: 1 } })),
+      seek: vi.fn().mockResolvedValue(update()),
+    })
+    await control.open({ sandbox: 'p1' })
+    expect(control.store.getState().sensors).toEqual({ key: 1 })
+
+    // Следующий ответ -- уже без полей границы: их отсутствие это «границы
+    // нет», а не «величина прежняя».
+    await control.seek(0)
+
+    expect(control.store.getState().sensors).toEqual({})
+  })
+
+  it('нажатие не гасит транспорт: подача ничего в сессии не останавливает', async () => {
+    const control = createSimController({
+      open: vi.fn().mockResolvedValue(update()),
+      sense: vi.fn().mockResolvedValue(update({ sensors: { key: 1 } })),
+    })
+    await control.open({ sandbox: 'p1' })
+
+    const pending = control.sense({ key: 1 })
+    expect(control.store.getState().busy).toBe(false)
+    await pending
+    expect(control.store.getState().busy).toBe(false)
+  })
+
+  it('без сессии подавать некуда, и это не отказ', async () => {
+    const sense = vi.fn()
+    const control = createSimController({ sense })
+
+    await control.sense({ key: 1 })
+
+    expect(sense).not.toHaveBeenCalled()
+    expect(control.store.getState().error).toBeNull()
+  })
+})

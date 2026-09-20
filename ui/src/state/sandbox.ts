@@ -20,9 +20,11 @@ import { loadCells } from '../model/cells'
 import { NO_GLOSSARY, loadGlossary } from '../model/glossary'
 import {
   addBlock,
+  addMotor,
   addNeuron,
   addNeuronOfType,
   addRecording,
+  addSensor,
   addStimulus,
   arrangeObjects,
   connect,
@@ -206,6 +208,8 @@ export interface SandboxPorts {
   cell: typeof setCellParams
   move: typeof moveObject
   stimulate: typeof addStimulus
+  sensor: typeof addSensor
+  motor: typeof addMotor
   driveParams: typeof setStimulusParams
   record: typeof addRecording
   recordVar: typeof setRecordingVar
@@ -237,6 +241,8 @@ const DEFAULT_PORTS: SandboxPorts = {
   cell: setCellParams,
   move: moveObject,
   stimulate: addStimulus,
+  sensor: addSensor,
+  motor: addMotor,
   driveParams: setStimulusParams,
   record: addRecording,
   recordVar: setRecordingVar,
@@ -666,6 +672,42 @@ export function createSandboxController(ports: Partial<SandboxPorts> = {}) {
 
     setDrive: (stimulus: string, params: DriveParams) =>
       act((id) => io.driveParams(id, stimulus, params)),
+
+    /**
+     * Сенсор на эту точку: дверь снаружи внутрь -- и сразу стрелка от неё
+     * (#560, #562).
+     *
+     * Два обращения к серверу, а не одно: сенсор и связь от него -- разные
+     * вещи, и объединять их маршрутом значило бы заводить второй способ
+     * провести стрелку. Поэтому и «Отменить» на них два: сначала уходит
+     * связь, потом сам сенсор. Это честная история проекта, а не пропуск --
+     * сенсор без стрелки остаётся законным объектом, и убирать его вместе со
+     * связью означало бы решить за человека, что он больше не нужен.
+     *
+     * Связь заводится сразу потому, что одинокий сенсор не делает ничего:
+     * величина доходит до клетки только по стрелке, а второй дороги провести
+     * её от сенсора -- фигуры на холсте у него пока нет -- в интерфейсе нет.
+     *
+     * Имя сенсора выбирает сервер: он один знает, что в проекте уже занято.
+     * Отсюда и поиск свежего по ответу, а не угадывание имени заранее.
+     */
+    async addSensor(instance: string, port: string | null): Promise<void> {
+      const { project, view } = store.getState()
+      if (!project) return
+      const had = new Set(project.sensors.map((item) => item.id))
+      await act((id) => io.sensor(id, { position: free(project, view) }))
+      const after = store.getState().project
+      const fresh = after?.sensors.find((item) => !had.has(item.id))
+      if (!fresh) return
+      await act((id) => io.connect(id, { instance: fresh.id, port: null }, { instance, port }))
+    },
+
+    /** Мотор с этой точки: смотрит на неё, как запись, но отдаёт одно число. */
+    addMotor: (instance: string, port: string | null) =>
+      act((id) => {
+        const { project, view } = store.getState()
+        return io.motor(id, { instance, port }, { position: free(project, view) })
+      }),
 
     record: (instance: string, port: string | null) =>
       act((id) => io.record(id, { instance, port })),

@@ -836,3 +836,160 @@
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
 }
+
+/* Панель кнопок (#562): полоса между холстом и активностью сети.
+
+   Полосой поперёк экрана, а не колонкой в панели свойств: на кнопку смотрят и
+   жмут, пока смотрят на схему и на растр, -- в правой панели она уезжала бы
+   вместе с прокруткой свойств выбранной клетки, и нажать её во время прогона
+   было бы нельзя. `flex: none` -- по тому же правилу, что у верхней панели:
+   экран песочницы ровно в высоту окна и не скроллится (#504), и полоса обязана
+   отдавать остаток холсту, а не расти вместе с числом кнопок. Кнопки поэтому
+   переносятся на вторую строку, а не сжимаются в ничто. */
+.bb {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.bb-title {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+}
+
+.bb-note {
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+/* Кнопка и «убрать» рядом: убирание висит на самой кнопке, потому что
+   спрашивают о нём там же, где на неё смотрят, -- отдельного списка кнопок,
+   в который надо идти, у панели нет. */
+.bb-key {
+  position: relative;
+  display: inline-flex;
+}
+
+.bb-press {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 92px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  /* Удержание -- это нажатие, а не выделение текста: без запрета палец,
+     поехавший по кнопке, выделяет её подпись и уносит фокус. */
+  user-select: none;
+  touch-action: none;
+}
+
+.bb-press:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.bb-press:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+/* Горит -- значит величина не ноль: у сенсора её держат, у мотора её отдаёт
+   сеть. Цвет один на оба случая нарочно: это одно и то же утверждение о
+   границе, и разводить их двумя цветами значило бы завести второй язык там,
+   где хватает «горит или нет». */
+.bb-key.is-on .bb-press {
+  border-color: var(--exc);
+  background: var(--exc);
+  color: var(--surface-card);
+}
+
+.bb-key.is-lost .bb-press {
+  border-style: dashed;
+  color: var(--inh);
+}
+
+.bb-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.2;
+}
+
+.bb-sub {
+  font-size: var(--text-xs);
+  opacity: 0.8;
+}
+
+.bb-drop {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bb-drop:hover {
+  color: var(--inh);
+  border-color: var(--inh);
+}
+
+.bb-add {
+  flex: none;
+}
+
+/* Форма заведения стоит на месте «+», в той же строке: заводят кнопку, глядя
+   на уже заведённые, и уводить ради этого в другую панель незачем. */
+.bb-new {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.bb-field {
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.bb-new input.bb-field {
+  width: 120px;
+}
+
+.bb-new select.bb-field {
+  max-width: 320px;
+}
+
+.bb-hotkey {
+  min-width: 72px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.bb-hotkey:focus {
+  border-color: var(--accent);
+  color: var(--ink);
+}

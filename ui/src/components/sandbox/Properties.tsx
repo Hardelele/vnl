@@ -621,6 +621,32 @@ function NeuronProps({
         >
           Записывать {neuron.id}
         </button>
+        {/* Граница с миром стоит рядом с драйвом и записью, потому что вопрос
+            один: чем эту клетку гонят и что с неё снимают. Разница только в
+            том, откуда приходит и куда уходит величина -- у драйва обе
+            стороны внутри прогона, у сенсора с мотором одна снаружи (#560).
+
+            «Сенсор на клетку» заводит дверь и сразу тянет от неё стрелку:
+            одинокий сенсор до клетки ничего не доносит, а провести стрелку
+            иначе пока негде -- фигуры на холсте у него нет. «Отменить» на это
+            два: связь и сам сенсор -- разные объекты, и история о них
+            честна. */}
+        <button
+          type="button"
+          className="btn-secondary"
+          title={glossary.sensor}
+          onClick={() => void control.addSensor(neuron.id, null)}
+        >
+          Сенсор на {neuron.id}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          title={glossary.motor}
+          onClick={() => void control.addMotor(neuron.id, null)}
+        >
+          Мотор с {neuron.id}
+        </button>
       </DrivesOf>
 
       <div className="sb-actions">

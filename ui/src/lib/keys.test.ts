@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { objectCommand, typing } from './keys'
+import { boardKey, keyLabel, objectCommand, typing } from './keys'
 
 /** Нажатие как его увидит слушатель на окне. */
 function press(
@@ -23,6 +23,7 @@ function press(
     altKey: false,
     shiftKey: false,
     defaultPrevented: false,
+    repeat: false,
     target: null,
     ...extra,
   } as KeyboardEvent
@@ -94,5 +95,51 @@ describe('клавиши над выбранным объектом (#563)', () 
 
   it('разобранное кем-то раньше нажатие второй раз не разбирается', () => {
     expect(objectCommand(press('Delete', { defaultPrevented: true }), 'neuron')).toBeNull()
+  })
+})
+
+describe('клавиша кнопки песочницы (#562)', () => {
+  it('буквы и цифры -- наши, и отдаются местом клавиши, а не буквой', () => {
+    // Держимся за `code` по той же причине, что и Ctrl+D: на русской
+    // раскладке та же клавиша шлёт `ф`, и кнопка не работала бы ровно у того,
+    // кто читает эту панель по-русски.
+    expect(boardKey(press('ф', { code: 'KeyA' }))).toBe('KeyA')
+    expect(boardKey(press('1', { code: 'Digit1' }))).toBe('Digit1')
+  })
+
+  it('занятое чужим не берётся: стрелки, Delete, Ctrl и Alt', () => {
+    // Стрелки шагают по времени (#537), Delete и Ctrl+D правят объект на
+    // холсте (#563), Ctrl с колесом приближает холст (#548).
+    expect(boardKey(press('ArrowLeft', { code: 'ArrowLeft' }))).toBeNull()
+    expect(boardKey(press('Delete', { code: 'Delete' }))).toBeNull()
+    expect(boardKey(press(' ', { code: 'Space' }))).toBeNull()
+    expect(boardKey(press('a', { code: 'KeyA', ctrlKey: true }))).toBeNull()
+    expect(boardKey(press('a', { code: 'KeyA', metaKey: true }))).toBeNull()
+    expect(boardKey(press('a', { code: 'KeyA', altKey: true }))).toBeNull()
+  })
+
+  it('автоповтор зажатой клавиши -- не второе нажатие', () => {
+    // Иначе одно удержание легло бы в запись входа сотней записей.
+    expect(boardKey(press('a', { code: 'KeyA', repeat: true }))).toBeNull()
+  })
+
+  it('пока набирают текст, клавиша принадлежит полю', () => {
+    const event = press('a', {
+      code: 'KeyA',
+      target: { tagName: 'INPUT' } as unknown as EventTarget,
+    })
+
+    expect(boardKey(event)).toBeNull()
+  })
+
+  it('разобранное кем-то раньше нажатие панель не трогает', () => {
+    // Этим же и разводится назначение клавиши с нажатием кнопки: форма
+    // заведения гасит событие, и панель его уже не видит.
+    expect(boardKey(press('a', { code: 'KeyA', defaultPrevented: true }))).toBeNull()
+  })
+
+  it('подпись клавиши -- латиница: это место клавиши, а не её буква', () => {
+    expect(keyLabel('KeyA')).toBe('A')
+    expect(keyLabel('Digit1')).toBe('1')
   })
 })

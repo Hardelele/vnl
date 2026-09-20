@@ -36,6 +36,7 @@ import { simController, useSim } from '../../state/sim'
 import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { ActivityPanel } from './ActivityPanel'
+import { ButtonBoard } from './ButtonBoard'
 import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
@@ -139,6 +140,9 @@ export function SandboxScreen({
   const duration = useSim((state) => state.duration)
   const busy = useSim((state) => state.busy)
   const cells = useSim((state) => state.cells)
+  /** Граница с миром на текущем моменте: по ней горят кнопки (#562). */
+  const sensed = useSim((state) => state.sensors)
+  const acted = useSim((state) => state.motors)
   const spikes = useSim((state) => state.spikes)
   const traces = useSim((state) => state.traces)
   const dt = useSim((state) => state.dt)
@@ -802,6 +806,37 @@ export function SandboxScreen({
                   onPick={() => pick(() => control.select({ kind: 'recording', id: record.id }))}
                 />
               ))}
+              {/* Двери наружу -- такие же объекты проекта, как стимул и запись,
+                  и в дереве стоят рядом с ними: иначе про сенсор, заведённый
+                  из свойств клетки, нельзя узнать вообще ничего -- фигуры на
+                  холсте у него нет, а подключён он обычной связью, которая
+                  строкой выше уже названа своими концами.
+
+                  Не выбираются: править у них в этой задаче нечего -- числа
+                  сервер задаёт умолчаниями рода («частота, 100 Гц при 1»), а
+                  всё, что с ними делают, -- привязывают к кнопке. Заводить
+                  ради прототипа, который могут отвергнуть целиком, ещё два
+                  рода выделения и две ветки панели свойств значило бы
+                  построить под него подсистему -- ровно то, чего в карточке
+                  просили не делать. */}
+              {project.sensors.map((sensor) => (
+                <Door
+                  key={sensor.id}
+                  label={`${sensor.id} · ${sensor.story}`}
+                  kind="сенсор"
+                  hint={glossary.sensor}
+                  onDrop={() => void control.remove(sensor.id)}
+                />
+              ))}
+              {project.motors.map((motor) => (
+                <Door
+                  key={motor.id}
+                  label={`${motor.id} · ${where(motor.source)} · ${motor.story}`}
+                  kind="мотор"
+                  hint={glossary.motor}
+                  onDrop={() => void control.remove(motor.id)}
+                />
+              ))}
             </div>
           )}
         </aside>
@@ -851,6 +886,24 @@ export function SandboxScreen({
           <RunFields run={project.run} />
         </aside>
       </div>
+
+      {/* Кнопки -- между холстом и активностью сети: на них смотрят вместе со
+          схемой и с растром. Схема без сенсоров и моторов панели не получает
+          вовсе -- решает это сама панель по спискам проекта, и выглядит такая
+          схема ровно как раньше.
+
+          `key` по проекту: кнопки помнятся отдельно для каждого, и панель, не
+          пересозданная при смене проекта, показывала бы чужие. */}
+      <ButtonBoard
+        key={project.id}
+        project={project.id}
+        sensors={project.sensors}
+        motors={project.motors}
+        values={sensed}
+        output={acted}
+        live={Boolean(simId)}
+        onSense={(values) => void sim.sense(values)}
+      />
 
       {/* Таймлайн живёт в прибитой снизу панели, а не под холстом: иначе он
           уезжает за край экрана вместе с транспортом. Транспорт при этом
@@ -1003,6 +1056,37 @@ function Row({
       <span className="sb-row-name">{label}</span>
       <span className="mono sb-kind">{kind}</span>
     </button>
+  )
+}
+
+/**
+ * Строка двери наружу: сенсор или мотор (#562).
+ *
+ * Своя, а не `Row`: `Row` -- это выбор объекта, а сенсор и мотор в этом
+ * прототипе не выбираются (разбор выше, там же где они рисуются). Поэтому
+ * здесь не кнопка выбора с подписью, а подпись с одним действием -- убрать.
+ */
+function Door({
+  label,
+  kind,
+  hint,
+  onDrop,
+}: {
+  label: string
+  kind: string
+  hint?: string
+  onDrop: () => void
+}) {
+  return (
+    <div className="sb-row" title={hint}>
+      <span className="sb-row-text">
+        <span className="sb-row-name">{label}</span>
+      </span>
+      <span className="mono sb-kind">{kind}</span>
+      <button type="button" className="sb-plus" title={`Убрать ${kind} ${label}`} onClick={onDrop}>
+        ×
+      </button>
+    </div>
   )
 }
 

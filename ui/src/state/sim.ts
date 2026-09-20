@@ -27,6 +27,7 @@ import {
   readSim,
   resetSim,
   seekSim,
+  senseSim,
   startSim,
   stepSim,
   type CellState,
@@ -52,6 +53,18 @@ export interface SimView {
   traces: Record<string, number[]>
   spikes: Record<string, number[]>
   cells: Record<string, CellState>
+  /**
+   * Граница с миром на текущем моменте (#561): величина каждого сенсора и
+   * каждого мотора. Пусто, пока сессии нет, и пусто у схемы без границы --
+   * сессия без неё этих полей не присылает вовсе.
+   *
+   * Здесь, а не рядом с кнопками: кнопка нажата ровно тогда, когда сессия
+   * говорит, что величина держится. Своё «нажато» в панели было бы вторым
+   * ответом на тот же вопрос -- и разошлось бы с первым на перемотке, где
+   * палец на кнопке, а прогон стоит на моменте до нажатия.
+   */
+  sensors: Record<string, number>
+  motors: Record<string, number>
   degradation: string[]
   busy: boolean
   error: string | null
@@ -71,6 +84,8 @@ const EMPTY: SimView = {
   traces: {},
   spikes: {},
   cells: {},
+  sensors: {},
+  motors: {},
   degradation: [],
   busy: false,
   error: null,
@@ -86,6 +101,7 @@ export interface SimPorts {
   reset: (id: string) => Promise<SimUpdate>
   seek: (id: string, time: number) => Promise<SimUpdate>
   step: (id: string, delta: number) => Promise<SimUpdate>
+  sense: (id: string, values: Record<string, number>) => Promise<SimUpdate>
   drop: (id: string) => Promise<void>
   /** Повторяющийся вызов. Параметром -- чтобы тест не ждал настоящие миллисекунды. */
   every: (run: () => void, delay: number) => () => void
@@ -99,6 +115,7 @@ const DEFAULT_PORTS: SimPorts = {
   reset: resetSim,
   seek: seekSim,
   step: stepSim,
+  sense: senseSim,
   drop: closeSim,
   every: (run, delay) => {
     const timer = setInterval(run, delay)
@@ -118,6 +135,15 @@ export interface SimController {
    * сессия показывает в шаге разряд, а в прыжке курсором -- нет (#537).
    */
   step: (delta: number) => Promise<void>
+  /**
+   * Подать величины сенсорам: `{ key: 1 }` -- нажали, `{ key: 0 }` -- отпустили.
+   *
+   * Отдельно от `act`, и единственное отличие -- занятость. `busy` гасит
+   * транспорт («Пуск», «Шаг»), а кнопку жмут и отпускают по разу в секунду:
+   * через `act` транспорт мигал бы недоступным на каждое нажатие, хотя время
+   * идёт как шло -- подача ничего в сессии не останавливает.
+   */
+  sense: (values: Record<string, number>) => Promise<void>
   close: () => Promise<void>
   forget: () => void
 }
@@ -148,6 +174,10 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
       traces,
       spikes,
       cells: update.cells,
+      // Полей нет вовсе, когда в схеме нет ни сенсора, ни мотора: сессия без
+      // границы отвечает ровно тем же, чем отвечала раньше (`live._border`).
+      sensors: update.sensors ?? {},
+      motors: update.motors ?? {},
       degradation: update.degradation,
       error: null,
       offline: false,
@@ -217,6 +247,16 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
     reset: () => act((id) => io.reset(id)),
     seek: (time) => act((id) => io.seek(id, time)),
     step: (delta) => act((id) => io.step(id, delta)),
+
+    async sense(values) {
+      const { id } = store.getState()
+      if (!id) return
+      try {
+        absorb(await io.sense(id, values))
+      } catch (reason) {
+        fail(reason)
+      }
+    },
 
     async close() {
       unwatch()
