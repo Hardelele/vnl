@@ -15,7 +15,7 @@
  * раз (#518).
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { CELLS, counted } from '../../lib/plural'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
@@ -50,6 +50,18 @@ export function SandboxScreen() {
   const [tab, setTab] = useState<LeftTab>('cells')
   /** Открыта ли форма сохранения. Имя и порты спрашивают до записи. */
   const [saving, setSaving] = useState(false)
+  /**
+   * Выдвинута ли левая панель. Значение имеет смысл только на тесном окне: там
+   * панель -- ящик поверх экрана, потому что колонкой она не получает высоты и
+   * список перестаёт быть списком (#550, разбор в `sandbox.css`). На просторном
+   * окне панель стоит колонкой всегда, и флаг на неё не влияет -- ящик включает
+   * не React, а медиазапрос: раскладку решает размер окна, а не состояние
+   * компонента, иначе после поворота экрана панель осталась бы спрятанной.
+   */
+  const [picker, setPicker] = useState(false)
+  /** Кнопка вызова и сам ящик: нужны, чтобы передавать им фокус, см. ниже. */
+  const opener = useRef<HTMLButtonElement>(null)
+  const drawer = useRef<HTMLElement>(null)
 
   const list = useSandbox((state) => state.list)
   const palette = useSandbox((state) => state.cells)
@@ -120,6 +132,29 @@ export function SandboxScreen() {
     if (project) sim.forget()
   }, [sim, project])
 
+  // Esc закрывает выдвинутую панель. Ящик перекрывает и холст, и панель
+  // песочницы вместе с кнопкой, которой его вызвали, поэтому выходов из него
+  // три: щелчок мимо, Esc и сам выбор. Одного щелчка мимо мало -- с клавиатуры
+  // мимо не щёлкнешь.
+  //
+  // Вместе с Esc сюда же и фокус: ящик приходит поверх панели песочницы, и
+  // фокус, оставшийся на кнопке вызова, оказался бы под подложкой -- Tab пошёл
+  // бы по невидимым кнопкам панели и добрался бы до списка через десяток
+  // нажатий. Поэтому на открытии фокус уходит на первую вкладку ящика, а на
+  // закрытии возвращается туда, откуда его позвали.
+  useEffect(() => {
+    if (!picker) return
+    drawer.current?.querySelector('button')?.focus()
+    const close = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setPicker(false)
+        opener.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [picker])
+
   if (!allowed) {
     // Браузер уже уходит на вход; строка стоит на время перехода, чтобы экран
     // не мигнул пустотой.
@@ -166,6 +201,25 @@ export function SandboxScreen() {
     )
   }
 
+  /**
+   * Выбор в левой панели: само действие и уход ящика следом.
+   *
+   * Ящик закрывается на любом выборе -- и на вставке клетки или паттерна, и на
+   * выборе объекта: всё это «взял одно и смотрю, что вышло», а результат
+   * (холст, свойства выбранного) лежит ровно под ящиком. Оставлять его
+   * открытым значило бы прятать то, ради чего в него ходили. Вставить подряд
+   * два паттерна при этом можно -- ящик вызывается одной кнопкой, и это
+   * дешевле, чем каждый раз закрывать его руками.
+   *
+   * На просторном окне `setPicker` не меняет ничего: там панель -- колонка.
+   */
+  const pick = (act: () => void): void => {
+    act()
+    if (!picker) return
+    setPicker(false)
+    opener.current?.focus()
+  }
+
   const inhibitory = neuronKinds(project.blocks, project.neurons)
   /** Сессия считает не эту схему: её результат уже про другую сеть. */
   const stale = Boolean(simId && built && built !== project.fingerprint)
@@ -173,6 +227,22 @@ export function SandboxScreen() {
   return (
     <div className="sb">
       <header className="sb-bar">
+        {/* Вызов левой панели. Видна только на тесном окне, где панель --
+            ящик: на просторном она колонка, и кнопка спрятана стилями, а не
+            условием здесь. Разметка на обеих раскладках одна и та же, иначе
+            при смене размера окна панель пересоздавалась бы и теряла вкладку
+            и прокрутку списка. */}
+        <button
+          ref={opener}
+          type="button"
+          className="sb-icon sb-open-left"
+          aria-expanded={picker}
+          aria-controls="sb-left"
+          title="Клетки, библиотека, объекты"
+          onClick={() => setPicker(true)}
+        >
+          ☰
+        </button>
         {/* Список проектов прямо в панели, как в макете: переключаться между
             ними надо чаще, чем открывать заново, а выход к выбору — отдельно,
             иначе из проекта не выйти вовсе. */}
@@ -330,8 +400,26 @@ export function SandboxScreen() {
       ) : null}
       </div>
 
+      {/* Подложка под ящиком. Рисуется только когда он выдвинут, и только
+          тогда же перехватывает щелчки: на просторном окне её нет вовсе. */}
+      {picker ? (
+        <button
+          type="button"
+          className="sb-veil"
+          aria-label="Закрыть панель"
+          onClick={() => {
+            setPicker(false)
+            opener.current?.focus()
+          }}
+        />
+      ) : null}
+
       <div className="sb-body">
-        <aside className="panel sb-left">
+        <aside
+          id="sb-left"
+          ref={drawer}
+          className={`panel sb-left${picker ? ' is-open' : ''}`}
+        >
           <div className="sb-tabs">
             <button
               type="button"
@@ -402,7 +490,7 @@ export function SandboxScreen() {
                     type="button"
                     className="sb-plus"
                     title={`Положить на холст: ${cell.note || cell.name}`}
-                    onClick={() => void control.insertCell(cell.id)}
+                    onClick={() => pick(() => void control.insertCell(cell.id))}
                   >
                     +
                   </button>
@@ -422,7 +510,7 @@ export function SandboxScreen() {
                 <LibraryRow
                   key={pattern.id}
                   pattern={pattern}
-                  onInsert={(id) => void control.insert(id)}
+                  onInsert={(id) => pick(() => void control.insert(id))}
                 />
               ))}
               {catalog && catalog.patterns.length === 0 ? (
@@ -442,7 +530,7 @@ export function SandboxScreen() {
                   label={block.label}
                   kind={`блок ${block.id}`}
                   on={selected?.kind === 'block' && selected.id === block.id}
-                  onPick={() => control.select({ kind: 'block', id: block.id })}
+                  onPick={() => pick(() => control.select({ kind: 'block', id: block.id }))}
                 />
               ))}
               {/* Клетка в дереве наравне с блоком: она такой же объект холста,
@@ -453,7 +541,7 @@ export function SandboxScreen() {
                   label={`${neuron.id} · ${neuron.cellType}`}
                   kind="клетка"
                   on={selected?.kind === 'neuron' && selected.id === neuron.id}
-                  onPick={() => control.select({ kind: 'neuron', id: neuron.id })}
+                  onPick={() => pick(() => control.select({ kind: 'neuron', id: neuron.id }))}
                 />
               ))}
               {project.links.map((link) => (
@@ -462,7 +550,7 @@ export function SandboxScreen() {
                   label={`${where(link.source)} → ${where(link.target)}`}
                   kind="связь"
                   on={selected?.kind === 'link' && selected.id === link.id}
-                  onPick={() => control.select({ kind: 'link', id: link.id })}
+                  onPick={() => pick(() => control.select({ kind: 'link', id: link.id }))}
                 />
               ))}
               {project.stimuli.map((drive) => (
@@ -471,7 +559,7 @@ export function SandboxScreen() {
                   label={`${drive.id} → ${where(drive.target)}`}
                   kind="стимул"
                   on={selected?.kind === 'stimulus' && selected.id === drive.id}
-                  onPick={() => control.select({ kind: 'stimulus', id: drive.id })}
+                  onPick={() => pick(() => control.select({ kind: 'stimulus', id: drive.id }))}
                 />
               ))}
               {project.recordings.map((record) => (
@@ -480,7 +568,7 @@ export function SandboxScreen() {
                   label={`${record.id} · ${where(record.target)}`}
                   kind="запись"
                   on={selected?.kind === 'recording' && selected.id === record.id}
-                  onPick={() => control.select({ kind: 'recording', id: record.id })}
+                  onPick={() => pick(() => control.select({ kind: 'recording', id: record.id }))}
                 />
               ))}
             </div>
