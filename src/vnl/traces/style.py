@@ -93,8 +93,10 @@ section.tr-card { padding: 0; overflow: hidden; }
 .tr-line-g { stroke: var(--trace); stroke-width: 1.2; }
 .tr-line-g.tr-tone-exc { stroke: var(--exc); }
 .tr-line-g.tr-tone-inh { stroke: var(--inh); }
+.tr-line-g.tr-tone-shunt { stroke: var(--shunt); }
 .tr-area.tr-tone-exc { fill: var(--exc); }
 .tr-area.tr-tone-inh { fill: var(--inh); }
+.tr-area.tr-tone-shunt { fill: var(--shunt); }
 .tr-line-w { stroke: var(--mod); stroke-width: 2; }
 .tr-area { fill: var(--trace); opacity: .16; stroke: none; }
 .tr-spike { stroke-width: 1.5; vector-effect: non-scaling-stroke; }

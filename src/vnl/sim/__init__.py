@@ -1,3 +1,9 @@
-from .lif import SenseEvent, SimResult, Simulator, simulate
+from .lif import SenseEvent, SimResult, Simulator, SimulationError, simulate
 
-__all__ = ["SenseEvent", "SimResult", "Simulator", "simulate"]
+__all__ = [
+    "SenseEvent",
+    "SimResult",
+    "Simulator",
+    "SimulationError",
+    "simulate",
+]

@@ -150,7 +150,11 @@ def conductance_figure(
         )
     # Возбуждение и торможение красим по смыслу: их и смотрят в паре,
     # а одинаковый цвет заставлял бы каждый раз перечитывать подпись.
-    tone = {"g_exc": " tr-tone-exc", "g_inh": " tr-tone-inh"}.get(kind, "")
+    tone = {
+        "g_exc": " tr-tone-exc",
+        "g_inh": " tr-tone-inh",
+        "g_shunt": " tr-tone-shunt",
+    }.get(kind, "")
     body.append(f'<path class="tr-area{tone}" d="{area}"/>')
     body.append(f'<path class="tr-line tr-line-g{tone}" d="{line}"/>')
     body.append(baseline(low, high))

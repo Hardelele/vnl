@@ -122,7 +122,7 @@ def render(model: ir.Model, result: SimResult) -> str:
             continue
 
         points = downsample_minmax(times, values)
-        if kind in ("g", "g_exc", "g_inh"):
+        if kind in ("g", "g_exc", "g_inh", "g_shunt"):
             figures.append(conductance_figure(frame, head, points, kind))
         elif kind == "w":
             figures.append(weight_figure(frame, head, points, values[0], values[-1]))

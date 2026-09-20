@@ -1144,8 +1144,15 @@ def test_a_block_carries_the_contacts_of_its_snapshot(base):
     assert inhibitory["inhibitory"] is True, "тормозность считает сервер"
     assert (inhibitory["weight"], inhibitory["delay"]) == (0.9, 1.4)
 
-    link = {"id", "source", "target", "receptor", "inhibitory", "weight", "delay"}
+    # Реверсал и полярность появились у обоих одновременно (#496): будь они
+    # только у контакта, шунт нельзя было бы нарисовать на холсте.
+    link = {
+        "id", "source", "target", "receptor", "polarity", "inhibitory",
+        "reversal", "reversalOverride", "weight", "delay",
+    }
     assert set(contacts[0]) - {"pre", "post"} == link - {"source", "target"}
+    assert inhibitory["polarity"] == "inh", "полярность решает реверсал"
+    assert (inhibitory["reversal"], inhibitory["reversalOverride"]) == (-70.0, None)
 
 
 def test_a_contact_is_changed_one_block_at_a_time(base):
@@ -1713,6 +1720,7 @@ def test_the_glossary_explains_the_labels_on_the_screen(base):
 
     assert set(glossary["contact"]) == {
         "receptor",
+        "reversal",
         "weight",
         "delay",
         "dynamics",

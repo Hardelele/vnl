@@ -87,20 +87,61 @@ def _cell_params(model: ir.Model) -> tuple[dict, list[str]]:
     return out, losses
 
 
-def _syn_mech_params(model: ir.Model) -> dict:
-    used = {contact.receptor for contact in model.contacts}
-    used |= {stim.receptor for stim in model.stimuli if stim.kind != "current"}
+def _mech_name(receptor: str, reversal: float) -> str:
+    """Имя механизма для пары (рецептор, реверсал).
+
+    Механизм в NetPyNE -- это `Exp2Syn` с числами, и реверсал одно из них.
+    Один механизм на имя рецептора схлопнул бы два `gaba_a`-контакта с
+    реверсалами -70 и -65 мВ в один, и экспортированный скрипт считал бы
+    другую сеть -- молча, потому что синтаксически он остался бы верным.
+
+    Имя при реестровом реверсале остаётся прежним (`gaba_a`), а не становится
+    `gaba_a_e_70` для всех подряд: девяносто девять моделей из ста реверсал не
+    трогают, и переименовывать у них все механизмы значило бы менять вид
+    экспорта у тех, кого правка не касается. Минус в имени NEURON не живёт,
+    поэтому знак пишется буквой `m`.
+    """
+    if reversal == ir.RECEPTORS[receptor].reversal:
+        return receptor
+    sign = "m" if reversal < 0 else ""
+    return sanitize(f"{receptor}_e{sign}{abs(reversal):g}")
+
+
+def _syn_mech_params(model: ir.Model) -> tuple[dict, list[str]]:
+    used = {(contact.receptor, contact.reversal) for contact in model.contacts}
+    used |= {
+        (stim.receptor, stim.reversal)
+        for stim in model.stimuli
+        if stim.kind != "current"
+    }
     out: dict = {}
-    for receptor in sorted(used):
+    losses: list[str] = []
+    for receptor, reversal in sorted(used):
         kind = ir.RECEPTORS[receptor]
-        reversal, tau_decay = kind.reversal, kind.tau_decay
-        out[receptor] = {
+        out[_mech_name(receptor, reversal)] = {
             "mod": "Exp2Syn",
-            "tau1": max(0.1, tau_decay / 10.0),
-            "tau2": tau_decay,
+            "tau1": max(0.1, kind.tau_decay / 10.0),
+            "tau2": kind.tau_decay,
             "e": reversal,
         }
-    return out
+        if kind.voltage_dependent:
+            # `Exp2Syn` линеен: проводимость в нём не зависит от потенциала.
+            # Значит экспортированный NMDA -- это медленная AMPA, то есть
+            # ровно та ловушка, из-за которой задача #498 и делалась, только
+            # теперь на L2. Выбросить рецептор из скрипта нельзя (сеть станет
+            # другой сильнее), подменить механизм нечем -- своего mod-файла у
+            # нас нет, -- поэтому единственный честный ход: сказать вслух, что
+            # скрипт считает другую сеть, и назвать, чего именно в нём не будет.
+            losses.append(
+                f"рецептор {receptor}: зависимость проводимости от потенциала "
+                f"(блок магнием, [Mg] = {kind.mg:g} мМ) переносится как "
+                f"линейный Exp2Syn -- в NEURON этот механизм её не знает. В "
+                f"скрипте не будет ни порога по числу совпавших входов, ни "
+                f"плато после снятия входа: NMDA там работает как медленная "
+                f"AMPA. Для настоящего поведения нужен свой mod-механизм с "
+                f"множителем Джара--Стивенса"
+            )
+    return out, losses
 
 
 def _conn_params(model: ir.Model) -> tuple[dict, list[str]]:
@@ -110,7 +151,7 @@ def _conn_params(model: ir.Model) -> tuple[dict, list[str]]:
         entry = {
             "preConds": {"pop": contact.pre.instance},
             "postConds": {"pop": contact.post.instance},
-            "synMech": contact.receptor,
+            "synMech": _mech_name(contact.receptor, contact.reversal),
             "weight": contact.weight * 0.001,  # нСм -> мкСм, единицы NEURON
             "delay": contact.delay,
             "sec": sanitize(contact.post.section),
@@ -152,6 +193,23 @@ def _conn_params(model: ir.Model) -> tuple[dict, list[str]]:
                 f"(u={contact.dynamics.u}, tau_rec={contact.dynamics.tau_rec}, "
                 f"tau_facil={contact.dynamics.tau_facil}) требует механизма "
                 f"Цодыкса--Маркрама; Exp2Syn её не воспроизводит"
+            )
+        if model.polarity_of(contact) == ir.POLARITY_SHUNT:
+            # Сам механизм переносится честно: `Exp2Syn` с `e` на уровне покоя
+            # -- это и есть шунт, NEURON считает его как надо. Потеря в другом:
+            # шунт настроен на покой точечной модели (`v_rest`), а на L2 покой
+            # задают каналы Ходжкина--Хаксли, и реверсал, совпадавший с покоем
+            # на L1, там окажется чуть выше или ниже него. Деление превратится
+            # в деление с примесью, и разница будет тем больше, чем сильнее
+            # контакт. Молчать нельзя: скрипт посчитается и ответит похоже, а
+            # не так же.
+            point = model.cell_type_of(contact.post.instance).point_model
+            losses.append(
+                f"контакт {contact.id}: шунт настроен на покой точечной модели "
+                f"({point.v_rest:g} мВ, реверсал {contact.reversal:g} мВ); на "
+                f"L2 покой задают каналы клетки, и деление входа окажется не "
+                f"тем же -- сверьте реверсал с настоящим покоем экспортированной "
+                f"клетки"
             )
         if contact.pre.section != "soma":
             losses.append(
@@ -209,7 +267,7 @@ def _stim_params(model: ir.Model) -> tuple[dict, dict, list[str]]:
             "conds": {"pop": stim.target.instance},
             "sec": sanitize(stim.target.section),
             "loc": stim.target.fraction,
-            "synMech": stim.receptor,
+            "synMech": _mech_name(stim.receptor, stim.reversal),
             "weight": stim.amplitude * 0.001,
             "delay": 1.0,
         }
@@ -257,6 +315,7 @@ def export(model: ir.Model) -> ExportReport:
     cell_params, losses_cells = _cell_params(model)
     conn_params, losses_conns = _conn_params(model)
     stim_sources, stim_targets, losses_stims = _stim_params(model)
+    syn_mechs, losses_mechs = _syn_mech_params(model)
 
     pop_params = {
         instance.id: {
@@ -286,7 +345,7 @@ netParams = specs.NetParams()
 
 netParams.cellParams = {cell_params!r}
 netParams.popParams = {pop_params!r}
-netParams.synMechParams = {_syn_mech_params(model)!r}
+netParams.synMechParams = {syn_mechs!r}
 netParams.connParams = {conn_params!r}
 netParams.stimSourceParams = {stim_sources!r}
 netParams.stimTargetParams = {stim_targets!r}
@@ -308,5 +367,11 @@ if __name__ == "__main__":
 
     return ExportReport(
         script=body,
-        losses=losses_cells + losses_conns + losses_stims + _border_losses(model),
+        losses=(
+            losses_cells
+            + losses_mechs
+            + losses_conns
+            + losses_stims
+            + _border_losses(model)
+        ),
     )
