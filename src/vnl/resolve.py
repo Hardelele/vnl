@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import ir, protocols
 from .morphology import MorphologyError
 from .parser import (
     ParsedModel,
+    parse_grid,
     PendingContact,
     PendingExpectation,
     PendingMotor,
@@ -52,10 +53,24 @@ class _Resolver:
         self._notes: set[str] = set()
 
     def error(self, where: str, message: str) -> None:
-        self.diagnostics.append(Diagnostic("error", where, message))
+        self._say("error", where, message)
 
     def warn(self, where: str, message: str) -> None:
-        self.diagnostics.append(Diagnostic("warning", where, message))
+        self._say("warning", where, message)
+
+    def _say(self, severity: str, where: str, message: str) -> None:
+        """Сказать -- но не повторяться слово в слово.
+
+        До слоёв клеток повтор был невозможен: у каждой стрелки свой контакт и
+        свой `where`. Стрелка в слой из 576 клеток -- одна написанная строка, и
+        претензия к ней («задержка меньше шага») тоже одна, сколько бы связей
+        из неё ни вышло. 576 одинаковых строк в отчёте не добавляют ни одного
+        слова и прячут за собой все остальные (#580).
+        """
+        note = Diagnostic(severity, where, message)
+        if note in self.diagnostics:
+            return
+        self.diagnostics.append(note)
 
     # --- адреса --------------------------------------------------------
 
@@ -86,6 +101,92 @@ class _Resolver:
             self._notes.add(note)
             self.warn(where, note)
         return ir.Site(instance=instance_id, section=section, fraction=fraction)
+
+    # --- слои и поля ----------------------------------------------------
+
+    def population_of(self, address: str) -> ir.Population | None:
+        """Слой, к которому обращается адрес `R.soma`, или `None`.
+
+        Слой узнаётся по имени в начале адреса -- ровно там же, где резолвер
+        ищет нейрон. Для человека `R` и `R[3,7]` отличаются написанным
+        индексом, а не видом стрелки: `R.soma` -- весь слой, `R[3,7].soma` --
+        одна его клетка, и написанный индекс здесь и есть разница между
+        «каждый к своему» и «вот в эту».
+        """
+        head = ir.head_of(address)
+        if address[len(head):].startswith("["):
+            return None
+        return self.parsed.populations.get(head)
+
+    @staticmethod
+    def _member_address(address: str, member: str) -> str:
+        """`R.soma` + `R[3,7]` -> `R[3,7].soma`."""
+        _, _, rest = address.partition(".")
+        return f"{member}.{rest}" if rest else member
+
+    def spread(
+        self, pre_address: str, post_address: str, where: str
+    ) -> list[tuple[str, str]] | None:
+        """Стрелка со слоями -> список обычных стрелок (#580).
+
+        Три правила, и все три -- про то, что человек и так имел в виду:
+
+        * слой в слой одного размера -- каждый к своему (`R[3,7] -> S[3,7]`).
+          Ради этого слой и заводят: соседство в сетке обязано что-то значить,
+          иначе не нужна была бы и сетка;
+        * слой в клетку -- все к одной, клетка в слой -- одна ко всем;
+        * слои разных размеров -- отказ с обоими числами. Молча растянуть
+          16x16 на 24x24 значило бы выдумать соседство, которого человек не
+          писал, а усечь -- потерять две трети схемы без единого слова.
+        """
+        pre_pop = self.population_of(pre_address)
+        post_pop = self.population_of(post_address)
+        if pre_pop is None and post_pop is None:
+            return [(pre_address, post_address)]
+        if pre_pop is not None and post_pop is not None:
+            if (pre_pop.rows, pre_pop.cols) != (post_pop.rows, post_pop.cols):
+                self.error(
+                    where,
+                    f"слои разного размера: {pre_pop.id} -- "
+                    f"{pre_pop.rows}x{pre_pop.cols}, {post_pop.id} -- "
+                    f"{post_pop.rows}x{post_pop.cols}; «каждый к своему» "
+                    "требует одной сетки",
+                )
+                return None
+            return [
+                (
+                    self._member_address(pre_address, pre_member),
+                    self._member_address(post_address, post_member),
+                )
+                for pre_member, post_member in zip(
+                    pre_pop.members(), post_pop.members()
+                )
+            ]
+        if pre_pop is not None:
+            return [
+                (self._member_address(pre_address, member), post_address)
+                for member in pre_pop.members()
+            ]
+        assert post_pop is not None
+        return [
+            (pre_address, self._member_address(post_address, member))
+            for member in post_pop.members()
+        ]
+
+    def elements(
+        self, sensor: ir.Sensor, address: str, where: str
+    ) -> list[tuple[int, int]] | None:
+        """То же, что `ir.Sensor.select`, только отказ -- диагностикой.
+
+        Разбор адреса один на весь проект (см. `Sensor.select`): здесь только
+        перевод его отказа в ту же диагностику, которой резолвер говорит про
+        всё остальное.
+        """
+        try:
+            return sensor.select(address)
+        except ValueError as exc:
+            self.error(where, str(exc))
+            return None
 
     def kind_of(self, site: ir.Site) -> str:
         instance = self.parsed.instances[site.instance]
@@ -130,8 +231,12 @@ class _Resolver:
             f"({point.v_rest:g} мВ)",
         )
 
-    def contact(self, pending: PendingContact) -> ir.Contact | None:
-        where = f"контакт {pending.id}"
+    def contact(
+        self, pending: PendingContact, where: str | None = None
+    ) -> ir.Contact | None:
+        # `where` приходит извне, когда стрелка развёрнута по слою: претензия
+        # относится к написанной строке, а не к 576 её следствиям (#580).
+        where = where or f"контакт {pending.id}"
         pre = self.site(pending.pre_address, where, default_kind="axon")
         post = self.site(pending.post_address, where, default_kind="soma")
         if pre is None or post is None:
@@ -339,15 +444,47 @@ class _Resolver:
                 f"есть {', '.join(protocols.SENSOR_KIND_IDS)}",
             )
             return None
+        params = dict(pending.params)
+        # Сетка и каналы вынимаются до чисел рода: они про размер двери, а не
+        # про то, во что превращается величина, и спрашивать о них реестр
+        # родов бессмысленно -- поле бывает у любого рода.
+        written_grid = params.pop("grid", None)
+        written_channels = params.pop("channels", None)
+        grid = (1, 1)
+        if written_grid is not None:
+            parsed_grid = parse_grid(written_grid)
+            if parsed_grid is None:
+                self.error(
+                    where,
+                    f"сетка {written_grid!r} непонятна; пишется как 24x24",
+                )
+                return None
+            grid = parsed_grid
+        channels: tuple[str, ...] = ()
+        if written_channels is not None:
+            name = str(written_channels)
+            if name not in protocols.SENSOR_CHANNELS:
+                known = ", ".join(protocols.SENSOR_CHANNELS)
+                self.error(
+                    where, f"неизвестный набор каналов {name!r} (есть: {known})"
+                )
+                return None
+            channels = protocols.SENSOR_CHANNELS[name]
         numbers = self._numbers(
             where,
             protocols.sensor_defaults(pending.kind),
-            pending.params,
+            params,
             "сенсора",
         )
         if numbers is None:
             return None
-        sensor = ir.Sensor(id=pending.id, kind=pending.kind, **numbers)
+        sensor = ir.Sensor(
+            id=pending.id,
+            kind=pending.kind,
+            grid=grid,
+            channels=channels,
+            **numbers,
+        )
         for problem in protocols.sensor_problems(sensor):
             self.error(where, problem)
         return sensor
@@ -376,46 +513,31 @@ class _Resolver:
             self.error(where, problem)
         return motor
 
-    def sensor_link(
-        self, pending: PendingContact, sensor_id: str
-    ) -> ir.SensorLink | None:
+    def sensor_links(
+        self, pending: PendingContact, sensor: ir.Sensor
+    ) -> list[ir.SensorLink]:
         """`key -> MN.soma { weight = 2nS }` -- подключение сенсора к точке.
 
         Разбирается тем же оператором, что и связь между клетками, и проверки
         здесь те же: рецептор из списка, вес неотрицателен, задержка не меньше
         шага. Расходиться им нельзя -- для человека это одна и та же стрелка.
+
+        У поля стрелка одна, а связей столько, сколько величин она называет
+        (#580): `eye.r -> R.soma` при сетке 24x24 -- это 576 связей, и каждая
+        знает свой элемент. Разворачивается здесь, а не в симуляторе, по той же
+        причине, по которой здесь разворачивается слой клеток: дальше по пути
+        стоит обычная связь, и ни прогон, ни отчёт, ни экспорт не обязаны знать
+        про сетки.
         """
-        where = f"сенсор {sensor_id}"
-        _, _, rest = pending.pre_address.partition(".")
-        if rest:
-            self.error(
-                where,
-                f"у сенсора нет участков: {pending.pre_address!r} -- "
-                "подключается он целиком",
-            )
-            return None
-        post = self.site(pending.post_address, where, default_kind="soma")
-        if post is None:
-            return None
+        where = f"сенсор {sensor.id}"
         if pending.receptor not in ir.RECEPTORS:
             known = ", ".join(sorted(ir.RECEPTORS))
             self.error(
                 where, f"неизвестный рецептор {pending.receptor!r} (есть: {known})"
             )
-            return None
+            return []
         if pending.weight < 0:
             self.error(where, "вес не бывает отрицательным: знак задаёт реверсал")
-        self._written_reversal(
-            where,
-            pending.reversal,
-            ir.RECEPTORS[pending.receptor].reversal
-            if pending.reversal is None
-            else pending.reversal,
-            self.parsed.cell_types[
-                self.parsed.instances[post.instance].cell_type
-            ].point_model,
-            post,
-        )
         if pending.delay < self.parsed.run.dt:
             self.error(
                 where,
@@ -432,13 +554,92 @@ class _Resolver:
                 "считаются: у сенсора нет пресинаптической клетки, а правило "
                 "STDP считает порядок её спайков",
             )
-        return ir.SensorLink(
-            target=post,
-            receptor=pending.receptor,
-            weight=pending.weight,
-            delay=pending.delay,
-            reversal_override=pending.reversal,
+
+        _, _, rest = pending.pre_address.partition(".")
+        if not sensor.is_field:
+            if rest:
+                self.error(
+                    where,
+                    f"у сенсора нет участков: {pending.pre_address!r} -- "
+                    "подключается он целиком",
+                )
+                return []
+            places = [(0, 0)]
+        else:
+            found = self.elements(sensor, pending.pre_address, where)
+            if found is None:
+                return []
+            places = found
+
+        targets = self._sensor_targets(sensor, pending, places, where)
+        if targets is None:
+            return []
+
+        links: list[ir.SensorLink] = []
+        for index, address in targets:
+            post = self.site(address, where, default_kind="soma")
+            if post is None:
+                return []
+            self._written_reversal(
+                where,
+                pending.reversal,
+                ir.RECEPTORS[pending.receptor].reversal
+                if pending.reversal is None
+                else pending.reversal,
+                self.parsed.cell_types[
+                    self.parsed.instances[post.instance].cell_type
+                ].point_model,
+                post,
+            )
+            links.append(
+                ir.SensorLink(
+                    target=post,
+                    receptor=pending.receptor,
+                    weight=pending.weight,
+                    delay=pending.delay,
+                    reversal_override=pending.reversal,
+                    index=index,
+                )
+            )
+        return links
+
+    def _sensor_targets(
+        self,
+        sensor: ir.Sensor,
+        pending: PendingContact,
+        places: list[tuple[int, int]],
+        where: str,
+    ) -> list[tuple[int, str]] | None:
+        """Какая величина в какую точку: (номер величины, адрес точки).
+
+        Слой той же сетки -- попиксельно, одиночная клетка -- все величины в
+        неё (так и собирают сумматор яркости), один элемент в слой -- во все
+        его клетки. Несовпадение сеток -- отказ с обоими числами: см. `spread`.
+        """
+        population = self.population_of(pending.post_address)
+        if population is None:
+            return [(index, pending.post_address) for _, index in places]
+        pixels = {pixel for pixel, _ in places}
+        if len(pixels) == population.size:
+            members = population.members()
+            return [
+                (index, self._member_address(pending.post_address, members[pixel]))
+                for pixel, index in places
+            ]
+        if len(pixels) == 1:
+            return [
+                (index, self._member_address(pending.post_address, member))
+                for _, index in places
+                for member in population.members()
+            ]
+        self.error(
+            where,
+            f"поле {sensor.id} называет {len(pixels)} пикселей, а в слое "
+            f"{population.id} клеток {population.size} "
+            f"({population.rows}x{population.cols}): «каждый к своему» требует "
+            "одной сетки",
         )
+        return None
 
     def recording(self, pending: PendingRecording) -> ir.Recording | None:
         where = f"запись {pending.id}"
@@ -664,34 +865,56 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
 
     contacts: list[ir.Contact] = []
     for pending_contact in parsed.contacts:
-        head = pending_contact.pre_address.partition(".")[0]
+        head = ir.head_of(pending_contact.pre_address)
         if head in sensors:
-            link = resolver.sensor_link(pending_contact, head)
-            if link is not None:
-                sensors[head].targets.append(link)
+            sensors[head].targets.extend(
+                resolver.sensor_links(pending_contact, sensors[head])
+            )
             continue
-        if head in motors or pending_contact.post_address.partition(".")[0] in motors:
+        if head in motors or ir.head_of(pending_contact.post_address) in motors:
             resolver.error(
                 f"контакт {pending_contact.id}",
                 "мотор не соединяется стрелкой: он смотрит на клетку "
                 "(from = ...) и отдаёт величину наружу",
             )
             continue
-        if pending_contact.post_address.partition(".")[0] in sensors:
+        if ir.head_of(pending_contact.post_address) in sensors:
             resolver.error(
                 f"контакт {pending_contact.id}",
                 "в сенсор ничего не входит: он дверь снаружи внутрь, а не "
                 "клетка",
             )
             continue
-        contact = resolver.contact(pending_contact)
-        if contact is not None:
-            contacts.append(contact)
+        pairs = resolver.spread(
+            pending_contact.pre_address,
+            pending_contact.post_address,
+            f"контакт {pending_contact.id}",
+        )
+        if pairs is None:
+            continue
+        for number, (pre_address, post_address) in enumerate(pairs):
+            # Имя контакта остаётся именем написанной стрелки, а номер идёт
+            # индексом: `c3[17]`. Так отчёт и трасса называют ту стрелку,
+            # которую человек видит в тексте, а не выдуманное имя.
+            contact = resolver.contact(
+                replace(
+                    pending_contact,
+                    id=pending_contact.id
+                    if len(pairs) == 1
+                    else f"{pending_contact.id}[{number}]",
+                    pre_address=pre_address,
+                    post_address=post_address,
+                ),
+                where=f"контакт {pending_contact.id}",
+            )
+            if contact is not None:
+                contacts.append(contact)
 
     model = ir.Model(
         name=parsed.name,
         cell_types=parsed.cell_types,
         instances=parsed.instances,
+        populations=parsed.populations,
         contacts=contacts,
         sensors=sensors,
         motors=motors,

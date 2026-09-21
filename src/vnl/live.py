@@ -453,7 +453,7 @@ class Session:
         """
         return {
             "sensors": {
-                name: round(value, TRACE_DIGITS)
+                name: _value(value)
                 for name, value in self.simulator.held(self.elapsed).items()
             },
             "motors": {
@@ -464,11 +464,35 @@ class Session:
                 {
                     "time": round(event.time, TIME_DIGITS),
                     "sensor": event.sensor,
-                    "value": event.value,
+                    "value": _value(event.value),
                 }
                 for event in self._input
             ],
         }
+
+
+def _value(value: Any) -> Any:
+    """Величина двери в ответе сессии: число, а у поля -- счёт по кадру (#580).
+
+    Кадр целиком сюда не кладётся, и это решение, а не недоделка. Ответ сессии
+    уходит на каждый кадр показа; 1728 чисел в нём -- это мегабайт в секунду
+    ради картинки, которую интерфейс всё равно пока не рисует. Что поле
+    засветилось и насколько -- он показать может уже сейчас, а когда научится
+    рисовать сам кадр, тот поедет своим запросом, по требованию.
+
+    Числа выбраны те же, которыми отчитывается `vnl run`: сколько величин
+    ненулевых и какова их средняя. По ним видно и что кадр пришёл, и что он не
+    пустой, -- то, чего нельзя узнать, не показав ничего.
+    """
+    if isinstance(value, (int, float)):
+        return round(float(value), TRACE_DIGITS)
+    frame = [float(x) for x in value]
+    lit = [x for x in frame if x > 0.0]
+    return {
+        "values": len(frame),
+        "lit": len(lit),
+        "mean": round(sum(lit) / len(lit), TRACE_DIGITS) if lit else 0.0,
+    }
 
 
 class Pool:

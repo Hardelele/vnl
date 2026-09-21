@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from .backends.dot_export import export as dot_export
 from .backends.netpyne_export import export as netpyne_export
-from .ir import Model, Site
+from .ir import Model, Site, head_of
 from dataclasses import replace
 
 from .patterns import DRAFT_LEVEL, LEVEL_NAMES, Pattern, Port
@@ -30,15 +30,44 @@ def _print_diagnostics(diagnostics: list[Diagnostic]) -> None:
         print(diagnostic, file=sys.stderr)
 
 
+def _tracks(model: Model) -> list[tuple[str, list[str]]]:
+    """Дорожки растра: клетка -- своя, слой -- одна на всех (#580).
+
+    576 строк по 78 символов -- это не растр, а способ не показать ничего:
+    окно терминала кончится раньше, чем дойдёт до сумматора, ради которого
+    прогон и запускали. Слой поэтому идёт одной дорожкой, а сколько клеток за
+    ней стоит, говорит подпись под растром.
+
+    Порядок -- как в модели: слой встаёт туда, где написан, а не в конец.
+    """
+    tracks: list[tuple[str, list[str]]] = []
+    taken: set[str] = set()
+    for name in model.instances:
+        if name in taken:
+            continue
+        head = name.partition("[")[0]
+        population = model.populations.get(head)
+        if population is None:
+            tracks.append((name, [name]))
+            taken.add(name)
+            continue
+        members = population.members()
+        taken.update(members)
+        tracks.append((f"{head}[{population.rows}x{population.cols}]", members))
+    return tracks
+
+
 def _raster(model: Model, spikes: dict[str, list[float]], width: int = 78) -> str:
     duration = model.run.duration
-    label_width = max((len(name) for name in spikes), default=4)
+    tracks = _tracks(model)
+    label_width = max((len(name) for name, _ in tracks), default=4)
     lines = []
-    for name in model.instances:
+    for name, members in tracks:
         row = ["."] * width
-        for time in spikes.get(name, []):
-            column = min(width - 1, int(time / duration * width))
-            row[column] = "|"
+        for member in members:
+            for time in spikes.get(member, []):
+                column = min(width - 1, int(time / duration * width))
+                row[column] = "|"
         lines.append(f"{name:>{label_width}} {''.join(row)}")
     lines.append(f"{'':>{label_width}} 0{' ' * (width - 8)}{duration:g} мс")
     return "\n".join(lines)
@@ -77,19 +106,46 @@ def _sense_log(model: Model, specs: list[str] | None) -> list:
                     )
                 ]
             )
-        if name not in model.sensors:
+        head = head_of(name)
+        sensor = model.sensors.get(head)
+        if sensor is None:
             known = ", ".join(model.sensors) or "их нет вовсе"
             raise ValidationError(
-                [Diagnostic("error", spec, f"в схеме нет сенсора {name!r} (есть: {known})")]
+                [Diagnostic("error", spec, f"в схеме нет сенсора {head!r} (есть: {known})")]
             )
+        # Адрес величины поля (`eye.r[3,7]`) разбирается тем же разбором, каким
+        # его читает текст схемы (#580): человек пишет один и тот же адрес и в
+        # стрелке, и при подаче, и два разных разбора однажды разошлись бы.
+        index = 0
+        if name != head:
+            try:
+                places = sensor.select(name)
+            except ValueError as exc:
+                raise ValidationError(
+                    [Diagnostic("error", spec, str(exc))]
+                ) from exc
+            if len(places) != 1:
+                raise ValidationError(
+                    [
+                        Diagnostic(
+                            "error",
+                            spec,
+                            f"адрес {name!r} называет {len(places)} величин; "
+                            "ключом подаётся одна, а кадр приходит источником "
+                            "(--source)",
+                        )
+                    ]
+                )
+            index = places[0][1]
         for piece in tail.split(","):
             value, _, moment = piece.partition("@")
             try:
                 events.append(
                     SenseEvent(
                         time=float(moment) if moment else 0.0,
-                        sensor=name,
+                        sensor=sensor.id,
                         value=check_value(value.strip()),
+                        index=index,
                     )
                 )
             except (SenseError, ValueError) as exc:
@@ -100,6 +156,115 @@ def _sense_log(model: Model, specs: list[str] | None) -> list:
     # написанное задом наперёд, -- это всё тот же опыт, а не отказ.
     events.sort(key=lambda event: event.time)
     return events
+
+
+def _source_log(model: Model, specs: list[str] | None) -> list:
+    """`--source eye="python tools/eye.py A.png"` -> поток входа от программы.
+
+    Источник -- то же место, где стоит человек с кнопкой, только занятое
+    программой (`vnl.sources`). Читается он до конца вывода и до прогона: у
+    расчёта от начала до конца нет «по ходу дела», а собранная запись и есть
+    то, чем второй прогон повторяет первый.
+
+    Кадр без момента ложится на ноль -- источник сказал, что показывает это с
+    самого начала. Два кадра без момента -- отказ: в прогоне нет часов, и
+    разложить их по времени нечем, кроме выдумки.
+    """
+    from .sim import SenseEvent
+    from .sources import SourceError, collect
+
+    events: list[SenseEvent] = []
+    for spec in specs or []:
+        name, _, command = spec.partition("=")
+        name = name.strip()
+        if not name or not command.strip():
+            raise ValidationError(
+                [
+                    Diagnostic(
+                        "error",
+                        spec,
+                        "источник пишется как сенсор=команда, например "
+                        '--source eye="python tools/eye.py letter.png"',
+                    )
+                ]
+            )
+        head = head_of(name)
+        sensor = model.sensors.get(head)
+        if sensor is None:
+            known = ", ".join(model.sensors) or "их нет вовсе"
+            raise ValidationError(
+                [Diagnostic("error", spec, f"в схеме нет сенсора {head!r} (есть: {known})")]
+            )
+        try:
+            readings = collect(command.strip(), name)
+        except SourceError as exc:
+            raise ValidationError([Diagnostic("error", spec, str(exc))]) from exc
+        timeless = 0
+        for reading in readings:
+            if reading.time is None:
+                timeless += 1
+                if timeless > 1:
+                    raise ValidationError(
+                        [
+                            Diagnostic(
+                                "error",
+                                spec,
+                                "источник прислал второе показание без "
+                                'момента: в прогоне нет часов, и раскладывать '
+                                "их по времени нечем -- пишите \"t\" в мс",
+                            )
+                        ]
+                    )
+            events.append(_sense_event(model, reading, spec))
+    return events
+
+
+def _sense_event(model: Model, reading, spec: str):
+    """Показание источника -> событие потока входа, с проверкой по схеме."""
+    from .protocols import SenseError, check_value
+    from .sim import SenseEvent
+
+    head = head_of(reading.address)
+    sensor = model.sensors.get(head)
+    if sensor is None:
+        known = ", ".join(model.sensors) or "их нет вовсе"
+        raise ValidationError(
+            [
+                Diagnostic(
+                    "error",
+                    spec,
+                    f"источник назвал сенсор {head!r}, а в схеме его нет "
+                    f"(есть: {known})",
+                )
+            ]
+        )
+    index = 0
+    if reading.address != head:
+        try:
+            places = sensor.select(reading.address)
+        except ValueError as exc:
+            raise ValidationError([Diagnostic("error", spec, str(exc))]) from exc
+        index = places[0][1]
+    try:
+        if reading.is_frame:
+            frame = tuple(check_value(x) for x in reading.value)
+            room = sensor.size - index
+            if len(frame) != room:
+                raise SenseError(
+                    f"поле {sensor.id} ждёт {room} величин, а в кадре их "
+                    f"{len(frame)}"
+                )
+            value: object = frame
+        else:
+            value = check_value(reading.value)
+    except (SenseError, ValueError) as exc:
+        raise ValidationError([Diagnostic("error", spec, str(exc))]) from exc
+    return SenseEvent(
+        time=0.0 if reading.time is None else float(reading.time),
+        sensor=sensor.id,
+        value=value,  # type: ignore[arg-type]
+        index=index,
+    )
 
 
 def _print_border(model: Model, result, sense: list) -> None:
@@ -114,11 +279,12 @@ def _print_border(model: Model, result, sense: list) -> None:
     for sensor in model.sensors.values():
         given = [event for event in sense if event.sensor == sensor.id]
         story = protocols.describe_sensor(sensor)
+        what = "поле" if sensor.is_field else "сенсор"
         if given:
-            record = ", ".join(f"{e.value:g} на {e.time:g} мс" for e in given)
-            print(f"сенсор {sensor.id}: {story}; подано {record}")
+            record = ", ".join(_said(sensor, event) for event in given)
+            print(f"{what} {sensor.id}: {story}; подано {record}")
         else:
-            print(f"сенсор {sensor.id}: {story}; ничего не подано — молчит")
+            print(f"{what} {sensor.id}: {story}; ничего не подано — молчит")
     for motor in model.motors.values():
         value = result.motors.get(motor.id, 0.0)
         print(
@@ -126,6 +292,25 @@ def _print_border(model: Model, result, sense: list) -> None:
             f"({protocols.describe_motor(motor)} по {motor.source}) "
             f"на {model.run.duration:g} мс"
         )
+
+
+def _said(sensor, event) -> str:
+    """Что именно подали -- числом, а у кадра числами про кадр.
+
+    Печатать 1728 величин было бы то же самое, что не печатать ничего: в
+    отчёте о прогоне нужно не содержимое кадра, а то, что он пришёл, когда и
+    светится ли в нём хоть что-нибудь (#580).
+    """
+    if not event.is_frame:
+        where = "" if not sensor.is_field else f" в {sensor.address_of(event.index)}"
+        return f"{float(event.value):g}{where} на {event.time:g} мс"
+    frame = event.values
+    lit = [x for x in frame if x > 0.0]
+    share = sum(lit) / len(lit) if lit else 0.0
+    return (
+        f"кадр из {len(frame)} величин на {event.time:g} мс "
+        f"(ненулевых {len(lit)}, средняя по ним {share:.2f})"
+    )
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -151,7 +336,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    sense = _sense_log(model, args.sensor)
+    sense = _sense_log(model, args.sensor) + _source_log(
+        model, getattr(args, "source", None)
+    )
+    # По времени: поток входа читается по порядку, и кадр источника, поданный
+    # на 100-ю, обязан лечь после ключа, поданного на нулевую, каким бы
+    # порядком они ни пришли в командную строку.
+    sense.sort(key=lambda event: event.time)
     result = simulate(model, sense=list(sense))
     if result.degradation:
         print("деградация L2 -> L1:", file=sys.stderr)
@@ -160,9 +351,25 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     print(_raster(model, result.spikes))
     print()
-    for name, count in result.spike_count().items():
-        rate = count / model.run.duration * 1000.0
-        print(f"{name}: {count} спайков ({rate:.1f} Гц)")
+    counts = result.spike_count()
+    for name, members in _tracks(model):
+        if len(members) == 1:
+            count = counts.get(members[0], 0)
+            rate = count / model.run.duration * 1000.0
+            print(f"{name}: {count} спайков ({rate:.1f} Гц)")
+            continue
+        # Про слой спрашивают другое, чем про клетку: не «сколько разрядов», а
+        # «сколько клеток ответило». Первое число у слоя из 576 клеток само по
+        # себе не говорит ничего -- оно одинаково и когда отвечает вся сетка
+        # редко, и когда десяток клеток часто.
+        spoke = [counts.get(member, 0) for member in members]
+        awake = sum(1 for count in spoke if count)
+        total = sum(spoke)
+        each = total / awake if awake else 0.0
+        print(
+            f"{name}: разрядились {awake} клеток из {len(members)}, "
+            f"{total} спайков (по {each:.0f} на клетку)"
+        )
     if model.sensors or model.motors:
         print()
         _print_border(model, result, sense)
@@ -313,6 +520,36 @@ def _port(spec: str) -> Port:
     )
 
 
+def _ports(specs: list[str] | None, model: Model) -> list[Port]:
+    """Порты блока, с разворачиванием по слою клеток (#580).
+
+    `--port out=R.axon` при слое `R[24x24]` -- это 576 портов `out[0,0]`,
+    `out[0,1]`, ... Писать их руками нельзя (столько ключей никто не наберёт),
+    а свернуть слой в один порт значило бы соврать: наружу из сетчатки выходит
+    576 линий, а не одна, и блок, который делает вид, что одна, подключился бы
+    к соседу не тем, чем нужно.
+    """
+    out: list[Port] = []
+    for spec in specs or []:
+        port = _port(spec)
+        population = model.populations.get(port.site.instance)
+        if population is None:
+            out.append(port)
+            continue
+        for row in range(population.rows):
+            for col in range(population.cols):
+                out.append(
+                    replace(
+                        port,
+                        name=f"{port.name}[{row},{col}]",
+                        site=replace(
+                            port.site, instance=population.member(row, col)
+                        ),
+                    )
+                )
+    return out
+
+
 def _notes(specs: list[str] | None) -> dict[str, str]:
     """`--note in=вход схемы` -- подпись порта для интерфейса.
 
@@ -346,9 +583,16 @@ def cmd_add(args: argparse.Namespace) -> int:
 
     store = Store(args.root)
     notes = _notes(args.note)
+    # Подпись ищется и по имени порта, и по его основанию: `--note out=...`
+    # относится ко всем 576 портам слоя, потому что человек написал одну
+    # стрелку и объясняет её один раз (#580).
     ports = [
-        replace(port, note=notes.get(port.name, ""))
-        for port in (_port(spec) for spec in (args.port or []))
+        replace(
+            port,
+            note=notes.get(port.name)
+            or notes.get(port.name.partition("[")[0], ""),
+        )
+        for port in _ports(args.port, model)
     ]
     name = args.name or model.name
     taken = [item.id for item in store.patterns()]
@@ -515,7 +759,14 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         metavar="ИМЯ=ВЕЛИЧИНА[@МС]",
         help="что подать сенсору: key=1 или key=1@100,0@200 (величина 0…1, "
-        "момент в мс модельного времени)",
+        "момент в мс модельного времени); величине поля -- eye.r[3,7]=1",
+    )
+    run.add_argument(
+        "--source",
+        action="append",
+        metavar="ИМЯ=КОМАНДА",
+        help="программа за дверью: её строки в stdout становятся входом "
+        '(--source eye="python tools/eye.py letter.png")',
     )
     run.set_defaults(func=cmd_run)
 
@@ -572,7 +823,8 @@ def main(argv: list[str] | None = None) -> int:
         "--port",
         action="append",
         metavar="ИМЯ=ТОЧКА",
-        help="порт блока, например in=IN.soma или drive:mod=VTA.soma",
+        help="порт блока, например in=IN.soma или drive:mod=VTA.soma; "
+        "точка в слое (out=R.axon) разворачивается в порт на каждую клетку",
     )
     add.add_argument(
         "--note",
