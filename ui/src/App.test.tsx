@@ -903,11 +903,12 @@ describe('дорога с карточки в песочницу (#526)', () => 
     expect(asked.some((call) => call.path.endsWith('/undo'))).toBe(false)
   })
 
-  it('сенсор и мотор кладут из палитры, как клетку (#571)', async () => {
+  it('сенсор и мотор кладут из своей вкладки «Внешнее» (#571, #575)', async () => {
     // Жалоба владельца: «плюсом я не вижу сейчас в клетках сенсоров. Может
     // быть, они где-то есть, но я их пока не вижу. И моторов тоже не вижу».
-    // Завести их можно было только из свойств выбранной клетки -- то есть
-    // человек, не знающий про ту кнопку, границы с миром не находил.
+    // Сперва их положили в палитру клеток (#571), потом дали свою вкладку
+    // (#575): это не клетки и не паттерны, и жить по углам двух разных мест
+    // им было незачем.
     served()
     await mount()
     await click('Песочница')
@@ -916,13 +917,8 @@ describe('дорога с карточки в песочницу (#526)', () => 
       row.click()
     })
 
-    // Рядом с палитрой клеток, куда за деталью схемы и идут.
-    // Экран открывается на «Библиотеке», когда в песочницу приходят с
-    // карточки; палитра клеток -- соседняя вкладка, и граница с миром лежит
-    // в ней, рядом с тем, что кладут на холст.
-    await pickTab('Клетки')
+    await pickTab('Внешнее')
     const left = host.querySelector('.sb-left') as HTMLElement
-    expect(left.textContent).toContain('Граница с миром')
     const rows = [...left.querySelectorAll('.sb-row')]
     const sensor = rows.find((item) => item.textContent?.includes('Сенсор')) as HTMLElement
     const motor = rows.find((item) => item.textContent?.includes('Мотор')) as HTMLElement
@@ -942,6 +938,80 @@ describe('дорога с карточки в песочницу (#526)', () => 
     const plus = motor.querySelector('.sb-plus') as HTMLButtonElement
     expect(plus.disabled).toBe(true)
     expect(plus.title).toContain('выберите её')
+  })
+
+  it('в палитре клеток раздела «Граница с миром» больше нет (#575)', async () => {
+    // Два места для одного -- та самая болезнь, из-за которой панель свойств
+    // стала свалкой (#569). Переехало, а не раздвоилось.
+    served()
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    await pickTab('Клетки')
+    const left = host.querySelector('.sb-left') as HTMLElement
+    expect(left.textContent).not.toContain('Граница с миром')
+    expect(left.textContent).not.toContain('дверь снаружи внутрь')
+  })
+
+  it('во «Внешнем» видно, какие двери в схеме уже есть (#575)', async () => {
+    // Вкладка, из которой дверь кладут, обязана показывать заведённые: иначе
+    // второй сенсор заводят, не зная о первом.
+    serve([
+      ['/api/session', SIGNED_IN],
+      ['/api/catalog', CATALOG],
+      ['/api/glossary', { schema: 1, receptors: [], point: [], contact: [], port: [] }],
+      ['/api/cells', { schema: 1, cells: [] }],
+      ['/api/sim', { error: 'считать нечего' }, 400],
+      [
+        '/api/sandboxes/s1',
+        sandbox({
+          sensors: [
+            { id: 'key', kind: 'rate', story: 'частота, 100 Гц при 1', to: 100, position: [0, 0] },
+          ],
+          motors: [
+            {
+              id: 'out',
+              kind: 'rate',
+              story: 'частота за окно 50 мс',
+              unit: 'Гц',
+              window: 50,
+              source: { instance: 'MN', port: null, section: 'soma', fraction: 0.5 },
+              position: [0, 0],
+            },
+          ],
+        }),
+      ],
+      [
+        '/api/sandboxes',
+        { schema: 1, sandboxes: [{ id: 's1', name: 'Проба', blocks: 0, links: 0, updatedAt: '' }] },
+      ],
+    ])
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    await pickTab('Внешнее')
+    const left = host.querySelector('.sb-left') as HTMLElement
+    expect(left.textContent).toContain('В схеме')
+    expect(left.textContent).toContain('частота, 100 Гц при 1')
+    expect(left.textContent).toContain('частота за окно 50 мс')
+
+    // Строка выбирает ту же дверь, что фигура на холсте: второго, более
+    // бедного способа смотреть на объект вкладка не заводит.
+    const door = [...left.querySelectorAll('.sb-row')].find((item) =>
+      item.textContent?.includes('100 Гц при 1'),
+    ) as HTMLElement
+    await act(async () => {
+      door.click()
+    })
+    expect(host.querySelector('.sb-right')?.textContent).toContain('Сенсор')
   })
 
   it('без входа кнопка карточки уводит ко входу, а песочницу не трогает', async () => {
