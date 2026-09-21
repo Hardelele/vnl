@@ -7,6 +7,7 @@
 меняется.
 """
 
+import math
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from vnl.patterns import Endpoint, Sandbox
 from vnl.project import Project
 from vnl.report import border_html
 from vnl.resolve import ValidationError, load
+from vnl.expectations import check_model, failures
 from vnl.sim import SenseEvent, Simulator, simulate
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -43,6 +45,28 @@ run { dt = 0.1ms  duration = 300ms  level = L1  seed = 1 }
 """
 
 
+#: Та же схема родом `hold`: величина держит проводимость, а не льёт импульсы.
+#: Вес подставляется -- вокруг него и идёт весь разговор о чувствительности.
+HOLD = """
+model border_hold
+
+cell motoneuron : excitatory, glutamate {{
+    tau_m      = 10ms
+    threshold  = -50mV
+    refractory = 2ms
+}}
+
+neuron MN : motoneuron
+
+sensor touch : hold
+touch -> MN.soma {{ receptor = ampa  weight = {weight}nS  delay = 1.0ms }}
+
+record MN.soma.v
+record MN.soma.g_exc
+run {{ dt = 0.1ms  duration = 300ms  level = L1  seed = 1 }}
+"""
+
+
 def model(text: str = SCHEMA) -> ir.Model:
     built, _ = load(text, source="тест")
     return built
@@ -51,7 +75,8 @@ def model(text: str = SCHEMA) -> ir.Model:
 def sensed(events: list[tuple[float, float]], text: str = SCHEMA):
     """Прогон по записи значений сенсора `key`."""
     built = model(text)
-    log = [SenseEvent(time=time, sensor="key", value=value) for time, value in events]
+    name = "touch" if "sensor touch" in text else "key"
+    log = [SenseEvent(time=time, sensor=name, value=value) for time, value in events]
     return built, simulate(built, sense=log)
 
 
@@ -201,6 +226,237 @@ def test_the_registry_allows_a_kind_that_answers_to_change():
     assert seen == [(0.0, 1.0), (1.0, 1.0)]
 
 
+# --- род удержания ----------------------------------------------------------
+#
+# Род `rate` льёт импульсы, и это про аксон, который уже выстрелил. Сам
+# сенсорный нейрон устроен иначе: каналы открыты, пока есть стимул. Отсюда
+# второй род -- `hold`, у которого величина превращается в проводимость и
+# держится (#579).
+
+
+def test_the_hold_kind_opens_a_share_of_the_weight():
+    """Доля идёт пропорционально величине, и своего числа у рода нет.
+
+    «Сколько откроется при полной величине» -- это вес связи; второй множитель
+    в свойствах сенсора спрашивал бы силу дважды.
+    """
+    sensor = ir.Sensor(id="touch", kind="hold")
+    assert protocols.sensor_hold(sensor, 1.0) == 1.0
+    assert protocols.sensor_hold(sensor, 0.5) == 0.5
+    assert protocols.sensor_hold(sensor, 0.0) == 0.0
+    # У событийного рода держать нечего, и он отвечает нулём, а не ошибкой:
+    # солвер спрашивает оба вопроса у всякого сенсора.
+    assert protocols.sensor_hold(ir.Sensor(id="key", kind="rate"), 1.0) == 0.0
+    assert protocols.sensor_events(sensor, 1.0, 1.0, 0.0, 0.1) == (0, 0.0)
+
+
+def test_the_hold_kind_declares_conductance_and_not_current():
+    """Род говорит, чем действует, и это не придирка к слову.
+
+    У проводимости есть реверсал: она тянет мембрану к нему, у него же
+    останавливается и попутно шунтирует всё остальное. Ток не знает, где
+    клетка, и гонит её куда угодно. Рецептор -- это открытые каналы, то есть
+    проводимость; током подают из пипетки.
+    """
+    kind = protocols.SENSOR_KINDS["hold"]
+    assert (kind.emits, kind.trigger, kind.receptor) == ("conductance", "level", True)
+    assert kind.params == (), "своего числа у рода нет: сила живёт на связи"
+
+
+def test_a_held_input_stands_exactly_where_it_was_put():
+    """Проводимость держится на написанном весе, а не подползает к нему.
+
+    Удержание выражено подливанием утёкшего, и проверка здесь именно на это:
+    подлей чуть меньше -- уровень поедет вниз, чуть больше -- вверх, и оба
+    случая видны в третьем знаке.
+    """
+    _, result = sensed([(0.0, 1.0)], HOLD.format(weight=0.25))
+    conductance = result.traces["MN.soma:g_exc"]
+    assert conductance[-1] == pytest.approx(0.25, abs=1e-9)
+    # И потенциал встаёт туда, куда велит уравнение мембраны:
+    # v = (v_rest + g·E) / (1 + g) = -65 / 1.25.
+    assert result.traces["MN.soma:v"][-1] == pytest.approx(-52.0, abs=0.01)
+
+
+def test_half_a_value_opens_half_the_weight():
+    _, result = sensed([(0.0, 0.5)], HOLD.format(weight=0.5))
+    assert result.traces["MN.soma:g_exc"][-1] == pytest.approx(0.25, abs=1e-9)
+
+
+def test_holding_takes_the_threshold_three_times_cheaper_than_the_stream():
+    """Приёмка задачи, числом с обеих сторон порога.
+
+    0.3 нСм -- ровно порог по формуле, поэтому проверяются соседи: 0.35
+    разряжает, 0.25 не разряжает ни разу и стоит под порогом сколько угодно
+    долго. Потоку в 100 Гц на то же самое не хватает и 1 нСм -- вчетверо
+    большего веса.
+    """
+    _, fires = sensed([(0.0, 1.0)], HOLD.format(weight=0.35))
+    assert len(fires.spikes["MN"]) > 0
+
+    _, quiet = sensed([(0.0, 1.0)], HOLD.format(weight=0.25))
+    assert quiet.spikes["MN"] == []
+    assert max(quiet.traces["MN.soma:v"]) < -50.0
+
+    _, stream = sensed([(0.0, 1.0)], SCHEMA.replace("weight = 2nS", "weight = 1nS"))
+    assert stream.spikes["MN"] == [], "потоку того же не хватает и вчетверо"
+
+
+def test_letting_go_closes_the_channel():
+    """Отпустили -- канал закрывается, и остаток утекает постоянной рецептора.
+
+    Не обрывается: открытые каналы закрываются не мгновенно, и обрыв был бы
+    единственным местом в движке, где проводимость исчезает скачком.
+    """
+    _, result = sensed([(0.0, 1.0), (100.0, 0.0)], HOLD.format(weight=0.35))
+    assert result.spikes["MN"], "до отпускания клетка обязана разряжаться"
+    assert max(result.spikes["MN"]) < 105.0, "после отпускания разрядов нет"
+
+    trace = result.traces["MN.soma:g_exc"]
+    step = int(round(100.0 / 0.1))
+    assert trace[step] == pytest.approx(0.35, abs=1e-9)
+    # Спад начинается на миллисекунду позже отпускания -- ровно на задержке
+    # связи: отпущенное едет к клетке столько же, сколько нажатое. Через
+    # десять постоянных спада (tau AMPA 2 мс) от уровня остаются тысячные, но
+    # не ровно ноль.
+    assert 0.0 < trace[step + 200] < 0.35 * 0.001
+
+
+def test_the_level_travels_the_same_delay_as_an_impulse():
+    """Величина доходит до клетки за задержку связи, а не мгновенно.
+
+    Провести её мгновенно значило бы сказать, что у двери, в отличие от
+    всякого другого входа, расстояния нет.
+    """
+    _, result = sensed([(0.0, 1.0)], HOLD.format(weight=0.35).replace(
+        "delay = 1.0ms", "delay = 5.0ms"
+    ))
+    trace = result.traces["MN.soma:g_exc"]
+    opened = next(index for index, value in enumerate(trace) if value > 0.0)
+    assert opened * 0.1 == pytest.approx(5.0, abs=0.11)
+
+
+def test_rewinding_replays_a_held_input():
+    """Откат и пересчёт дают тот же прогон -- спайк в спайк.
+
+    Уровень в пути -- такое же состояние, как выброс в пути, и в снимке он
+    обязан лежать по той же причине: без него откат вернул бы клетку в момент,
+    когда дверь уже открыта, а проводимости к ней ещё не доехало.
+    """
+    built = model(HOLD.format(weight=0.35))
+    log = [SenseEvent(time=0.0, sensor="touch", value=1.0)]
+
+    straight = simulate(built, sense=list(log))
+
+    simulator = Simulator(built, sense=list(log))
+    simulator.advance(1000)
+    mark = simulator.snapshot()
+    simulator.advance(2000)
+    simulator.restore(mark)
+    simulator.result.truncate(mark.samples)
+    simulator.advance(2000)
+
+    assert simulator.result.spikes["MN"] == straight.spikes["MN"]
+    assert simulator.result.traces["MN.soma:g_exc"] == pytest.approx(
+        straight.traces["MN.soma:g_exc"]
+    )
+
+
+def test_a_held_input_adds_to_what_else_arrives():
+    """Удержание складывается с прочим входом в тот же рецептор, а не подменяет.
+
+    Подливается столько, сколько утекло с удерживаемого уровня, и добавка не
+    смотрит, что уже лежит в канале, -- поэтому импульс, пришедший поверх,
+    остаётся целым импульсом.
+    """
+    text = HOLD.format(weight=0.25).replace(
+        "record MN.soma.v",
+        "stim extra -> MN.soma : spikes weight=1nS times=\"150\"\nrecord MN.soma.v",
+    )
+    _, result = sensed([(0.0, 1.0)], text)
+    trace = result.traces["MN.soma:g_exc"]
+    peak = max(trace[int(round(150.0 / 0.1)) : int(round(160.0 / 0.1))])
+    # Удержание стоит ровно на 0.25, а импульс виден с первым своим спадом --
+    # как всякий импульс в этом движке: пик записывается после шага спада, и
+    # потому 1 нСм веса даёт 1·exp(−dt/tau) в трассе. Разница между «держат» и
+    # «ударили» тут и видна: уровень не спадает, удар спадает сразу.
+    kept = math.exp(-0.1 / 2.0)
+    assert peak == pytest.approx(0.25 + kept, abs=1e-6), "импульс лёг поверх уровня"
+    assert trace[-1] == pytest.approx(0.25, abs=1e-9), "и уровень остался своим"
+
+
+def test_the_stream_kind_is_untouched():
+    """Род `rate` обязан считать ровно то же, что считал до второго рода."""
+    _, result = sensed([(0.0, 1.0)])
+    assert len(result.spikes["MN"]) == 28
+
+
+def test_the_loop_through_the_world_runs_on_a_held_input():
+    """Петля #574 на тоническом сенсоре заводится и держится.
+
+    Здесь воспроизведено то, что делает браузер: кадрами по 8 мс смотрит на
+    мотор и держит кнопку, пока он ненулевой. Толчок -- три импульса драйва,
+    после них сеть себя поддерживает сама: разряд -> мотор -> кнопка ->
+    удержание -> разряд.
+
+    Числа этого замера: петля подхватывает через 4.7 модельных мс после
+    первого разряда (задержка связи 1 мс плюс кадр опроса), и дальше клетка
+    разряжается до конца прогона. Проверяется не само 4.7 -- оно зависит от
+    кадра, -- а то, что задержка не больше кадра с задержкой связи и что
+    петля живёт после конца толчка.
+    """
+    text = HOLD.format(weight=0.35).replace(
+        "record MN.soma.v",
+        'motor out : rate { from = MN.soma, window = 50ms }\n'
+        'stim kick -> MN.soma : spikes weight=3nS times="50 52 54"\n'
+        "record MN.soma.v",
+    )
+    built = model(text)
+    simulator = Simulator(built)
+
+    frame = int(round(8.0 / simulator.dt))
+    held = 0.0
+    caught: float | None = None
+    while simulator.step < simulator.total_steps:
+        simulator.advance(frame)
+        value = 1.0 if simulator.motors()["out"] > 0.0 else 0.0
+        if value != held:
+            now = simulator.step * simulator.dt
+            simulator.sense_at(now, "touch", value)
+            if value == 1.0 and caught is None:
+                caught = now
+            held = value
+
+    spikes = simulator.result.spikes["MN"]
+    first = spikes[0]
+    assert caught is not None, "петля обязана подхватить разряд"
+    assert caught - first <= 8.0 + 1.0, "дольше кадра с задержкой связи"
+    # Толчок кончился на 54 мс; всё, что после, -- работа самой петли.
+    # Прогон идёт 300 мс, и последний разряд стоит от его конца не дальше, чем
+    # петля вообще разряжает клетку (около 18 мс).
+    assert max(spikes) > 250.0, "петля обязана держать сеть до конца прогона"
+    assert len(spikes) > 10
+
+
+def test_the_example_holds_its_numbers():
+    """Числа шапки `examples/sensor_hold.vnl` сверяются прогоном (#501).
+
+    Прогон -- по той же записи входа, при которой числа сняты: без поданной
+    величины сенсор молчит, и сверять было бы нечего.
+    """
+    text = (EXAMPLES / "sensor_hold.vnl").read_text(encoding="utf-8")
+    built, diagnostics = load(text, source="examples/sensor_hold.vnl", strict=True)
+    assert not [d for d in diagnostics if d.severity == "error"]
+    result = simulate(
+        built,
+        sense=[
+            SenseEvent(time=100.0, sensor="touch", value=1.0),
+            SenseEvent(time=200.0, sensor="touch", value=0.0),
+        ],
+    )
+    assert not failures(check_model(built, result))
+
+
 def test_a_motor_counts_the_window_and_only_the_window():
     motor = ir.Motor(id="out", source=ir.Site("MN", "soma", 0.5), window=50.0)
     spikes = [10.0, 120.0, 140.0, 150.0]
@@ -313,6 +569,29 @@ def test_a_sandbox_carries_the_border_into_the_network():
     assert built.contacts == [], "связь от сенсора -- вход, а не контакт"
     assert built.sensors["key"].targets[0].weight == 2.0
     assert built.motors["out"].source.instance == "MN"
+
+
+def test_a_sandbox_sensor_can_be_held_and_switched_back():
+    """Род выбирается и в песочнице, и смена рода не теряет набранного.
+
+    Число `to` остаётся лежать на сенсоре и при роде `hold`, который его не
+    читает, -- ровно как числа неиспользуемого рода лежат у стимула: заглянул
+    в соседний род и вернулся -- своё на месте.
+    """
+    project = sandbox_with_border()
+    sensor = project.set_sensor("key", kind="hold")
+    assert sensor.kind == "hold"
+    assert sensor.to == 100.0, "число прежнего рода не выброшено"
+
+    built = compose(project.sandbox).model
+    assert built.sensors["key"].kind == "hold"
+
+    result = simulate(
+        built, sense=[SenseEvent(time=0.0, sensor="key", value=1.0)]
+    )
+    assert result.spikes["MN"], "весом 2 нСм удержание разряжает клетку с запасом"
+
+    assert project.set_sensor("key", kind="rate").kind == "rate"
 
 
 def test_a_sandbox_with_a_sensor_is_not_scolded_for_having_no_drive():

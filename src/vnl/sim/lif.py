@@ -263,6 +263,8 @@ class Snapshot:
     synapses: tuple[tuple, ...]
     #: Шаг доставки -> номера синапсов, чей выброс к этому шагу придёт.
     pending: dict[int, tuple[int, ...]]
+    #: Шаг -> (номер синапса, уровень) для удерживаемых входов в пути.
+    holding: dict[int, tuple[tuple[int, float], ...]]
     modulator_level: dict[str, float]
     #: Состояние генератора: без него повтор разойдётся с исходным прогоном.
     rng: tuple
@@ -494,6 +496,11 @@ class Simulator:
         self.sensor_seen: dict[str, float] = {s: 0.0 for s in model.sensors}
 
         self.pending: dict[int, list[_Synapse]] = {}
+        #: Шаг -> какие удерживаемые входы к нему доедут и на каком уровне.
+        #: Отдельно от `pending` нарочно: там выбросы, у которых сила одна и
+        #: считается при доставке, здесь -- уровень, который у каждого свой и
+        #: едет вместе с ним (#579).
+        self.holding: dict[int, list[tuple[_Synapse, float]]] = {}
         self.modulator_level: dict[str, float] = {m: 0.0 for m in model.modulators}
 
         # Общий порядок синапсов. Очередь задержанных передач ссылается на
@@ -655,6 +662,8 @@ class Simulator:
                 self.sensor_value[event.sensor] = event.value
             self.sensed += 1
 
+        self._hold(self.step)
+
         for sensor in self.model.sensors.values():
             value = self.sensor_value[sensor.id]
             count, phase = protocols.sensor_events(
@@ -669,6 +678,49 @@ class Simulator:
             for _ in range(count):
                 for synapse in self.sensor_synapses[sensor.id]:
                     self._schedule(synapse)
+            share = protocols.sensor_hold(sensor, value)
+            for synapse in self.sensor_synapses[sensor.id]:
+                # Уровень едет по той же линии задержки, по которой едет
+                # импульс: провести величину мгновенно значило бы сказать, что
+                # у двери, в отличие от всех прочих входов, расстояния нет.
+                step = self.step + max(1, int(round(synapse.delay / self.dt)))
+                self.holding.setdefault(step, []).append(
+                    (synapse, share * synapse.weight)
+                )
+
+    def _hold(self, step: int) -> None:
+        """Подлить удерживаемым входам столько, сколько с них утекло за шаг.
+
+        Род `hold` держит проводимость, а всё в `cell.conductance` спадает по
+        постоянной рецептора. Вместо второго места, где живёт проводимость
+        (неспадающего слагаемого, которое пришлось бы учесть и в шунте, и в
+        воротах NMDA, и в проверке устойчивости), удержание выражено
+        подливанием: каждый шаг добавляется ровно утёкшее, и сумма
+        останавливается на заданном уровне.
+
+        Добавка `g·(1 − d)/d`, где `d = exp(−dt/tau)`, -- это не подгонка, а
+        решение `y = (y + a)·d` относительно `a`. Подливается до спада, там
+        же, где кладут свою долю импульсы, поэтому в точке, где считается ток,
+        удерживаемый вход стоит ровно на `g`. Сверить это с числом обязана
+        проверка: стационарный потенциал при такой проводимости известен
+        аналитически.
+
+        Чужие доли отсюда не видны вовсе: добавка не зависит от того, что
+        лежит в канале, поэтому другой вход в тот же рецептор просто
+        складывается сверху -- как и складывался бы.
+        """
+        for synapse, level in self.holding.pop(step, ()):
+            if level <= 0.0:
+                continue
+            tau = ir.RECEPTORS[synapse.key[0]].tau_decay
+            if tau <= 0.0:
+                continue
+            kept = math.exp(-self.dt / tau)
+            cell = self.cells[synapse.target]
+            key = synapse.key
+            cell.conductance[key] = cell.conductance.get(key, 0.0) + level * (
+                1.0 - kept
+            ) / kept
 
     def held(self, now: float | None = None) -> dict[str, float]:
         """Какая величина держится на этот момент -- по записи, а не по шагу.
@@ -1116,6 +1168,11 @@ class Simulator:
                 for step, items in self.pending.items()
                 if items
             },
+            holding={
+                step: tuple((index[id(synapse)], level) for synapse, level in items)
+                for step, items in self.holding.items()
+                if items
+            },
             modulator_level=dict(self.modulator_level),
             rng=self.rng.getstate(),
             sensor_value=dict(self.sensor_value),
@@ -1158,6 +1215,12 @@ class Simulator:
         self.pending = {
             step: [self.all_synapses[number] for number in items]
             for step, items in state.pending.items()
+        }
+        # Удерживаемое в пути -- такое же состояние, как выброс в пути: откат
+        # обязан вернуть и уровень, который к этому шагу ещё не доехал.
+        self.holding = {
+            step: [(self.all_synapses[number], level) for number, level in items]
+            for step, items in state.holding.items()
         }
         self.modulator_level = dict(state.modulator_level)
         self.rng.setstate(state.rng)
