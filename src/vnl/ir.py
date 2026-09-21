@@ -615,6 +615,57 @@ class Instance:
     tags: tuple[str, ...] = ()
 
 
+def head_of(address: str) -> str:
+    """Имя в начале адреса: `eye.r[3,7]`, `eye[3,7]`, `R[3,7].soma` -> `eye`, `R`.
+
+    Одно место на весь проект, потому что имя из адреса достают всюду, где
+    адрес вообще встречается: резолвер ищет по нему сенсор, подача -- дверь,
+    отчёт -- слой. Делить по точке (как делили, пока индексов не было) уже
+    нельзя: `eye[3,7]` -- законный адрес без единой точки (#580).
+    """
+    cut = len(address)
+    for mark in (".", "["):
+        place = address.find(mark)
+        if place != -1:
+            cut = min(cut, place)
+    return address[:cut]
+
+
+@dataclass
+class Population:
+    """Слой одинаковых клеток, заведённый одной строкой: `neuron R[24x24]`.
+
+    Сами клетки -- обычные экземпляры (`R[0,0]`, `R[0,1]`, ...), и всё, что
+    знает про клетки, продолжает работать, ничего не зная про слои: прогон,
+    раскладка, отчёт, экспорт видят 576 нейронов, как видели бы 576 строк.
+    Здесь лежит только то, чего из плоского списка не восстановить, -- что они
+    заведены вместе и какой у слоя размер.
+
+    Это и есть та вещь, ради которой слой нужен языку: адрес `R.soma` значит
+    «каждый к своему», а без записи о размере отличить слой от нейрона по
+    имени `R` было бы нечем.
+    """
+
+    id: str
+    rows: int
+    cols: int
+    cell_type: str
+
+    @property
+    def size(self) -> int:
+        return int(self.rows) * int(self.cols)
+
+    def member(self, row: int, col: int) -> str:
+        return f"{self.id}[{row},{col}]"
+
+    def members(self) -> list[str]:
+        return [
+            self.member(row, col)
+            for row in range(int(self.rows))
+            for col in range(int(self.cols))
+        ]
+
+
 @dataclass(frozen=True)
 class Site:
     """Разрешённый адрес точки на клетке."""
@@ -802,6 +853,13 @@ class SensorLink:
     receptor: str = "ampa"
     weight: float = 1.0          # нСм
     delay: float = 1.0           # мс
+    #: Какой элемент поля вливается в эту точку (#580). У одиночной двери он
+    #: всегда нулевой -- величина у неё одна. У поля 24x24 связей столько же,
+    #: сколько элементов: «каждый к своему» разворачивается здесь, в списке
+    #: связей, а не живёт правилом внутри симулятора. Цена -- длинный список;
+    #: выгода -- симулятор не знает про сетки вовсе, он льёт величину номер
+    #: `index` в точку `target`, как лил единственную.
+    index: int = 0
     #: Реверсал подключения, мВ; `None` -- из реестра. Поля те же, что у
     #: `Contact`, и это правило здесь общее: для человека стрелка одна.
     reversal_override: float | None = None
@@ -840,7 +898,135 @@ class Sensor:
     kind: str = "rate"           # см. protocols.SENSOR_KINDS
     #: Гц при величине 1 (род `rate`). Ноль величины -- ноль частоты.
     to: float = 100.0
+    #: Сетка поля: строк и столбцов (#580). `(1, 1)` -- одиночная дверь, та
+    #: самая, что была до полей: величина у неё одна, и писать сетку для неё
+    #: не надо. Поле -- это про то, сколько величин входит разом, а не про то,
+    #: во что они превращаются: род при этом остаётся прежним, и 576 элементов
+    #: поля -- это 576 обычных сенсоров одного рода с общим именем.
+    grid: tuple[int, int] = (1, 1)
+    #: Каналы на элемент сетки: `("r", "g", "b")` или пусто -- один канал без
+    #: имени. Порядок в кадре чередующийся (r,g,b, r,g,b, ...), как отдают
+    #: декодеры картинок: иначе всякий источник переписывал бы кадр ради
+    #: нашего порядка.
+    channels: tuple[str, ...] = ()
     targets: list[SensorLink] = field(default_factory=list)
+
+    @property
+    def rows(self) -> int:
+        return int(self.grid[0])
+
+    @property
+    def cols(self) -> int:
+        return int(self.grid[1])
+
+    @property
+    def depth(self) -> int:
+        """Сколько величин на один элемент сетки: каналов или одна."""
+        return len(self.channels) or 1
+
+    @property
+    def size(self) -> int:
+        """Сколько величин входит через эту дверь разом."""
+        return self.rows * self.cols * self.depth
+
+    @property
+    def is_field(self) -> bool:
+        """Поле это или одиночная дверь.
+
+        По размеру, а не по сетке: `1x1` с тремя каналами -- тоже поле, просто
+        из одного элемента, и адресуется оно как поле (`eye.r`), а не как
+        одиночная дверь.
+        """
+        return self.size > 1
+
+    def index_of(self, row: int, col: int, channel: int = 0) -> int:
+        """Номер величины в кадре. Чередование каналов -- см. `channels`."""
+        return (row * self.cols + col) * self.depth + channel
+
+    def place_of(self, index: int) -> tuple[int, int, int]:
+        """Обратно: номер величины -> строка, столбец, канал."""
+        cell, channel = divmod(int(index), self.depth)
+        row, col = divmod(cell, self.cols)
+        return row, col, channel
+
+    def select(self, address: str) -> list[tuple[int, int]]:
+        """Адрес -> величины, которые он называет: (номер пикселя, номер величины).
+
+        `eye` -- всё поле, `eye.r` -- канал целиком, `eye.r[3,7]` -- одна
+        величина. Номер пикселя идёт рядом с номером величины, потому что к
+        слою клеток поле подключается попиксельно: у цветного пикселя три
+        величины и одна клетка.
+
+        Разбор живёт здесь, а не в резолвере, потому что адрес поля пишут в
+        двух разных местах -- в тексте схемы (`eye.r -> R.soma`) и при подаче
+        величины (`--sensor eye.r[3,7]=1`), -- и разойтись этим двум разборам
+        нельзя: человек пишет одно и то же.
+
+        Непонятный адрес -- `ValueError` с объяснением: у резолвера он станет
+        диагностикой, у подачи -- отказом, и текст в обоих случаях один.
+        """
+        # Имя кончается там, где начинается канал или индекс: `eye.r[3,7]`,
+        # `eye[3,7]` и `eye.r` -- три законных написания одного адреса, и
+        # делить его по одной только точке значило бы не увидеть второе.
+        cut = len(address)
+        for mark in (".", "["):
+            place = address.find(mark)
+            if place != -1:
+                cut = min(cut, place)
+        rest = address[cut:]
+        if rest.startswith("."):
+            channel_name, _, index_text = rest[1:].partition("[")
+        else:
+            channel_name, _, index_text = "", "[", rest[1:]
+        index_text = index_text.rstrip("]")
+        if not self.is_field and rest:
+            raise ValueError(
+                f"у сенсора нет участков: {address!r} -- подключается он целиком"
+            )
+        if channel_name and channel_name not in self.channels:
+            known = ", ".join(self.channels) or "их нет: поле в одну яркость"
+            raise ValueError(
+                f"у поля {self.id} нет канала {channel_name!r} (есть: {known})"
+            )
+        channels = (
+            [self.channels.index(channel_name)]
+            if channel_name
+            else list(range(self.depth))
+        )
+        if index_text:
+            parts = index_text.split(",")
+            if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+                raise ValueError(
+                    f"адрес {address!r} непонятен: элемент поля пишется "
+                    f"{self.id}[строка,столбец]"
+                )
+            row, col = (int(p) for p in parts)
+            if not (0 <= row < self.rows and 0 <= col < self.cols):
+                raise ValueError(
+                    f"элемент [{row},{col}] вне поля {self.rows}x{self.cols}"
+                )
+            places = [(row, col)]
+        else:
+            places = [
+                (row, col) for row in range(self.rows) for col in range(self.cols)
+            ]
+        return [
+            (row * self.cols + col, self.index_of(row, col, channel))
+            for row, col in places
+            for channel in channels
+        ]
+
+    def address_of(self, index: int) -> str:
+        """Как эта величина пишется в тексте схемы: `eye.r[3,7]`.
+
+        Нужен диагностике и отчёту: сказать «элемент 431» значило бы заставить
+        человека делить в уме на число каналов.
+        """
+        if not self.is_field:
+            return self.id
+        row, col, channel = self.place_of(index)
+        name = f"{self.id}.{self.channels[channel]}" if self.channels else self.id
+        return f"{name}[{row},{col}]"
 
 
 @dataclass
@@ -953,6 +1139,9 @@ class Model:
     name: str = "model"
     cell_types: dict[str, CellType] = field(default_factory=dict)
     instances: dict[str, Instance] = field(default_factory=dict)
+    #: Слои клеток (#580). Экземпляры слоя лежат в `instances` наравне со
+    #: всеми: здесь только то, что они заведены вместе, -- см. `Population`.
+    populations: dict[str, Population] = field(default_factory=dict)
     contacts: list[Contact] = field(default_factory=list)
     modulators: dict[str, Modulator] = field(default_factory=dict)
     stimuli: list[Stimulus] = field(default_factory=list)
@@ -996,6 +1185,7 @@ class Model:
         return {
             "cell_types": len(self.cell_types),
             "instances": len(self.instances),
+            "populations": len(self.populations),
             "contacts": len(self.contacts),
             "modulators": len(self.modulators),
             "stimuli": len(self.stimuli),

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -103,7 +104,24 @@ class SenseEvent:
 
     time: float
     sensor: str
-    value: float
+    #: Величина двери -- одна или сразу несколько (#580). Кадр поля приходит
+    #: одним событием, а не 1728 отдельными: кадр и есть то, что случилось
+    #: снаружи в этот момент, и рассыпать его на величины значило бы сделать
+    #: запись входа в тысячу раз длиннее ради того же самого.
+    value: float | tuple[float, ...] = 0.0
+    #: С какой величины поля кладётся `value`. У одиночной двери всегда 0.
+    index: int = 0
+
+    @property
+    def values(self) -> tuple[float, ...]:
+        """Величины события кортежем -- одна или кадр."""
+        if isinstance(self.value, (int, float)):
+            return (float(self.value),)
+        return tuple(float(x) for x in self.value)
+
+    @property
+    def is_frame(self) -> bool:
+        return not isinstance(self.value, (int, float))
 
 
 @dataclass
@@ -273,9 +291,11 @@ class Snapshot:
     #: поток входа -- часть состояния прогона, а не внешняя переменная. Без
     #: курсора откат на 50 мс оставил бы сеть с величиной, поданной на 100-й,
     #: -- то есть показал бы прошлое, знающее своё будущее.
-    sensor_value: dict[str, float]
-    sensor_phase: dict[str, float]
-    sensor_seen: dict[str, float]
+    sensor_value: dict[str, tuple[float, ...]]
+    sensor_phase: dict[str, tuple[float, ...]]
+    sensor_seen: dict[str, tuple[float, ...]]
+    #: Какие величины поля сейчас живы -- см. `Simulator.sensor_live`.
+    sensor_live: dict[str, tuple[int, ...]]
     sensed: int
     #: Сколько отсчётов записано к этому моменту.
     samples: int
@@ -455,9 +475,12 @@ class Simulator:
         # нет, амплитуда своя, -- потому что и вещь одна: событие приходит
         # снаружи и открывает проводимость. Разница только в том, откуда
         # берутся моменты.
-        self.sensor_synapses: dict[str, list[_Synapse]] = {}
+        #: Сенсор -> величина поля -> её синапсы. У одиночной двери список из
+        #: одного места, и он же -- прежний список связей: величина у неё одна
+        #: (#580).
+        self.sensor_synapses: dict[str, list[list[_Synapse]]] = {}
         for sensor in model.sensors.values():
-            links: list[_Synapse] = []
+            links: list[list[_Synapse]] = [[] for _ in range(sensor.size)]
             for number, link in enumerate(sensor.targets):
                 fake = ir.Contact(
                     id=f"sensor:{sensor.id}:{number}",
@@ -468,7 +491,7 @@ class Simulator:
                     delay=max(link.delay, self.dt),
                     reversal_override=link.reversal_override,
                 )
-                links.append(
+                links[min(link.index, sensor.size - 1)].append(
                     _Synapse(
                         contact=fake,
                         target=link.target.instance,
@@ -488,12 +511,30 @@ class Simulator:
         self.sensed = 0
         #: Удерживаемая величина каждого сенсора. Ноль -- «ничего не подавали»:
         #: без привязки сенсор молчит, а не выдумывает себе вход.
-        self.sensor_value: dict[str, float] = {s: 0.0 for s in model.sensors}
+        self.sensor_value: dict[str, list[float]] = {
+            s.id: [0.0] * s.size for s in model.sensors.values()
+        }
         #: Фаза рода: доля периода, накопленная с прошлого импульса.
-        self.sensor_phase: dict[str, float] = {s: 0.0 for s in model.sensors}
+        self.sensor_phase: dict[str, list[float]] = {
+            s.id: [0.0] * s.size for s in model.sensors.values()
+        }
         #: Величина на прошлом шаге -- её спрашивает род, отвечающий на
         #: изменение («нажали», «отпустили»), а не на уровень.
-        self.sensor_seen: dict[str, float] = {s: 0.0 for s in model.sensors}
+        self.sensor_seen: dict[str, list[float]] = {
+            s.id: [0.0] * s.size for s in model.sensors.values()
+        }
+        #: Живые величины поля: те, у которых есть что считать, -- ненулевая
+        #: величина или недоигранная фаза (#580).
+        #:
+        #: Без этого списка шаг прогона стоил бы 1728 вызовов рода на каждую
+        #: дверь и на каждый шаг -- при том, что в кадре буквы ненулевых
+        #: величин полторы сотни, а в тёмном поле нет вовсе. Это не
+        #: оптимизация «на всякий случай»: без неё поле 24x24 считается
+        #: минутами вместо секунд, то есть не считается.
+        #:
+        #: Ноль стоит в списке ровно один шаг -- тот, на котором величину
+        #: отпустили: роду надо увидеть переход, и уже он гасит фазу.
+        self.sensor_live: dict[str, set[int]] = {s: set() for s in model.sensors}
 
         self.pending: dict[int, list[_Synapse]] = {}
         #: Шаг -> какие удерживаемые входы к нему доедут и на каком уровне.
@@ -512,7 +553,8 @@ class Simulator:
             *(
                 synapse
                 for links in self.sensor_synapses.values()
-                for synapse in links
+                for place in links
+                for synapse in place
             ),
         ]
         self._synapse_index = {
@@ -606,7 +648,9 @@ class Simulator:
 
     # --- граница с миром --------------------------------------------------
 
-    def sense_at(self, time: float, sensor_id: str, value: float) -> SenseEvent:
+    def sense_at(
+        self, time: float, sensor_id: str, value: float
+    ) -> SenseEvent:
         """Записать величину, поданную снаружи, на момент модельного времени.
 
         Запись, а не присваивание: величина ложится в поток входа, и прогон
@@ -614,6 +658,10 @@ class Simulator:
         драйв по состоянию генератора. Живого «сейчас» у симулятора нет вовсе:
         то, что для человека «нажал сейчас», для прогона -- «на 137-й
         миллисекунде».
+
+        Адресом может быть и величина поля (`eye.r[3,7]`): поле -- это те же
+        сенсоры под общим именем, и подать одному из них величину так же
+        законно, как нажать одну кнопку из двух.
 
         В прошлое подать нельзя: оно уже посчитано, и вписать туда нажатие
         значило бы сделать вид, что клетка отвечала на то, чего не было.
@@ -627,20 +675,88 @@ class Simulator:
         отпусканием, записанным в прошлый раз на 200-й, -- и объяснить это тому,
         кто держит кнопку, было бы нечем.
         """
-        if sensor_id not in self.model.sensors:
-            known = ", ".join(self.model.sensors) or "их нет вовсе"
+        sensor, index = self._locate(sensor_id)
+        if sensor.is_field and ir.head_of(sensor_id) == sensor_id:
+            # Одно число на имя поля -- это почти наверняка не то, что имели в
+            # виду: оно легло бы в первую величину, то есть зажгло бы один
+            # пиксель из 576 и промолчало про остальные.
             raise protocols.SenseError(
-                f"в схеме нет сенсора {sensor_id!r} (есть: {known})"
+                f"{sensor.id} -- это поле из {sensor.size} величин: подавайте "
+                f"кадром или назовите величину ({sensor.address_of(0)})"
             )
         number = protocols.check_value(value)
+        return self._write_sense(time, sensor.id, number, index)
+
+    def sense_frame(
+        self, time: float, sensor_id: str, frame: Sequence[float]
+    ) -> SenseEvent:
+        """Положить в поток входа целый кадр поля (#580).
+
+        Кадр приходит одним событием -- см. `SenseEvent.value`. Проверяется он
+        целиком и заранее: полкадра, легшего в запись перед отказом на 700-й
+        величине, дали бы прогон, который не повторить ничем.
+
+        Кадр не по размеру -- отказ, а не дополнение нулями: источник, который
+        шлёт 1727 величин вместо 1728, ошибается, а не «просвечивает поле
+        частично», и молча дорисованный чёрный угол человек искал бы в схеме.
+        """
+        sensor, index = self._locate(sensor_id)
+        values = tuple(protocols.check_value(x) for x in frame)
+        room = sensor.size - index
+        if len(values) != room:
+            where = (
+                f"поле {sensor.id}"
+                if index == 0
+                else f"поле {sensor.id} с величины {sensor.address_of(index)}"
+            )
+            raise protocols.SenseError(
+                f"{where} ждёт {room} величин, а в кадре их {len(values)}"
+            )
+        return self._write_sense(time, sensor.id, values, index)
+
+    def _locate(self, sensor_id: str) -> tuple[ir.Sensor, int]:
+        """Адрес подачи -> сенсор и номер величины, с которой она кладётся."""
+        head = ir.head_of(sensor_id)
+        sensor = self.model.sensors.get(head)
+        if sensor is None:
+            known = ", ".join(self.model.sensors) or "их нет вовсе"
+            raise protocols.SenseError(
+                f"в схеме нет сенсора {head!r} (есть: {known})"
+            )
+        if head == sensor_id:
+            return sensor, 0
+        try:
+            places = sensor.select(sensor_id)
+        except ValueError as exc:
+            raise protocols.SenseError(str(exc)) from exc
+        if len(places) != 1:
+            raise protocols.SenseError(
+                f"адрес {sensor_id!r} называет {len(places)} величин: "
+                "подавать надо кадром или по одной величине"
+            )
+        return sensor, places[0][1]
+
+    def _write_sense(
+        self,
+        time: float,
+        sensor_id: str,
+        value: float | tuple[float, ...],
+        index: int,
+    ) -> SenseEvent:
+        """Положить событие в запись, стерев записанное после него будущее."""
         moment = max(float(time), self.step * self.dt)
         kept = [
             event
             for event in self.sense_log
             if event.time < moment
-            or (event.time == moment and event.sensor != sensor_id)
+            or (
+                event.time == moment
+                and not (event.sensor == sensor_id and event.index == index)
+            )
         ]
-        event = SenseEvent(time=moment, sensor=sensor_id, value=number)
+        event = SenseEvent(
+            time=moment, sensor=sensor_id, value=value, index=index
+        )
         kept.append(event)
         self.sense_log[:] = kept
         self.sensed = min(self.sensed, len(kept))
@@ -654,39 +770,61 @@ class Simulator:
         момента, и не видит поданных позже. Перебирать весь список на каждом
         шаге было бы и медленнее, и неверно -- курсор и есть то, что делает
         вход частью состояния, а не внешней переменной.
+
+        Считаются не все величины поля, а живые (`sensor_live`): тёмный пиксель
+        не даёт ни импульса, и держать ему нечего, а звать для него род значило
+        бы платить за каждый шаг прогона всей сеткой сразу.
         """
         log = self.sense_log
         while self.sensed < len(log) and log[self.sensed].time <= self.time:
             event = log[self.sensed]
-            if event.sensor in self.sensor_value:
-                self.sensor_value[event.sensor] = event.value
+            values = self.sensor_value.get(event.sensor)
+            if values is not None:
+                live = self.sensor_live[event.sensor]
+                for offset, number in enumerate(event.values):
+                    index = event.index + offset
+                    if index >= len(values):
+                        break
+                    values[index] = number
+                    # Ноль тоже живой -- ровно один шаг: роду надо увидеть, что
+                    # величину отпустили, а гасит себя он сам.
+                    live.add(index)
             self.sensed += 1
 
         self._hold(self.step)
 
         for sensor in self.model.sensors.values():
-            value = self.sensor_value[sensor.id]
-            count, phase = protocols.sensor_events(
-                sensor,
-                value,
-                self.sensor_seen[sensor.id],
-                self.sensor_phase[sensor.id],
-                self.dt,
-            )
-            self.sensor_phase[sensor.id] = phase
-            self.sensor_seen[sensor.id] = value
-            for _ in range(count):
-                for synapse in self.sensor_synapses[sensor.id]:
-                    self._schedule(synapse)
-            share = protocols.sensor_hold(sensor, value)
-            for synapse in self.sensor_synapses[sensor.id]:
-                # Уровень едет по той же линии задержки, по которой едет
-                # импульс: провести величину мгновенно значило бы сказать, что
-                # у двери, в отличие от всех прочих входов, расстояния нет.
-                step = self.step + max(1, int(round(synapse.delay / self.dt)))
-                self.holding.setdefault(step, []).append(
-                    (synapse, share * synapse.weight)
+            values = self.sensor_value[sensor.id]
+            phases = self.sensor_phase[sensor.id]
+            seen = self.sensor_seen[sensor.id]
+            places = self.sensor_synapses[sensor.id]
+            live = self.sensor_live[sensor.id]
+            for index in sorted(live):
+                value = values[index]
+                count, phase = protocols.sensor_events(
+                    sensor, value, seen[index], phases[index], self.dt
                 )
+                phases[index] = phase
+                seen[index] = value
+                synapses = places[index]
+                for _ in range(count):
+                    for synapse in synapses:
+                        self._schedule(synapse)
+                share = protocols.sensor_hold(sensor, value)
+                if share:
+                    for synapse in synapses:
+                        # Уровень едет по той же линии задержки, по которой
+                        # едет импульс: провести величину мгновенно значило бы
+                        # сказать, что у двери, в отличие от всех прочих
+                        # входов, расстояния нет.
+                        step = self.step + max(
+                            1, int(round(synapse.delay / self.dt))
+                        )
+                        self.holding.setdefault(step, []).append(
+                            (synapse, share * synapse.weight)
+                        )
+                if value == 0.0 and phase == 0.0:
+                    live.discard(index)
 
     def _hold(self, step: int) -> None:
         """Подлить удерживаемым входам столько, сколько с них утекло за шаг.
@@ -722,7 +860,9 @@ class Simulator:
                 1.0 - kept
             ) / kept
 
-    def held(self, now: float | None = None) -> dict[str, float]:
+    def held(
+        self, now: float | None = None
+    ) -> dict[str, float | tuple[float, ...]]:
         """Какая величина держится на этот момент -- по записи, а не по шагу.
 
         Отличается от `sensor_value` на один шаг, и разница не придирка.
@@ -734,13 +874,31 @@ class Simulator:
         применяет прогон: последнее значение, поданное не позже момента.
         Поэтому после перемотки на 50 мс здесь честный ноль -- значения,
         поданного на 100-й, на 50-й ещё не было.
+
+        У одиночной двери величина -- число, у поля -- кадр целиком: кадр и
+        есть то, что на поле сейчас держится.
         """
         moment = self.step * self.dt if now is None else float(now)
-        values = {name: 0.0 for name in self.model.sensors}
+        frames = {
+            sensor.id: [0.0] * sensor.size
+            for sensor in self.model.sensors.values()
+        }
         for event in self.sense_log:
-            if event.time <= moment and event.sensor in values:
-                values[event.sensor] = event.value
-        return values
+            if event.time > moment or event.sensor not in frames:
+                continue
+            frame = frames[event.sensor]
+            for offset, number in enumerate(event.values):
+                index = event.index + offset
+                if index < len(frame):
+                    frame[index] = number
+        return {
+            sensor.id: (
+                tuple(frames[sensor.id])
+                if sensor.is_field
+                else frames[sensor.id][0]
+            )
+            for sensor in self.model.sensors.values()
+        }
 
     def motors(self) -> dict[str, float]:
         """Величины моторов на текущий момент -- по растру, а не по состоянию.
@@ -1175,9 +1333,12 @@ class Simulator:
             },
             modulator_level=dict(self.modulator_level),
             rng=self.rng.getstate(),
-            sensor_value=dict(self.sensor_value),
-            sensor_phase=dict(self.sensor_phase),
-            sensor_seen=dict(self.sensor_seen),
+            sensor_value={k: tuple(v) for k, v in self.sensor_value.items()},
+            sensor_phase={k: tuple(v) for k, v in self.sensor_phase.items()},
+            sensor_seen={k: tuple(v) for k, v in self.sensor_seen.items()},
+            sensor_live={
+                k: tuple(sorted(v)) for k, v in self.sensor_live.items()
+            },
             sensed=self.sensed,
             samples=len(self.result.times),
         )
@@ -1227,9 +1388,10 @@ class Simulator:
         # Поток входа не откатывается и не обрезается -- он запись, и по ней
         # продолжение переигрывается заново. Откатывается место в нём: курсор
         # и удерживаемые величины на тот момент.
-        self.sensor_value = dict(state.sensor_value)
-        self.sensor_phase = dict(state.sensor_phase)
-        self.sensor_seen = dict(state.sensor_seen)
+        self.sensor_value = {k: list(v) for k, v in state.sensor_value.items()}
+        self.sensor_phase = {k: list(v) for k, v in state.sensor_phase.items()}
+        self.sensor_seen = {k: list(v) for k, v in state.sensor_seen.items()}
+        self.sensor_live = {k: set(v) for k, v in state.sensor_live.items()}
         self.sensed = state.sensed
         self.result.truncate(state.samples)
         # Величина мотора считается по растру, а растр только что обрезан:

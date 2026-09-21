@@ -295,7 +295,13 @@ def _border_losses(model: ir.Model) -> list[str]:
     """
     out: list[str] = []
     for sensor in model.sensors.values():
-        targets = ", ".join(str(link.target) for link in sensor.targets) or "никуда"
+        # Перечисление сворачивается: у поля 24x24 целей 576, и список имён на
+        # три экрана прячет за собой остальные строки отчёта о потерях (#580).
+        places = [str(link.target) for link in sensor.targets]
+        if len(places) > 4:
+            targets = ", ".join(places[:4]) + f" и ещё {len(places) - 4}"
+        else:
+            targets = ", ".join(places) or "никуда"
         out.append(
             f"сенсор {sensor.id}: живой вход ({protocols.describe_sensor(sensor)}) "
             f"на L2 не переносится -- заранее известных моментов у него нет; "

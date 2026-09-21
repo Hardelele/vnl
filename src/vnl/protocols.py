@@ -1131,6 +1131,28 @@ MOTOR_KINDS: dict[str, MotorKind] = {
 #: симулятор понимает ровно их, и опечатка иначе дала бы молчащую границу
 #: вместо отказа.
 SENSOR_KIND_IDS: tuple[str, ...] = tuple(SENSOR_KINDS)
+
+#: Наборы каналов сенсорного поля (#580): написанное слово -> имена каналов.
+#:
+#: Реестром, а не разбором строки по буквам: `channels = rbg` иначе завёл бы
+#: поле с каналами «r», «b», «g» и молча перепутал бы зелёное с синим на всём
+#: прогоне. Набор -- предметное знание («цвет мы описываем тремя числами»), и
+#: место ему там же, где роды.
+#:
+#: `gray` -- пустой набор: один канал без имени, и адресуется он без него
+#: (`eye[3,7]`). Назови мы его «v», пришлось бы писать `eye.v[3,7]` там, где
+#: выбирать не из чего.
+SENSOR_CHANNELS: dict[str, tuple[str, ...]] = {
+    "gray": (),
+    "rgb": ("r", "g", "b"),
+}
+
+#: Что такое канал поля -- для подсказки в интерфейсе и для отчёта.
+CHANNEL_NAMES: dict[str, str] = {
+    "r": "красный",
+    "g": "зелёный",
+    "b": "синий",
+}
 MOTOR_KIND_IDS: tuple[str, ...] = tuple(MOTOR_KINDS)
 
 #: Что такое сенсор и мотор вообще -- объяснение самого поля, а не значений
@@ -1211,9 +1233,24 @@ def motor_unit(motor: Any) -> str:
 
 
 def describe_sensor(sensor: Any) -> str:
-    """Сенсор словами: «частота, 100 Гц при 1»."""
+    """Сенсор словами: «частота, 100 Гц при 1»; у поля -- ещё и сетка."""
     kind = SENSOR_KINDS.get(sensor.kind)
-    return kind.story(sensor) if kind else str(sensor.kind)
+    story = kind.story(sensor) if kind else str(sensor.kind)
+    if not getattr(sensor, "is_field", False):
+        return story
+    return f"{describe_field(sensor)}; {story}"
+
+
+def describe_field(sensor: Any) -> str:
+    """Поле словами: «поле 24x24, каналы r, g, b -- 1728 величин» (#580)."""
+    rows, cols = int(getattr(sensor, "rows", 1)), int(getattr(sensor, "cols", 1))
+    channels = tuple(getattr(sensor, "channels", ()))
+    what = (
+        "яркость"
+        if not channels
+        else "каналы " + ", ".join(CHANNEL_NAMES.get(c, c) for c in channels)
+    )
+    return f"поле {rows}x{cols}, {what} -- {int(sensor.size)} величин"
 
 
 def describe_motor(motor: Any) -> str:
@@ -1234,6 +1271,19 @@ def sensor_problems(sensor: Any) -> list[str]:
         return [
             f"частота при 1 равна {float(sensor.to):g} Гц: сенсор не дал бы ни "
             "одного импульса ни при какой величине"
+        ]
+    # Через `getattr`, а не полем: этот же разбор зовут для сенсора песочницы
+    # (`patterns.SandboxSensor`), который полей пока не знает, -- и обязан
+    # отвечать на него \«одна величина\», а не падать. Когда поле доедет до
+    # холста, здесь не изменится ничего (#580).
+    rows, cols = int(getattr(sensor, "rows", 1)), int(getattr(sensor, "cols", 1))
+    if rows < 1 or cols < 1:
+        return [f"сетка {rows}x{cols} пуста: входить через такую дверь нечему"]
+    unknown = [c for c in getattr(sensor, "channels", ()) if c not in CHANNEL_NAMES]
+    if unknown:
+        return [
+            f"неизвестные каналы: {', '.join(unknown)}; "
+            f"есть наборы {', '.join(SENSOR_CHANNELS)}"
         ]
     return []
 

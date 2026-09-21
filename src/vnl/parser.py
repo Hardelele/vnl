@@ -33,8 +33,13 @@ _TOKEN = re.compile(
   | (?P<comma>,)
   | (?P<semicolon>;)
   | (?P<string>"[^"]*")
+  | (?P<grid>\d+x\d+)
   | (?P<quantity>[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?[a-zA-Zµ]*)
-  | (?P<name>[A-Za-z_][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*(?:\[\d+\])?(?:@[0-9.]+)?)
+  | (?P<name>
+        [A-Za-z_][A-Za-z_0-9]*(?:\[\d+(?:[x,]\d+)*\])?
+        (?:\.[A-Za-z_][A-Za-z_0-9]*(?:\[\d+(?:[x,]\d+)*\])?)*
+        (?:@[0-9.]+)?
+    )
     """,
     re.VERBOSE,
 )
@@ -126,6 +131,30 @@ def _optional_number(params: dict[str, Any], key: str) -> float | None:
     return None if key not in params else float(params[key])
 
 
+_GRID = re.compile(r"^(?P<base>[A-Za-z_][A-Za-z_0-9]*)\[(?P<rows>\d+)x(?P<cols>\d+)\]$")
+
+
+def _split_grid(name: str) -> tuple[str, tuple[int, int] | None]:
+    """`R[24x24]` -> `("R", (24, 24))`; `MN` -> `("MN", None)`.
+
+    Одно место, где имя со сеткой разбирается на имя и размер: сетка пишется и
+    у слоя клеток, и у поля сенсоров, и расходиться этим разборам нельзя.
+    """
+    match = _GRID.match(name)
+    if match is None:
+        return name, None
+    return match.group("base"), (int(match.group("rows")), int(match.group("cols")))
+
+
+def parse_grid(text: str) -> tuple[int, int] | None:
+    """`24x24` -> `(24, 24)`; что-то другое -> `None`."""
+    piece = str(text).strip().lower()
+    head, sign, tail = piece.partition("x")
+    if not sign or not head.isdigit() or not tail.isdigit():
+        return None
+    return int(head), int(tail)
+
+
 def _parse_block(cur: _Cursor) -> dict[str, Any]:
     """{ k = v, k = v, k = name { ... } } -> dict."""
     cur.take("lbrace")
@@ -141,7 +170,7 @@ def _parse_block(cur: _Cursor) -> dict[str, Any]:
         if cur.now.kind == "lbrace":
             out[key] = _parse_block(cur)
         else:
-            token = cur.take("name", "quantity", "string")
+            token = cur.take("name", "quantity", "string", "grid")
             if cur.now.kind == "lbrace":  # правило с параметрами: stdp { ... }
                 out[key] = {"_kind": token.text, **_parse_block(cur)}
             else:
@@ -157,7 +186,7 @@ def _parse_flat_params(cur: _Cursor) -> dict[str, Any]:
         if not cur.accept("eq"):
             cur.i = save
             break
-        token = cur.take("name", "quantity", "string")
+        token = cur.take("name", "quantity", "string", "grid")
         out[key] = _coerce(token.text)
         cur.accept("comma")
     return out
@@ -412,6 +441,7 @@ class ParsedModel:
     source: str | None
     cell_types: dict[str, ir.CellType]
     instances: dict[str, ir.Instance]
+    populations: dict[str, ir.Population]
     modulators: dict[str, ir.Modulator]
     contacts: list[PendingContact]
     stimuli: list[PendingStimulus]
@@ -430,6 +460,7 @@ class Parser:
         self.morphologies: dict[str, Morphology] = {}
         self.cell_types: dict[str, ir.CellType] = {}
         self.instances: dict[str, ir.Instance] = {}
+        self.populations: dict[str, ir.Population] = {}
         self.modulators: dict[str, ir.Modulator] = {}
         self.contacts: list[PendingContact] = []
         self.stimuli: list[PendingStimulus] = []
@@ -474,6 +505,7 @@ class Parser:
             source=self.source,
             cell_types=self.cell_types,
             instances=self.instances,
+            populations=self.populations,
             modulators=self.modulators,
             contacts=self.contacts,
             stimuli=self.stimuli,
@@ -529,6 +561,18 @@ class Parser:
         )
 
     def _stmt_neuron(self) -> None:
+        """`neuron MN : motoneuron` -- клетка; `neuron R[24x24] : relay` -- слой.
+
+        Слой разворачивается здесь же, в обычные экземпляры `R[0,0]`, `R[0,1]`,
+        ...: дальше по всему пути -- резолвер, прогон, раскладка, экспорт --
+        стоят те же нейроны, что стояли бы, напиши их человек построчно. В
+        модели остаётся ещё и запись о слое (`ir.Population`), потому что из
+        плоского списка нельзя узнать размер сетки, а адрес `R.soma` значит
+        «каждый к своему» именно по ней.
+
+        Размер пишется сеткой (`24x24`), а не числом: поле сенсоров -- сетка, и
+        слой, который её принимает, обязан говорить о себе тем же словом.
+        """
         cur = self.cur
         name = cur.take("name").text
         cur.take("colon")
@@ -536,9 +580,23 @@ class Parser:
         tags: list[str] = []
         while cur.accept("comma"):
             tags.append(cur.take("name").text)
-        self.instances[name] = ir.Instance(
-            id=name, cell_type=cell_type, tags=tuple(tags)
+        base, grid = _split_grid(name)
+        if grid is None:
+            self.instances[name] = ir.Instance(
+                id=name, cell_type=cell_type, tags=tuple(tags)
+            )
+            return
+        rows, cols = grid
+        if rows < 1 or cols < 1:
+            raise ParseError(f"слой {base!r}: сетка {rows}x{cols} пуста")
+        population = ir.Population(
+            id=base, rows=rows, cols=cols, cell_type=cell_type
         )
+        self.populations[base] = population
+        for member in population.members():
+            self.instances[member] = ir.Instance(
+                id=member, cell_type=cell_type, tags=tuple(tags)
+            )
 
     def _stmt_modulator(self) -> None:
         cur = self.cur
