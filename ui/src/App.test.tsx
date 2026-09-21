@@ -940,6 +940,55 @@ describe('дорога с карточки в песочницу (#526)', () => 
     expect(plus.title).toContain('выберите её')
   })
 
+  it('положив сенсор, экран говорит, что дальше нужна кнопка (#573)', async () => {
+    // Заведя сенсор, человек не узнавал, что теперь можно завести кнопку: на
+    // холсте появилась фигура, и рассказ на этом кончался.
+    const WITH_DOOR = sandbox({
+      sensors: [
+        { id: 'key', kind: 'rate', story: 'частота, 100 Гц при 1', to: 100, position: [0, 0] },
+      ],
+    })
+    serve([
+      ['/api/session', SIGNED_IN],
+      ['/api/catalog', CATALOG],
+      ['/api/glossary', { schema: 1, receptors: [], point: [], contact: [], port: [] }],
+      ['/api/cells', { schema: 1, cells: [] }],
+      ['/api/sim', { error: 'считать нечего' }, 400],
+      // Ответом на заведение приходит проект с дверью -- её имя выбирает
+      // сервер, и совет говорит именно про неё.
+      ['/api/sandboxes/s1/sensors', WITH_DOOR],
+      ['/api/sandboxes/s1', sandbox()],
+      [
+        '/api/sandboxes',
+        { schema: 1, sandboxes: [{ id: 's1', name: 'Проба', blocks: 0, links: 0, updatedAt: '' }] },
+      ],
+    ])
+    await mount()
+    await click('Песочница')
+    const row = host.querySelector('button.sb-project') as HTMLButtonElement
+    await act(async () => {
+      row.click()
+    })
+
+    await pickTab('Внешнее')
+    // Порядок рассказан и до того, как дверь положили: в разделе сказано, чем
+    // её трогают, а не только как она выглядит.
+    expect(host.querySelector('.sb-left')?.textContent).toContain('нажимают кнопкой')
+
+    const left = host.querySelector('.sb-left') as HTMLElement
+    const sensor = [...left.querySelectorAll('.sb-row')].find((item) =>
+      item.textContent?.includes('Сенсор'),
+    ) as HTMLElement
+    await act(async () => {
+      ;(sensor.querySelector('.sb-plus') as HTMLButtonElement).click()
+    })
+
+    expect(host.textContent).toContain('Трогают её снаружи кнопкой')
+    expect(host.textContent).toContain('оживёт, когда прогон запущен')
+    // Про ту дверь, которая появилась, а не «про сенсоры вообще».
+    expect(host.textContent).toContain('key')
+  })
+
   it('в палитре клеток раздела «Граница с миром» больше нет (#575)', async () => {
     // Два места для одного -- та самая болезнь, из-за которой панель свойств
     // стала свалкой (#569). Переехало, а не раздвоилось.
