@@ -32,6 +32,7 @@ import { where } from '../../model/sandbox'
 import type { PatternDraft, SandboxBlock, SandboxNeuron } from '../../model/sandbox'
 import type { CellState } from '../../model/sim'
 import type { Glossary } from '../../model/types'
+import { useButtons } from '../../state/board'
 import { catalogController, useCatalog } from '../../state/catalog'
 import { sandboxController, useSandbox } from '../../state/sandbox'
 import { canChange, goToLogin, useSession } from '../../state/session'
@@ -133,6 +134,20 @@ export function SandboxScreen({
   /** Уже несомое: чтобы вставка не повторилась на следующей перерисовке. */
   const carried = useRef<string | null>(null)
   /**
+   * Какую дверь только что положили -- ради одной строки про следующий шаг
+   * (#573).
+   *
+   * Заведя сенсор, человек не узнаёт, что теперь можно завести кнопку: на
+   * холсте появилась фигура, и на этом рассказ кончался. Следующий шаг не
+   * очевиден -- и хуже того, кнопка без запущенного прогона выглядит
+   * выключенной, то есть первый же шаг выглядит неудачей.
+   *
+   * Состояние экрана, а не проекта: в проекте от этого не меняется ничего, и
+   * после перезагрузки страницы сенсор выглядит ровно так же, как заведённый
+   * неделю назад.
+   */
+  const [doorPut, setDoorPut] = useState<string | null>(null)
+  /**
    * Выдвинута ли левая панель. Значение имеет смысл только на тесном окне: там
    * панель -- ящик поверх экрана, потому что колонкой она не получает высоты и
    * список перестаёт быть списком (#550, разбор в `sandbox.css`). На просторном
@@ -210,6 +225,12 @@ export function SandboxScreen({
   // прежняя сессия не должна его переживать. Иначе в пустом проекте под холстом
   // стоит полный прогон предыдущего, а «Запустить» продолжает чужую сеть.
   const openId = project?.id ?? null
+  /**
+   * Кнопки проекта: нужны ровно затем, чтобы совет «заведите кнопку» исчез,
+   * когда ему последовали (#573). Советовать сделанное -- это шум, и хуже
+   * того, шум, который человек уже выполнил.
+   */
+  const buttons = useButtons(openId ?? '')
   useEffect(() => {
     return () => {
       void sim.close()
@@ -225,6 +246,9 @@ export function SandboxScreen({
   // Строка про приехавшее с карточки принадлежит тому проекту, в который оно
   // приехало: в соседнем она говорила бы про чужой блок.
   useEffect(() => setBrought(null), [openId])
+
+  // То же и про совет завести кнопку: он про дверь этого проекта.
+  useEffect(() => setDoorPut(null), [openId])
 
   /**
    * Паттерн, принесённый с карточки (#526).
@@ -434,6 +458,21 @@ export function SandboxScreen({
     opener.current?.focus()
   }
 
+  /**
+   * Положить дверь и сказать, что делать дальше (#573).
+   *
+   * Заведение и совет -- одно действие, а не два: совет относится к той двери,
+   * которая только что появилась, и берётся он из ответа сервера (имя двери
+   * выбирает он). Отдельной кнопки «а теперь кнопку» здесь нет нарочно --
+   * заводят её в свойствах этой двери, куда человек и так попал: свежая дверь
+   * сразу выбрана.
+   */
+  const putDoor = async (put: () => Promise<void>, kind: 'sensor' | 'motor'): Promise<void> => {
+    await put()
+    const fresh = control.store.getState().selected
+    if (fresh?.kind === kind) setDoorPut(fresh.id)
+  }
+
   const inhibitory = neuronKinds(project.blocks, project.neurons)
   /** Типы проекта, которых каталог не знает: `target`, `pyr_l5` (#564). */
   const known = new Set(palette.map((kind) => kind.id))
@@ -612,6 +651,17 @@ export function SandboxScreen({
       {/* Что приехало с карточки. Стоит здесь же, где «паттерн лежит в
           библиотеке»: обе строки про то, чего на холсте не видно (#526). */}
       {brought ? <p className="sb-warn">{brought}</p> : null}
+      {/* Следующий шаг после двери (#573). Исчезает, как только к этой двери
+          привязана кнопка: совет, которому последовали, -- это уже шум. */}
+      {doorPut &&
+      !buttons.some((one) => one.sensor === doorPut || one.motor === doorPut) ? (
+        <p className="sb-warn">
+          Дверь <span className="mono">{doorPut}</span> в схеме. Трогают её
+          снаружи кнопкой: заведите её в свойствах справа («Сделать кнопку») или
+          знаком «+» в полосе кнопок под холстом. Нажатие подаётся в прогон,
+          поэтому кнопка оживёт, когда прогон запущен.
+        </p>
+      ) : null}
       {/* То же самое про каталог клеток (#567). Проект после этого ровно тот
           же, и без прямой строки человек не узнает, случилось ли что-нибудь. */}
       {adoptedId && adoptedName ? (
@@ -902,6 +952,16 @@ export function SandboxScreen({
                 частоту клетки. На холсте у них своя фигура: у сенсора острый
                 конец смотрит в схему, у мотора вдавлен.
               </p>
+              {/* Чем дверь трогают -- здесь же, рядом с «+» (#573). Прежде в
+                  этом разделе были только фигуры, и человек, положивший
+                  сенсор, не узнавал, что дальше нужна кнопка: порядок «сенсор
+                  -> кнопка -> прогон» не был рассказан нигде. */}
+              <p className="sb-note">
+                Сенсор нажимают кнопкой: заведите дверь — и под холстом
+                появится полоса кнопок. Мотор в той же полосе — лампочка, а
+                кнопка, привязанная и к сенсору, и к мотору, замыкает петлю:
+                сеть трогает мир и чувствует собственное действие.
+              </p>
               <div className="sb-row">
                 <span className="sb-mini sb-cell-shape">
                   <svg viewBox="0 0 40 24" role="img" aria-label="сенсор">
@@ -916,7 +976,7 @@ export function SandboxScreen({
                   type="button"
                   className="sb-plus"
                   title="Положить сенсор на холст. Соединяется с клеткой так же, как клетка с клеткой: щелчок по его выходу, потом по клетке"
-                  onClick={() => pick(() => void control.insertSensor())}
+                  onClick={() => pick(() => void putDoor(() => control.insertSensor(), 'sensor'))}
                 >
                   +
                 </button>
@@ -950,7 +1010,13 @@ export function SandboxScreen({
                       : 'Мотор смотрит на клетку — выберите её на холсте или в «Объектах»'
                   }
                   onClick={() =>
-                    pick(() => void control.insertMotor(chosenNeuron as string, null))
+                    pick(
+                      () =>
+                        void putDoor(
+                          () => control.insertMotor(chosenNeuron as string, null),
+                          'motor',
+                        ),
+                    )
                   }
                 >
                   +
@@ -1173,6 +1239,8 @@ export function SandboxScreen({
         values={sensed}
         output={acted}
         live={Boolean(simId)}
+        // Пустому проекту полоса не нужна вовсе: там кнопок ещё не ищут.
+        scheme={Boolean(project.blocks.length || project.neurons.length)}
         onSense={(values) => void sim.sense(values)}
       />
 

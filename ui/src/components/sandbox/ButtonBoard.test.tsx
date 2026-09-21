@@ -46,6 +46,7 @@ interface Shown {
   values?: Record<string, number>
   output?: Record<string, number>
   live?: boolean
+  scheme?: boolean
 }
 
 async function mount(shown: Shown = {}): Promise<void> {
@@ -61,6 +62,7 @@ async function mount(shown: Shown = {}): Promise<void> {
         values={shown.values ?? {}}
         output={shown.output ?? {}}
         live={shown.live ?? true}
+        scheme={shown.scheme ?? true}
         onSense={(values) => sent.push(values)}
       />,
     )
@@ -78,6 +80,7 @@ async function again(shown: Shown): Promise<void> {
         values={shown.values ?? {}}
         output={shown.output ?? {}}
         live={shown.live ?? true}
+        scheme={shown.scheme ?? true}
         onSense={(values) => sent.push(values)}
       />,
     )
@@ -133,10 +136,24 @@ afterEach(() => {
 })
 
 describe('панель появляется только там, где есть что привязывать', () => {
-  it('схема без сенсоров и моторов выглядит как раньше -- панели нет', async () => {
-    await mount({ sensors: [], motors: [] })
+  it('пустой проект панели не получает вовсе', async () => {
+    // На пустом холсте кнопок не ищут: человек смотрит в палитру, а не под
+    // холст, и строка про сенсоры была бы ответом на незаданный вопрос.
+    await mount({ sensors: [], motors: [], scheme: false })
 
     expect(host.querySelector('.bb')).toBeNull()
+  })
+
+  it('в схеме без дверей на месте полосы -- строка, где их взять (#573)', async () => {
+    // Раньше полосы не было вовсе, и человек, искавший кнопки, не узнавал,
+    // что сперва нужна дверь: возможность есть, дороги к ней нет.
+    await mount({ sensors: [], motors: [] })
+
+    expect(host.querySelector('.bb')).not.toBeNull()
+    expect(host.querySelector('.bb-note')?.textContent).toContain('Внешнее')
+    // Нажимать при этом нечего: кнопок нет, и «+» тоже -- привязывать не к чему.
+    expect(host.querySelector('.bb-add')).toBeNull()
+    expect(keys()).toHaveLength(0)
   })
 
   it('один сенсор -- и панель уже есть', async () => {
