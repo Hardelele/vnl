@@ -261,8 +261,8 @@ class Snapshot:
     cells: dict[str, tuple]
     #: Состояния синапсов в порядке `Simulator.all_synapses`.
     synapses: tuple[tuple, ...]
-    #: Шаг доставки -> список (номер синапса, амплитуда).
-    pending: dict[int, tuple[tuple[int, float], ...]]
+    #: Шаг доставки -> номера синапсов, чей выброс к этому шагу придёт.
+    pending: dict[int, tuple[int, ...]]
     modulator_level: dict[str, float]
     #: Состояние генератора: без него повтор разойдётся с исходным прогоном.
     rng: tuple
@@ -493,7 +493,7 @@ class Simulator:
         #: изменение («нажали», «отпустили»), а не на уровень.
         self.sensor_seen: dict[str, float] = {s: 0.0 for s in model.sensors}
 
-        self.pending: dict[int, list[tuple[_Synapse, float]]] = {}
+        self.pending: dict[int, list[_Synapse]] = {}
         self.modulator_level: dict[str, float] = {m: 0.0 for m in model.modulators}
 
         # Общий порядок синапсов. Очередь задержанных передач ссылается на
@@ -530,9 +530,20 @@ class Simulator:
 
     # --- шаг -----------------------------------------------------------
 
-    def _schedule(self, synapse: _Synapse, amplitude: float) -> None:
+    def _schedule(self, synapse: _Synapse) -> None:
+        """Поставить выброс в очередь: на каком шаге он придёт -- и только.
+
+        Силы здесь нет нарочно. Сколько придёт, решает `_release` в момент
+        доставки, потому что кратковременная динамика (`u`, `x`) считается по
+        промежутку до этого выброса, а не по тому, что было при постановке в
+        очередь. Пока сила стояла в очереди вторым полем, она была мёртвой:
+        `_deliver` её отбрасывал, и всякий, кто «ломал доставку», умножая её,
+        ломал пустоту -- именно так проверка заявленных чисел и оказалась
+        оболгана слепой (#577). Второго места, где живёт сила выброса, здесь
+        быть не должно.
+        """
         step = int(round((self.time + synapse.delay) / self.dt))
-        self.pending.setdefault(step, []).append((synapse, amplitude))
+        self.pending.setdefault(step, []).append(synapse)
 
     def _release(self, synapse: _Synapse) -> float:
         """Амплитуда выброса с учётом кратковременной динамики."""
@@ -576,7 +587,7 @@ class Simulator:
                 # значило бы снова зависеть от двоичной дроби.
                 repeats = self.stim_steps.get(stim.id, _NO_STEPS).get(self.step, 0)
                 for _ in range(repeats):
-                    self._schedule(self.stim_synapses[stim.id], stim.amplitude)
+                    self._schedule(self.stim_synapses[stim.id])
                 continue
             if not stim.start <= self.time < stim.stop:
                 continue
@@ -584,7 +595,7 @@ class Simulator:
                 self.cells[stim.target.instance].current += stim.amplitude
             elif stim.kind == "poisson":
                 if self.rng.random() < stim.rate * self.dt / 1000.0:
-                    self._schedule(self.stim_synapses[stim.id], stim.amplitude)
+                    self._schedule(self.stim_synapses[stim.id])
 
     # --- граница с миром --------------------------------------------------
 
@@ -657,7 +668,7 @@ class Simulator:
             self.sensor_seen[sensor.id] = value
             for _ in range(count):
                 for synapse in self.sensor_synapses[sensor.id]:
-                    self._schedule(synapse, synapse.weight)
+                    self._schedule(synapse)
 
     def held(self, now: float | None = None) -> dict[str, float]:
         """Какая величина держится на этот момент -- по записи, а не по шагу.
@@ -694,7 +705,7 @@ class Simulator:
         }
 
     def _deliver(self, step: int) -> None:
-        for synapse, _ in self.pending.pop(step, []):
+        for synapse in self.pending.pop(step, []):
             amplitude = self._release(synapse)
             cell = self.cells[synapse.target]
             key = synapse.key
@@ -873,7 +884,7 @@ class Simulator:
             if synapse.source is None:
                 continue
             if self.cells[synapse.source].spiked:
-                self._schedule(synapse, synapse.weight)
+                self._schedule(synapse)
 
     # --- пластичность и нейромодуляция ---------------------------------
 
@@ -1101,9 +1112,7 @@ class Simulator:
                 for synapse in self.all_synapses
             ),
             pending={
-                step: tuple(
-                    (index[id(synapse)], amplitude) for synapse, amplitude in items
-                )
+                step: tuple(index[id(synapse)] for synapse in items)
                 for step, items in self.pending.items()
                 if items
             },
@@ -1147,7 +1156,7 @@ class Simulator:
                 synapse.eligibility,
             ) = values
         self.pending = {
-            step: [(self.all_synapses[number], amplitude) for number, amplitude in items]
+            step: [self.all_synapses[number] for number in items]
             for step, items in state.pending.items()
         }
         self.modulator_level = dict(state.modulator_level)
