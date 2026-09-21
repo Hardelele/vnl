@@ -19,16 +19,27 @@
  * показать кнопку, привязанную неизвестно к чему, -- страшно.
  */
 
-/** К чему привязана кнопка: к двери внутрь или к двери наружу. */
-export type BoardRole = 'sensor' | 'motor'
+/**
+ * Чем кнопка оказалась для сети: пальцем, лампочкой или петлёй (#574).
+ *
+ * Считается по привязкам, а не хранится: два поля и слово про них -- это два
+ * места, где написано одно и то же, и разойтись они успели бы на первой же
+ * правке привязки.
+ */
+export type BoardRole = 'sensor' | 'motor' | 'loop' | 'none'
 
 /**
- * Кнопка панели.
+ * Кнопка панели: у неё две привязки, и любая может быть пустой (#574).
  *
- * `role` хранится, а не вычисляется по тому, в каком из двух списков проекта
- * нашлось `bind`: сенсор и мотор -- разные вещи, и одноимённые (а имена
- * задаёт человек) превратили бы кнопку подачи в лампочку молча, на ближайшем
- * ответе сервера.
+ * `sensor` -- кому кнопка отдаёт свой бит, `motor` -- кто её зажигает. Только
+ * сенсор -- палец, как было; только мотор -- лампочка, как было; обе -- петля:
+ * сеть шевельнула мотор, кнопка нажалась сама, сенсор получил единицу, и сеть
+ * почувствовала последствие собственного действия.
+ *
+ * Двумя полями, а не «родом и привязкой», как было в #562: род при одной
+ * привязке был честен, а при двух пришлось бы завести третье слово («петля»)
+ * и держать его в согласии с тем, куда кнопка на самом деле привязана. Род
+ * теперь считается -- `roleOf` ниже.
  *
  * `key` -- `code` клавиши (`KeyA`), а не её символ: за место клавиши держится
  * и разбор в `lib/keys`, и подпись на кнопке -- см. там же, почему.
@@ -36,25 +47,63 @@ export type BoardRole = 'sensor' | 'motor'
 export interface BoardButton {
   id: string
   name: string
-  role: BoardRole
-  /** Имя сенсора или мотора в проекте. Может и потеряться -- дверь убрали. */
-  bind: string
+  /** Сенсор, которому кнопка подаёт единицу. Пусто -- она ничего не подаёт. */
+  sensor: string | null
+  /** Мотор, который её зажигает. Пусто -- её зажигает только палец. */
+  motor: string | null
   key: string | null
+}
+
+/** Чем кнопка стала при таких привязках. */
+export function roleOf(button: BoardButton): BoardRole {
+  if (button.sensor && button.motor) return 'loop'
+  if (button.sensor) return 'sensor'
+  if (button.motor) return 'motor'
+  return 'none'
 }
 
 const PREFIX = 'vnl.buttons.'
 
-/** Похоже ли это на кнопку: ответ из чужого хранилища проверяется целиком. */
-function sound(item: unknown): item is BoardButton {
-  if (!item || typeof item !== 'object') return false
+/**
+ * Разбор одной записи из чужого хранилища -- и заодно переезд со старой формы.
+ *
+ * До #574 у кнопки были `role` и одна `bind`. Такие записи лежат в браузерах
+ * тех, кто уже завёл себе кнопки, и выкинуть их было бы хуже, чем кажется:
+ * человек увидел бы пустую полосу и решил, что панель сломалась, -- а сломался
+ * бы ровно переезд. Поэтому старая запись читается и превращается в новую:
+ * `role: 'sensor'` -- это кнопка, у которой привязан только сенсор.
+ *
+ * Обратного превращения нет: страница со старым кодом прочтёт новую запись и
+ * отбросит её, то есть потеряет кнопки, которые заводятся в два щелчка. Это
+ * дешевле, чем писать в хранилище обе формы разом и гадать, какая из них
+ * правда.
+ */
+function revive(item: unknown): BoardButton | null {
+  if (!item || typeof item !== 'object') return null
   const row = item as Record<string, unknown>
-  return (
-    typeof row.id === 'string' &&
-    typeof row.name === 'string' &&
-    (row.role === 'sensor' || row.role === 'motor') &&
-    typeof row.bind === 'string' &&
-    (row.key === null || typeof row.key === 'string')
-  )
+  if (typeof row.id !== 'string' || typeof row.name !== 'string') return null
+  if (row.key !== null && typeof row.key !== 'string' && row.key !== undefined) return null
+  const key = typeof row.key === 'string' ? row.key : null
+
+  // Старая форма: род и одна привязка.
+  if (typeof row.bind === 'string' && (row.role === 'sensor' || row.role === 'motor')) {
+    return {
+      id: row.id,
+      name: row.name,
+      sensor: row.role === 'sensor' ? row.bind : null,
+      motor: row.role === 'motor' ? row.bind : null,
+      key,
+    }
+  }
+
+  const sensor = row.sensor === null || row.sensor === undefined ? null : row.sensor
+  const motor = row.motor === null || row.motor === undefined ? null : row.motor
+  if (sensor !== null && typeof sensor !== 'string') return null
+  if (motor !== null && typeof motor !== 'string') return null
+  // Кнопка без единой привязки не нажимается и не горит: показывать её -- то
+  // же самое, что показывать мусор из чужого хранилища.
+  if (sensor === null && motor === null) return null
+  return { id: row.id, name: row.name, sensor, motor, key }
 }
 
 export function readButtons(project: string): BoardButton[] {
@@ -62,7 +111,13 @@ export function readButtons(project: string): BoardButton[] {
     const kept = localStorage.getItem(PREFIX + project)
     if (!kept) return []
     const parsed: unknown = JSON.parse(kept)
-    return Array.isArray(parsed) ? parsed.filter(sound) : []
+    if (!Array.isArray(parsed)) return []
+    const alive: BoardButton[] = []
+    for (const item of parsed) {
+      const button = revive(item)
+      if (button) alive.push(button)
+    }
+    return alive
   } catch {
     return []
   }
