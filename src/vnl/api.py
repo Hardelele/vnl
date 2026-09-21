@@ -220,6 +220,13 @@ def _sensor(model: ir.Model, sensor: ir.Sensor) -> dict[str, Any]:
         "kind": sensor.kind,
         "story": protocols.describe_sensor(sensor),
         "to": sensor.to,
+        # Сетка и каналы (#581): по ним интерфейс отличает поле от кнопки и
+        # знает, какой формы кадр ему рисовать. Связей у поля 576, и понять по
+        # ним, что это 24x24, а не 576 отдельных дверей, нельзя.
+        "grid": [sensor.rows, sensor.cols],
+        "channels": list(sensor.channels),
+        "size": sensor.size,
+        "field": sensor.is_field,
         "targets": [
             {
                 "target": _site(link.target),
@@ -302,6 +309,20 @@ def model_payload(model: ir.Model) -> dict[str, Any]:
             _stimulus(stim, model.run.duration) for stim in model.stimuli
         ],
         "sensors": [_sensor(model, sensor) for sensor in model.sensors.values()],
+        # Слои (#581): клетки слоя уже перечислены среди нейронов, здесь --
+        # только то, чего из плоского списка не узнать: что они сетка и какого
+        # размера. Имена членов отдаются по порядку, чтобы интерфейсу не
+        # пришлось собирать `R[3,7]` из кусков строкой -- один разбор имени на
+        # две стороны разошёлся бы на первом же слое с другой формой имени.
+        "populations": [
+            {
+                "id": population.id,
+                "grid": [population.rows, population.cols],
+                "cellType": population.cell_type,
+                "members": population.members(),
+            }
+            for population in model.populations.values()
+        ],
         "motors": [_motor(motor) for motor in model.motors.values()],
         "recordings": [
             {
@@ -876,6 +897,48 @@ def _link_polarity(sandbox: Any, link: Any) -> str:
     return ir.synapse_polarity(_link_reversal(link), point)
 
 
+def _fields(project: Any) -> list[dict[str, Any]]:
+    """Поля собранной сети вместе со слоями, которые за ними стоят.
+
+    Слой ищется по целям поля: у стрелки «каждый к своему» все 576 связей
+    приходят в клетки одного слоя, и спрашивать об этом человека незачем. Если
+    поле льёт не в слой (все величины в одну клетку -- законный сумматор
+    яркости), слоя просто нет, и панель покажет один кадр без отклика сеткой.
+    """
+    from .compose import compose
+
+    model = compose(project.sandbox).model
+    out: list[dict[str, Any]] = []
+    for sensor in model.sensors.values():
+        if not sensor.is_field:
+            continue
+        layers = {
+            head
+            for head in (
+                ir.head_of(link.target.instance) for link in sensor.targets
+            )
+            if head in model.populations
+        }
+        layer = model.populations[layers.pop()] if len(layers) == 1 else None
+        out.append(
+            {
+                "id": sensor.id,
+                "story": protocols.describe_sensor(sensor),
+                "grid": [sensor.rows, sensor.cols],
+                "channels": list(sensor.channels),
+                "size": sensor.size,
+                "layer": None
+                if layer is None
+                else {
+                    "id": layer.id,
+                    "grid": [layer.rows, layer.cols],
+                    "members": layer.members(),
+                },
+            }
+        )
+    return out
+
+
 def sandbox_payload(project: Any) -> dict[str, Any]:
     """Всё состояние песочницы одним куском.
 
@@ -1027,6 +1090,16 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
         "canRedo": project.can_redo,
         "undoLabel": project.undo_label,
         "redoLabel": project.redo_label,
+        # Поля собранной сети (#581). Своих дверей у проекта может не быть
+        # вовсе: поле приезжает внутри блока («Сетчатка 24x24»), и в
+        # `sensors` -- список того, что человек завёл на холсте, -- оно не
+        # попадает по определению. Панель же показывает то, чему можно
+        # показать картинку, а это свойство собранной сети, а не холста.
+        #
+        # Вместе с полем едет слой, в который оно льёт: по нему рисуется
+        # отклик. Считается он здесь, а не в браузере, по обычной причине --
+        # «какие клетки стоят за этим полем» не должно иметь двух ответов.
+        "fields": _fields(project),
         "problems": project.check(),
         # Рядом, но отдельным полем: `problems` -- это отказ, а здесь то, что
         # запускать не мешает, но делает результат пустым (#506). Свести их в

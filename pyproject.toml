@@ -26,6 +26,12 @@ vnl = "vnl.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Растры образцов (#581): их читает и программа-источник, и сервер, когда
+# показывает букву полю. Без этой строки они не уехали бы в установленный
+# пакет, и «выбрать букву» работало бы только из репозитория.
+[tool.setuptools.package-data]
+vnl = ["data/*.txt"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

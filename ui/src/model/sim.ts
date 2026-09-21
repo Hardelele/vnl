@@ -63,7 +63,7 @@ export interface SimUpdate {
    * кнопка, нажатая на 100-й, гаснет сама -- сессия сообщает прошлое, а не
    * то, что человек держит пальцем.
    */
-  sensors?: Record<string, number>
+  sensors?: Record<string, number | FieldSummary>
   /** Что сеть отдаёт сейчас: величина каждого мотора (единица -- в `Motor.unit`). */
   motors?: Record<string, number>
   /**
@@ -74,12 +74,33 @@ export interface SimUpdate {
   input?: SenseEvent[]
 }
 
+/**
+ * Что держится на поле -- счётом, а не кадром (#581).
+ *
+ * Ответ сессии уходит на каждый кадр показа, и 576 величин в каждом были бы
+ * потоком ради картинки, которая меняется только тогда, когда её сменили. Сам
+ * кадр спрашивают отдельно -- `readFrames`.
+ */
+export interface FieldSummary {
+  /** Сколько величин у поля всего. */
+  values: number
+  /** Сколько из них ненулевые: по ним видно, что кадр не пустой. */
+  lit: number
+  /** Средняя по ненулевым. */
+  mean: number
+}
+
+/** Держится ли на двери поле, а не одно число. */
+export function isField(value: number | FieldSummary | undefined): value is FieldSummary {
+  return typeof value === 'object' && value !== null
+}
+
 /** Одно поданное значение: когда, какому сенсору и какое. */
 export interface SenseEvent {
   /** Модельное время подачи, мс. Настоящие секунды к прогону отношения не имеют. */
   time: number
   sensor: string
-  value: number
+  value: number | FieldSummary
 }
 
 /** Разбор ответа общий с библиотекой: см. `request`. */
@@ -155,6 +176,42 @@ export function senseSim(
   values: Record<string, number>,
 ): Promise<SimUpdate> {
   return post<SimUpdate>(`/sim/${encodeURIComponent(id)}/sensors`, values)
+}
+
+/** Что показать полю: встроенный образец по имени или готовый кадр чисел. */
+export type Shown = { sample: string; level?: number } | { frame: number[] }
+
+/**
+ * Показать полям кадры: `{ 'retina24/eye': { sample: 'T' } }` (#581).
+ *
+ * Свой вызов, а не `senseSim` с другим значением: показать кнопке кадр или
+ * полю одно число -- это не «другой аргумент», а ошибка, и разводятся они
+ * там, где видно, какое из двух происходит.
+ *
+ * Словарём -- по той же причине, что и у подачи величин: два поля, которым
+ * показали разом, обязаны лечь на один момент модельного времени.
+ *
+ * Именем образца, когда он встроенный: по сети едет одно слово вместо 576
+ * чисел, а буква получается ровно та, про которую написаны числа в примерах.
+ */
+export function showSim(
+  id: string,
+  frames: Record<string, Shown>,
+): Promise<SimUpdate> {
+  return post<SimUpdate>(`/sim/${encodeURIComponent(id)}/frames`, frames)
+}
+
+/**
+ * Какие кадры сейчас держатся на полях сессии.
+ *
+ * Отдельным запросом, а не полем общего ответа: см. `FieldSummary`. Нужен
+ * тогда, когда панель открыли поверх уже идущей сессии, -- показать то, что
+ * сеть видит, не дожидаясь следующего показа.
+ */
+export function readFrames(id: string): Promise<Record<string, number[]>> {
+  return ask<{ frames: Record<string, number[]> }>(
+    `/sim/${encodeURIComponent(id)}/frames`,
+  ).then((answer) => answer.frames)
 }
 
 export function closeSim(id: string): Promise<void> {
