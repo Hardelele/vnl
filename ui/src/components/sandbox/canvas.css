@@ -636,3 +636,29 @@
   color: var(--faint);
   min-width: 0;
 }
+
+/* Слой внутри блока (#583): квадрат с сеткой активности вместо 576 кружков.
+   Фигура другая нарочно -- за ней не клетка, а полтысячи клеток, и видно это
+   должно быть до того, как человек потянет от неё связь. */
+.cv-layer-face {
+  fill: var(--panel);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.cv-in-layer .cv-in-name {
+  fill: var(--muted);
+  font-size: 8px;
+  pointer-events: none;
+}
+
+/* Выбранный слой -- та же подсветка, что у выбранной клетки: для человека это
+   один и тот же жест с одним и тем же результатом. */
+.cv-in-layer {
+  cursor: pointer;
+}
+
+.cv-in-layer.is-on .cv-layer-face {
+  stroke: var(--accent, #2563eb);
+  stroke-width: 1.5;
+}

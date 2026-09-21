@@ -1360,97 +1360,110 @@
   margin-top: 2px;
 }
 
-/* Панель поля (#581): что показали сети и чем она ответила.
-
-   Стоит она рядом с кнопками и устроена так же -- полосой под холстом, -- но
-   своей секцией: кнопка подаёт бит, поле принимает кадр, и складывать их в
-   одну строку значило бы уравнять вещи разного размера. */
-.field-panel {
+/* Строка поля (#583): та же граница с миром, что и кнопки, и живёт она в той
+   же полосе под холстом. Свёрнута в строку нарочно: панель во всю ширину
+   отвечала на один вопрос, а занимала треть экрана. */
+.fr {
   display: flex;
+  flex-direction: column;
   flex: none;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.field-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.field-story {
-  color: var(--faint);
-}
-
-.field-controls {
+.fr-line {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
   font-size: var(--text-xs);
 }
 
-.field-file {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+.fr-title {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   color: var(--muted);
 }
 
-.field-file input[type='file'] {
-  max-width: 190px;
-  font: inherit;
-  font-size: var(--text-xs);
+.fr-arrow,
+.fr-count {
+  color: var(--muted);
 }
 
-/* Подано и отклик -- рядом, а не одно под другим: их сравнивают глазами, и
-   разнесённые по вертикали они сравниваются памятью. */
-.field-view {
+/* Тёмная подложка -- не оформление: поле показывает свет, и виден он только
+   на темноте. Пустой кадр честно выглядит выключенным экраном. */
+.fr-grid {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--canvas-deep, #10141a);
+  overflow: hidden;
+}
+
+.fr-grid img {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.fr-act {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.fr-act:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.fr-open {
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  cursor: pointer;
+}
+
+.fr-open:hover,
+.fr-open.is-on {
+  color: var(--ink);
+}
+
+/* Раскрытое сравнение: кадр и отклик одного размера рядом -- их сличают
+   глазами, и разносить по вертикали нельзя. */
+.fr-wide {
   display: flex;
   align-items: flex-start;
   gap: var(--space-4);
+  padding: 0 var(--space-4) var(--space-2);
 }
 
-.field-view figure {
+.fr-wide figure {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   margin: 0;
 }
 
-.field-view figcaption {
+.fr-wide figcaption,
+.fr-note {
+  margin: 0;
+  max-width: 280px;
   font-size: var(--text-xs);
   color: var(--muted);
 }
 
-/* Тёмная подложка -- не оформление: поле показывает свет, а свет виден только
-   на темноте. Сетка пикселей рисуется по ней, и пустой кадр честно выглядит
-   как выключенный экран, а не как белый лист. */
-.field-grid {
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  background: var(--canvas-deep, #10141a);
-  image-rendering: pixelated;
-}
-
-.field-note,
-.field-trouble {
-  margin: 0;
-  max-width: 260px;
-  font-size: var(--text-xs);
-  color: var(--faint);
-}
-
-.field-trouble {
+.fr-trouble {
   color: var(--danger, #c0392b);
+  font-size: var(--text-xs);
 }
+

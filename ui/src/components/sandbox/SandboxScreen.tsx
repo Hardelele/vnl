@@ -41,7 +41,7 @@ import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { ActivityPanel } from './ActivityPanel'
 import { ButtonBoard } from './ButtonBoard'
-import { FieldPanel } from './FieldPanel'
+import { FieldRow } from './FieldRow'
 import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
@@ -201,6 +201,32 @@ export function SandboxScreen({
    * сервер такую подачу отвергает. Отбор здесь, а не в панели кнопок: панель
    * про поля не знает и знать не должна -- она про пальцы и лампочки.
    */
+  /**
+   * Слои для таймлайна и клетки, которые в слои не входят (#583).
+   *
+   * Дорожка на клетку хороша, пока клеток пять; у слоя их 576, и список
+   * дорожек превращается в стену, за которой не видно сумматора. Слой идёт
+   * своей дорожкой, а его клетки из общего списка уходят.
+   */
+  const layerLanes = useMemo(
+    () =>
+      (project?.populations ?? []).map((item) => ({
+        id: item.id,
+        // Имя без приставки блока: она у всех дорожек блока общая и стоит
+        // второй строкой, как у клеток (`ffi/E`).
+        label: `${item.id.split('/').pop() ?? item.id} ${item.grid[0]}×${item.grid[1]}`,
+        members: item.members,
+      })),
+    [project?.populations],
+  )
+
+  const loose = useMemo(() => {
+    const inside = new Set(
+      (project?.populations ?? []).flatMap((item) => item.members),
+    )
+    return Object.keys(cells).filter((name) => !inside.has(name))
+  }, [cells, project?.populations])
+
   const pressed = useMemo(() => {
     const out: Record<string, number> = {}
     for (const [name, value] of Object.entries(sensed)) {
@@ -1188,6 +1214,13 @@ export function SandboxScreen({
             blocks={project.blocks}
             neurons={project.neurons}
             links={project.links}
+            // Слой рисуется одним узлом с сеткой активности (#583): какие
+            // клетки за ним стоят, знает собранная сеть, а как они сейчас
+            // горят -- растр сессии.
+            populations={project.populations ?? []}
+            onPickLayer={(id) => control.select({ kind: 'layer', id })}
+            spikes={spikes}
+            elapsed={time}
             // Драйв и записи едут на холст наравне со связями (#502): это
             // часть схемы, а не подробность её настройки. Длительность --
             // ради окна работы драйва: короче прогона оно объясняет, почему
@@ -1265,9 +1298,8 @@ export function SandboxScreen({
 
           Кадры спрашиваются при появлении поля в проекте: сессия могла идти и
           до того, как панель открыли, и кадр на поле уже держаться. */}
-      <FieldPanel
+      <FieldRow
         fields={project.fields ?? []}
-        cells={cells}
         spikes={spikes}
         elapsed={time}
         live={Boolean(simId)}
@@ -1323,7 +1355,8 @@ export function SandboxScreen({
           duration={duration || project.run.duration}
           time={time}
           dt={dt}
-          order={Object.keys(cells)}
+          order={loose}
+          layers={layerLanes}
           spikes={spikes}
           traces={traces}
           inhibitory={inhibitory}

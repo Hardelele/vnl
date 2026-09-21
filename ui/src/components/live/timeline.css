@@ -276,3 +276,48 @@
   background: var(--line-strong);
   pointer-events: none;
 }
+
+/* Дорожка слоя (#583): у слоя спрашивают не «когда разряд», а «сколько клеток
+   отозвалось», и подпись с кривой отвечают именно на это. Отдельным видом, а
+   не тем же, что у клетки: одинаковый вид обещал бы одинаковое чтение. */
+.tl-lane.is-layer .tl-name {
+  font-weight: var(--weight-medium);
+}
+
+.tl-lane.is-layer .tl-curve {
+  stroke-width: 1.5;
+}
+
+/* Раскрытые клетки слоя -- уже, чем сам слой, и со сдвигом: видно, что они
+   внутри него, а не рядом. */
+.tl-lane.is-inner .tl-name {
+  padding-left: var(--space-4);
+  color: var(--muted);
+}
+
+/* Шеврон раскрытия. Кнопка, а не значок: по нему щёлкают. */
+.tl-open {
+  flex: none;
+  width: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tl-open:hover,
+.tl-open.is-on {
+  color: var(--ink);
+}
+
+/* Подпись дорожки слоя: имя с сеткой и приставка блока под ним -- ровно так
+   же, как у клетки, чтобы дорожки читались одним движением глаз. */
+.tl-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}

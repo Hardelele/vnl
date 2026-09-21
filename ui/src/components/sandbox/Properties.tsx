@@ -33,6 +33,7 @@ import {
   receptorNote,
   recordedName,
 } from '../../model/glossary'
+import { rasterOf } from '../../lib/raster'
 import type { CellState } from '../../model/sim'
 import { where } from '../../model/sandbox'
 import type {
@@ -47,6 +48,8 @@ import type {
   SandboxNeuron,
   SandboxRecording,
   SandboxSensor,
+  SandboxField,
+  SandboxPopulation,
   SandboxState,
 } from '../../model/sandbox'
 import type {
@@ -345,6 +348,16 @@ export function Properties({
         glossary={glossary}
         palette={palette}
       />
+    ) : null
+  }
+
+  if (selection.kind === 'layer') {
+    const layer = (project.populations ?? []).find((item) => item.id === selection.id)
+    const field = (project.fields ?? []).find(
+      (item) => item.layer?.id === selection.id,
+    )
+    return layer ? (
+      <LayerProps layer={layer} field={field} spikes={spikes} elapsed={elapsed} />
     ) : null
   }
 
@@ -1515,6 +1528,66 @@ export function moments(text: string): number[] {
     .split(/[\s,;]+/)
     .map((piece) => Number.parseFloat(piece))
     .filter((value) => Number.isFinite(value) && value >= 0)
+}
+
+/**
+ * Свойства слоя (#583).
+ *
+ * У слоя спрашивают не то, что у клетки: не «какая у неё мембрана», а
+ * «сколько их, какие они и сколько отозвалось». Мембрана у всех клеток слоя
+ * одна -- она у типа, -- и показывается тип, а не 576 одинаковых наборов
+ * чисел.
+ */
+function LayerProps({
+  layer,
+  field,
+  spikes,
+  elapsed,
+}: {
+  layer: SandboxPopulation
+  field?: SandboxField
+  spikes: Record<string, number[]>
+  elapsed: number
+}) {
+  const raster = rasterOf(spikes, layer.members, elapsed)
+  // Частота слоя -- средняя по клеткам за прогон: одна клетка на 40 Гц и сорок
+  // на 1 Гц -- разные вещи, и число это различает, а сумма разрядов нет.
+  const fired = layer.members.reduce(
+    (total, name) => total + (spikes[name]?.length ?? 0),
+    0,
+  )
+  const rate = elapsed > 0 ? (fired / layer.members.length / elapsed) * 1000 : 0
+  return (
+    <>
+      <Head title="Слой" note={layer.id} />
+      <p className="sb-note">
+        {layer.grid[0]}×{layer.grid[1]} — {layer.members.length} клеток типа{' '}
+        <b>{layer.cellType}</b>. Заведены одной строкой и живут как обычные
+        клетки: прогон, связи и запись у них те же.
+      </p>
+      <Section title="Сейчас" />
+      <p className="sb-note">
+        Разрядились за 50 мс: <b>{raster.awake}</b> из {raster.total}.
+        Средняя частота клетки за прогон: {rate.toFixed(1)} Гц.
+      </p>
+      {field ? (
+        <>
+          <Section title="Вход" />
+          <p className="sb-note">
+            Поле <span className="mono">{field.id}</span> — {field.grid[0]}×
+            {field.grid[1]}, каждый пиксель в свою клетку. Что показать, выбирают
+            в строке «Поле» под холстом.
+          </p>
+        </>
+      ) : null}
+      <Section title="Чего пока нет" />
+      <p className="sb-note">
+        Подключить отдельную клетку слоя мышью нельзя — для этого делается жгут
+        линий. В тексте схемы это обычная стрелка:{' '}
+        <span className="mono">{layer.id}[3,7]</span>.
+      </p>
+    </>
+  )
 }
 
 function Head({ title, note }: { title: string; note?: string }) {

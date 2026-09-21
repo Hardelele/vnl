@@ -64,3 +64,22 @@
 .thumbnail-link.is-mod .thumbnail-cap {
   fill: var(--mod);
 }
+
+/* Слой (#583): квадрат с сеткой. Сетка условная -- шесть делений на любую
+   сторону: миниатюра отвечает на «здесь слой», а не «здесь двадцать четыре
+   клетки в ряд», и настоящие 24 линии в ней слились бы в серый квадрат. */
+.thumbnail-layer rect {
+  fill: var(--surface, #fff);
+  stroke: var(--line-strong, #94a3b8);
+  stroke-width: 1;
+}
+
+.thumbnail-layer line {
+  stroke: var(--line, #cbd5e1);
+  stroke-width: 0.5;
+}
+
+.thumbnail-layer text {
+  fill: var(--muted, #64748b);
+  font-size: 7px;
+}

@@ -63,6 +63,13 @@ export interface MiniNode {
   y: number
   width: number
   height: number
+  /**
+   * Слой (#583): квадрат с сеткой вместо кружка с именем.
+   *
+   * Фигура другая нарочно: за ней стоит не клетка, а 576 клеток, и человек
+   * обязан видеть это до того, как потянет от неё связь.
+   */
+  layer?: { rows: number; cols: number; cells: number }
 }
 
 export interface MiniEdge {
@@ -134,6 +141,15 @@ export interface Arc {
 export const DEFAULT_BOX: MiniatureBox = { width: 240, height: 120, padding: 30 }
 
 const NODE_HEIGHT = 20
+
+/**
+ * Сторона квадрата слоя (#583).
+ *
+ * Крупнее клетки, но не настолько, чтобы съесть схему: слой -- один объект
+ * среди прочих, и его размер говорит «здесь много клеток», а не «здесь
+ * главное».
+ */
+const LAYER_SIDE = 28
 const NODE_MIN_WIDTH = 28
 const NODE_MAX_WIDTH = 72
 /** Ширина знака подписи в 10px Roboto -- с запасом, чтобы имя не вылезало. */
@@ -463,8 +479,11 @@ export function miniature(scheme: Scheme, box: MiniatureBox = DEFAULT_BOX): Mini
         inhibitory: neuron?.inhibitory ?? false,
         x: span(box.width, columns.length, level),
         y: span(box.height, ids.length, index),
-        width: nodeWidth(id),
-        height: NODE_HEIGHT,
+        // Слой квадратный: он несёт сетку, а не имя, и вытягивать его по
+        // длине подписи незачем.
+        width: neuron?.layer ? LAYER_SIDE : nodeWidth(id),
+        height: neuron?.layer ? LAYER_SIDE : NODE_HEIGHT,
+        ...(neuron?.layer ? { layer: neuron.layer } : {}),
       })
     })
   })
