@@ -3,8 +3,65 @@
  *
  * Кнопка -- это палец на сенсоре. Нажали -- в сессию ушла единица, отпустили
  * -- ноль, и пока держат, держится единица: никаких ползунков и никаких долей,
- * вход прототипа -- бит. Кнопка, привязанная к мотору, не нажимается вовсе:
- * она лампочка, и горит, пока мотор отдаёт ненулевое.
+ * вход прототипа -- бит.
+ *
+ * У кнопки две привязки, и любая может быть пустой (#574): `sensor` -- кому
+ * она отдаёт свой бит, `motor` -- кто её зажигает. Только сенсор -- палец, как
+ * было; только мотор -- лампочка, которая не нажимается; обе -- петля: сеть
+ * шевельнула мотор, кнопка нажалась сама, сенсор получил единицу, и сеть
+ * почувствовала последствие собственного действия. Ради этой петли сенсоры,
+ * моторы и кнопки и делались: без неё граница односторонняя -- человек жмёт,
+ * сеть отвечает, и на этом всё.
+ *
+ * ## Где замыкается петля
+ *
+ * Здесь, в браузере, тем же маршрутом, которым кнопку нажимает палец (`POST
+ * /api/sim/<id>/sensors`, #561). Не на сервере внутри сессии -- и это решение,
+ * а не то, до чего не дошли руки.
+ *
+ * Причина первая, названная владельцем: петля должна идти **через кнопку**.
+ * Замкни её в симуляторе -- и кнопка перестанет быть тем, через что петля
+ * проходит, и станет показом того, что происходит без неё. Тогда «привязать
+ * один сенсор и один мотор к одной кнопке» нечего и значило бы.
+ *
+ * Причина вторая, техническая: всё, что приходит снаружи, ложится в поток
+ * входа сессии (`Session._input`), а он часть состояния прогона -- перемотка
+ * переигрывает его по записи, «Сброс» его не стирает. Значит петля,
+ * замкнутая снаружи, **воспроизводима** тем же механизмом, что и палец: та же
+ * запись даёт тот же прогон спайк в спайк. Петля, замкнутая внутри симулятора,
+ * потребовала бы второго механизма воспроизведения -- и разошлась бы с первым.
+ *
+ * Цена -- задержка. Величина мотора приходит опросом (`POLL_MS`, 150 мс
+ * реального времени), а сессия идёт со скоростью `DEFAULT_PACE` -- 50 модельных
+ * миллисекунд за секунду реального. Значит между разрядом клетки и единицей на
+ * сенсоре проходит **порядка 5-15 модельных миллисекунд** (шаг фонового потока
+ * -- 5 мс модельных, опрос -- ещё до 7.5), в среднем около десяти. Это порядок
+ * синаптической задержки, и для петли «сеть себя триггернула» он уместен; но
+ * задан он опросом интерфейса, а не сетью, и при другом темпе сессии
+ * изменится пропорционально. Петли, которым нужна задержка в доли
+ * миллисекунды, так не собираются -- их место внутри схемы, обычной связью.
+ *
+ * Обратная сторона той же цены оказалась защитой: петля не может звенеть чаще,
+ * чем идёт опрос. Мотор с коротким окном мигает на каждом шаге, но в поток
+ * входа попадает не больше семи событий в секунду реального времени -- то
+ * есть петля без задержки здесь не генератор, а ограниченный опросом храповик.
+ * Разбор устойчивости -- в README, раздел «Кнопки в песочнице».
+ *
+ * ## Два источника одного бита
+ *
+ * Бит сенсора -- это **или**: он держится, пока его держит хоть кто-то, палец
+ * или петля. Никто не «побеждает»: кнопка -- это контакт, и два пальца на
+ * одном контакте не спорят, кто из них нажал. Практическое следствие важнее
+ * правила: отпустив кнопку, которую держит петля, человек её не гасит -- и это
+ * верно, потому что гасил бы он не свой бит, а чужой.
+ *
+ * Видно это на самой кнопке: пока её держит петля, у неё горит значок петли,
+ * а подсказка говорит, что отпускание пальцем ничего не изменит.
+ *
+ * Разница считается по ответу сессии, а не по памяти браузера: петля подаёт
+ * только то, чего на сенсоре ещё нет (`values[sensor]`). Поэтому на перемотке
+ * назад она молчит -- там величину держит запись, -- и переигранное прошлое не
+ * перезаписывается новыми событиями.
  *
  * Двух списков дверей здесь нет: сенсоры и моторы приходят с сервера вместе с
  * состоянием проекта (`SandboxState.sensors`, `.motors`), а панель только
@@ -20,7 +77,7 @@
  *
  * Самих кнопок в проекте нет: они живут в браузере (`state/board`) -- разбор
  * там же. Схема без сенсоров и моторов панели не получает вовсе: привязывать
- * нечего, и пустая полоса отбирала бы у холста высоту ни за чем.
+ * нечего, и пустая полоса отбирала бы у холста высоту.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -31,8 +88,8 @@ import {
   freeButtonId,
   readButtons,
   rememberButtons,
+  roleOf,
   type BoardButton,
-  type BoardRole,
 } from '../../state/board'
 
 export interface ButtonBoardProps {
@@ -49,13 +106,6 @@ export interface ButtonBoardProps {
   onSense: (values: Record<string, number>) => void
 }
 
-/** Дверь для поля выбора: сенсор и мотор описываются одинаково. */
-interface Door {
-  role: BoardRole
-  id: string
-  story: string
-}
-
 export function ButtonBoard({
   project,
   sensors,
@@ -70,7 +120,7 @@ export function ButtonBoard({
   const [buttons, setButtons] = useState<BoardButton[]>(() => readButtons(project))
   const [adding, setAdding] = useState(false)
   /**
-   * Что сейчас держат -- ровно затем, чтобы отпустить.
+   * Что сейчас держат пальцем -- ровно затем, чтобы отпустить.
    *
    * Не «нажато» (его спрашивают у сессии), а «мы уже послали единицу»: без
    * этого автоповтор клавиши слал бы её снова и снова, а уход окна из фокуса
@@ -78,31 +128,63 @@ export function ButtonBoard({
    */
   const held = useRef(new Set<string>())
 
-  const doors: Door[] = [
-    ...sensors.map((item) => ({ role: 'sensor' as const, id: item.id, story: item.story })),
-    ...motors.map((item) => ({
-      role: 'motor' as const,
-      id: item.id,
-      story: `${item.story}, ${item.unit}`,
-    })),
-  ]
-
   const keep = (next: BoardButton[]): void => {
     setButtons(next)
     rememberButtons(project, next)
   }
 
   const press = (button: BoardButton): void => {
-    if (button.role !== 'sensor' || !live) return
+    if (!button.sensor || !live) return
     if (held.current.has(button.id)) return
     held.current.add(button.id)
-    onSense({ [button.bind]: 1 })
+    // Петля могла уже держать этот бит: тогда подавать нечего -- он подан.
+    // Иначе палец, легший на горящую кнопку, послал бы вторую единицу в тот
+    // же сенсор и записал бы в поток входа событие, ничего не меняющее.
+    if (!values[button.sensor]) onSense({ [button.sensor]: 1 })
   }
 
   const release = (button: BoardButton): void => {
     if (!held.current.delete(button.id)) return
-    onSense({ [button.bind]: 0 })
+    if (!button.sensor) return
+    // Палец убран -- но бит держится, пока его держит мотор: это одно и то же
+    // «или», просто со стороны отпускания. Гасить чужой бит нельзя.
+    if (button.motor && output[button.motor]) return
+    onSense({ [button.sensor]: 0 })
   }
+
+  /**
+   * Петля: мотор зажёг кнопку -- сенсор получил единицу, мотор замолчал --
+   * ноль (#574).
+   *
+   * Подаётся **разница** между тем, чего петля хочет, и тем, что сессия уже
+   * держит на сенсоре. Не «мотор ненулевой -- шлём единицу»: ответ приходит
+   * опросом по шесть-семь раз в секунду, и ровное повторение своего же
+   * значения забило бы поток входа сотней одинаковых событий, каждое из
+   * которых стирает записанное после себя будущее (`Simulator.sense_at`). А
+   * заодно это и есть честное поведение на перемотке: там величину держит
+   * запись, разницы нет -- и петля молчит, не перезаписывая переигранное.
+   *
+   * Эффект зависит от ответов сессии (`values`, `output` -- новые объекты на
+   * каждом ответе), а не от каждой перерисовки: открытая форма заведения не
+   * повод спрашивать петлю заново.
+   *
+   * Пока палец держит ту же кнопку, петля не гасит её: бит -- «или», и
+   * замолчавший мотор не отменяет нажатого пальца.
+   */
+  useEffect(() => {
+    if (!live) return
+    for (const button of buttons) {
+      if (!button.sensor || !button.motor) continue
+      const lit = Boolean(output[button.motor])
+      const on = Boolean(values[button.sensor])
+      if (lit === on) continue
+      if (!lit && held.current.has(button.id)) continue
+      onSense({ [button.sensor]: lit ? 1 : 0 })
+    }
+    // `onSense` и `buttons` сюда не нужны как повод спрашивать заново: петлю
+    // спрашивает новый ответ сессии, а не новая ссылка на обработчик.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values, output, live, buttons])
 
   /**
    * Клавиша -- второй способ нажать ту же кнопку, а не второе понятие.
@@ -139,7 +221,7 @@ export function ButtonBoard({
     }
   })
 
-  if (!doors.length) return null
+  if (!sensors.length && !motors.length) return null
 
   return (
     <section className="bb" aria-label="Кнопки">
@@ -150,11 +232,15 @@ export function ButtonBoard({
           key={button.id}
           button={button}
           // Потерянная привязка -- не повод прятать кнопку: дверь убрали из
-          // схемы, и сказать об этом надо там, где на неё жмут.
-          lost={!doors.some((door) => door.role === button.role && door.id === button.bind)}
+          // схемы, и сказать об этом надо там, где на неё жмут. Сторон две, и
+          // потеряться может любая: кнопка петли, у которой убрали мотор,
+          // остаётся рабочим пальцем -- врать про неё «её больше нет» нельзя.
+          lostSensor={Boolean(button.sensor) && !sensors.some((one) => one.id === button.sensor)}
+          lostMotor={Boolean(button.motor) && !motors.some((one) => one.id === button.motor)}
           live={live}
-          value={button.role === 'sensor' ? values[button.bind] : output[button.bind]}
-          unit={button.role === 'motor' ? unitOf(motors, button.bind) : ''}
+          value={button.sensor ? values[button.sensor] : undefined}
+          out={button.motor ? output[button.motor] : undefined}
+          unit={button.motor ? unitOf(motors, button.motor) : ''}
           onPress={() => press(button)}
           onRelease={() => release(button)}
           onDrop={() => keep(buttons.filter((item) => item.id !== button.id))}
@@ -163,8 +249,8 @@ export function ButtonBoard({
 
       {adding ? (
         <NewButton
-          doors={doors}
-          first={doors[0]!}
+          sensors={sensors}
+          motors={motors}
           taken={buttons}
           onCancel={() => setAdding(false)}
           onAdd={(button) => {
@@ -176,7 +262,7 @@ export function ButtonBoard({
         <button
           type="button"
           className="sb-icon bb-add"
-          title="Завести кнопку и привязать её к сенсору или мотору"
+          title="Завести кнопку: она подаёт на сенсор, зажигается мотором или делает и то и другое — тогда это петля"
           onClick={() => setAdding(true)}
         >
           +
@@ -200,10 +286,15 @@ function unitOf(motors: SandboxMotor[], id: string): string {
 /**
  * Одна кнопка.
  *
- * Сенсорная нажимается и отпускается, моторная не нажимается совсем: у неё
- * нечего подавать, она показывает. Поэтому у моторной нет ни `pointerdown`, ни
- * клавиши, а есть число -- то самое, что отдаёт сеть, вместе с единицей от
- * сервера.
+ * Нажимается та, у которой привязан сенсор: только ей есть что подавать.
+ * Кнопка одного мотора не нажимается совсем -- она показывает; поэтому у неё
+ * нет ни `pointerdown`, ни клавиши, а есть число, то самое, что отдаёт сеть,
+ * вместе с единицей от сервера.
+ *
+ * Кнопка петли -- и то и другое сразу, и по виду это должно читаться (#574):
+ * у неё знак петли перед именем, а числом под именем стоит то, что отдаёт её
+ * мотор. Пока петля держит бит, знак горит: значит кнопку держит не палец, и
+ * отпускание пальцем её не погасит.
  *
  * Указатель захватывается на нажатии: без этого палец, съехавший с кнопки,
  * уносит с собой `pointerup`, и сенсор остаётся нажатым. Захват возвращает
@@ -211,41 +302,50 @@ function unitOf(motors: SandboxMotor[], id: string): string {
  */
 function Key({
   button,
-  lost,
+  lostSensor,
+  lostMotor,
   live,
   value,
+  out,
   unit,
   onPress,
   onRelease,
   onDrop,
 }: {
   button: BoardButton
-  lost: boolean
+  lostSensor: boolean
+  lostMotor: boolean
   live: boolean
+  /** Что держится на её сенсоре. У кнопки без сенсора -- `undefined`. */
   value: number | undefined
+  /** Что отдаёт её мотор. У кнопки без мотора -- `undefined`. */
+  out: number | undefined
   unit: string
   onPress: () => void
   onRelease: () => void
   onDrop: () => void
 }) {
-  const motor = button.role === 'motor'
-  const on = Boolean(value)
-  const dead = lost || (!motor && !live)
+  const role = roleOf(button)
+  const loop = role === 'loop'
+  const lamp = role === 'motor'
+  const lost = lostSensor || lostMotor
+  // Горит то, что уходит в сеть: у кнопки с сенсором -- её бит, у лампочки --
+  // число мотора. Один цвет на оба случая -- одно утверждение о границе.
+  const on = Boolean(button.sensor ? value : out)
+  /** Держит петля: мотор отдаёт, и бит на сенсоре уже стоит. */
+  const auto = loop && Boolean(out) && Boolean(value)
+  const dead = lost || (!button.sensor && !lamp) || (Boolean(button.sensor) && !live)
   return (
-    <span className={`bb-key${on ? ' is-on' : ''}${lost ? ' is-lost' : ''}`}>
+    <span
+      className={`bb-key${on ? ' is-on' : ''}${lost ? ' is-lost' : ''}${loop ? ' is-loop' : ''}`}
+    >
       <button
         type="button"
         className="bb-press"
         disabled={dead}
-        title={
-          lost
-            ? `${button.bind} в схеме больше нет`
-            : motor
-              ? `Горит, пока мотор ${button.bind} отдаёт ненулевое`
-              : `Держать — ${button.bind} получает 1, отпустить — 0`
-        }
+        title={title(button, lostSensor, lostMotor, auto)}
         onPointerDown={(event) => {
-          if (motor) return
+          if (!button.sensor) return
           onPress()
           // Захват -- удобство, а не условие нажатия, поэтому он идёт после
           // подачи и в try: браузер отказывает в нём, когда указателя с таким
@@ -263,29 +363,57 @@ function Key({
         // другая. Своя клавиша (`button.key`) это не отменяет: та работает без
         // фокуса, а эта -- у того, кто дошёл до кнопки табуляцией.
         onKeyDown={(event) => {
-          if (motor || (event.key !== ' ' && event.key !== 'Enter')) return
+          if (!button.sensor || (event.key !== ' ' && event.key !== 'Enter')) return
           event.preventDefault()
           onPress()
         }}
         onKeyUp={(event) => {
-          if (motor || (event.key !== ' ' && event.key !== 'Enter')) return
+          if (!button.sensor || (event.key !== ' ' && event.key !== 'Enter')) return
           onRelease()
         }}
       >
-        <span className="bb-name">{button.name}</span>
-        <span className="mono bb-sub">
-          {motor
-            ? `${format(value)}${unit ? ` ${unit}` : ''}`
-            : button.key
-              ? keyLabel(button.key)
-              : button.bind}
+        <span className="bb-name">
+          {/* Знак петли -- на самой кнопке, а не в подсказке: подсказку
+              читают после наведения, а «эта кнопка и жмётся, и горит» надо
+              видеть, ни на что не наводя. */}
+          {loop ? (
+            <span className={`bb-loop${auto ? ' is-held' : ''}`} aria-hidden="true">
+              ⟳
+            </span>
+          ) : null}
+          {button.name}
         </span>
+        <span className="mono bb-sub">{sub(button, out, unit)}</span>
       </button>
       <button type="button" className="bb-drop" title="Убрать кнопку" onClick={onDrop}>
         ×
       </button>
     </span>
   )
+}
+
+/** Подпись под именем: у чего есть мотор -- его число, иначе клавиша или дверь. */
+function sub(button: BoardButton, out: number | undefined, unit: string): string {
+  if (button.motor) return `${format(out)}${unit ? ` ${unit}` : ''}`
+  return button.key ? keyLabel(button.key) : (button.sensor ?? '')
+}
+
+/** Что сказать о кнопке наведением: потерянное, петля, палец, лампочка. */
+function title(
+  button: BoardButton,
+  lostSensor: boolean,
+  lostMotor: boolean,
+  auto: boolean,
+): string {
+  if (lostSensor && lostMotor) return `${button.sensor} и ${button.motor} в схеме больше нет`
+  if (lostSensor) return `сенсора ${button.sensor} в схеме больше нет`
+  if (lostMotor) return `мотора ${button.motor} в схеме больше нет`
+  if (button.sensor && button.motor) {
+    const loop = `Петля: мотор ${button.motor} зажигает её, сенсор ${button.sensor} получает 1. Держать можно и рукой — это тот же бит`
+    return auto ? `${loop}. Сейчас её держит петля: отпускание рукой её не погасит` : loop
+  }
+  if (button.motor) return `Горит, пока мотор ${button.motor} отдаёт ненулевое`
+  return `Держать — ${button.sensor} получает 1, отпустить — 0`
 }
 
 /** Число мотора коротко: длинная дробь на кнопке шириной в слово не читается. */
@@ -295,48 +423,54 @@ function format(value: number | undefined): string {
 }
 
 /**
- * Форма заведения: имя, дверь и клавиша.
+ * Форма заведения: имя, две привязки и клавиша.
  *
- * Дверь выбирается из того, что пришло с сервера, и поэтому же форма не
- * спрашивает род отдельно: сенсор от мотора отличает сам список, а лишний
- * вопрос «это кнопка или лампочка» позволял бы ответить неправильно.
+ * Привязки спрашиваются отдельными полями, а не одним списком дверей, как было
+ * в #562: у кнопки их две, и «сенсор или мотор» одним выбором петлю завести не
+ * даёт. Каждое поле необязательно -- первым пунктом стоит «нет», -- но обе
+ * пустыми быть не могут: такая кнопка ничего не делает, и завести её значило
+ * бы поставить на панель украшение.
  *
- * Имя подставляется по имени двери -- в схеме из одного сенсора его и менять
- * незачем, а в схеме из шести кнопка «Газ» отличается от кнопки «Тормоз»
- * именно им.
+ * Род отдельным вопросом по-прежнему не спрашивается: чем кнопка стала, видно
+ * по тому, что в ней привязано, а лишний вопрос «это кнопка, лампочка или
+ * петля» позволял бы ответить неправильно.
+ *
+ * Имя подставляется по первой названной двери -- в схеме из одного сенсора его
+ * и менять незачем, а в схеме из шести кнопка «Газ» отличается от кнопки
+ * «Тормоз» именно им.
  */
 function NewButton({
-  doors,
-  first,
+  sensors,
+  motors,
   taken,
   onCancel,
   onAdd,
 }: {
-  doors: Door[]
-  /** Дверь по умолчанию. Отдельным полем: список непуст, но тип этого не знает. */
-  first: Door
+  sensors: SandboxSensor[]
+  motors: SandboxMotor[]
   taken: BoardButton[]
   onCancel: () => void
   onAdd: (button: BoardButton) => void
 }) {
-  const [at, setAt] = useState(doorId(first))
-  const [name, setName] = useState(first.id)
+  // Первая дверь предлагается сама: схема чаще всего об одном сенсоре, и
+  // заводить кнопку в ней -- это два щелчка, а не выбор из списка в один пункт.
+  const [sensor, setSensor] = useState<string>(sensors[0]?.id ?? '')
+  const [motor, setMotor] = useState<string>(sensors.length ? '' : (motors[0]?.id ?? ''))
+  const [name, setName] = useState(sensors[0]?.id ?? motors[0]?.id ?? '')
   const [key, setKey] = useState<string | null>(null)
-  // Дверь ищется по значению поля, а не разбирается из него обратно: строка
-  // `sensor:key` -- ключ списка, а не второе место, где написано, что такое
-  // род и имя двери.
-  const chosen = doors.find((door) => doorId(door) === at) ?? first
+  const nothing = !sensor && !motor
 
   return (
     <form
       className="bb-new"
       onSubmit={(event) => {
         event.preventDefault()
+        if (nothing) return
         onAdd({
           id: freeButtonId(taken),
-          name: name.trim() || chosen.id,
-          role: chosen.role,
-          bind: chosen.id,
+          name: name.trim() || sensor || motor,
+          sensor: sensor || null,
+          motor: motor || null,
           key,
         })
       }}
@@ -350,17 +484,33 @@ function NewButton({
       />
       <select
         className="bb-field"
-        aria-label="К чему привязать"
-        value={at}
+        aria-label="Подаёт на сенсор"
+        value={sensor}
         onChange={(event) => {
-          const door = doors.find((item) => doorId(item) === event.target.value) ?? first
-          setAt(doorId(door))
-          setName(door.id)
+          setSensor(event.target.value)
+          if (event.target.value) setName(event.target.value)
         }}
       >
-        {doors.map((door) => (
-          <option key={doorId(door)} value={doorId(door)} title={door.story}>
-            {door.role === 'sensor' ? 'сенсор' : 'мотор'} {door.id} · {door.story}
+        <option value="">без сенсора</option>
+        {sensors.map((one) => (
+          <option key={one.id} value={one.id} title={one.story}>
+            сенсор {one.id} · {one.story}
+          </option>
+        ))}
+      </select>
+      <select
+        className="bb-field"
+        aria-label="Зажигается мотором"
+        value={motor}
+        onChange={(event) => {
+          setMotor(event.target.value)
+          if (event.target.value && !sensor) setName(event.target.value)
+        }}
+      >
+        <option value="">без мотора</option>
+        {motors.map((one) => (
+          <option key={one.id} value={one.id} title={one.story}>
+            мотор {one.id} · {one.story}, {one.unit}
           </option>
         ))}
       </select>
@@ -385,17 +535,35 @@ function NewButton({
       >
         {key ? keyLabel(key) : 'клавиша'}
       </button>
-      <button type="submit" className="btn-secondary">
+      <button
+        type="submit"
+        className="btn-secondary"
+        disabled={nothing}
+        title={
+          nothing
+            ? 'Кнопка без привязок ничего не делает: выберите сенсор, мотор или оба сразу'
+            : sensor && motor
+              ? 'Кнопка с двумя привязками: мотор её зажигает, сенсор получает от неё 1 — это петля'
+              : 'Завести кнопку'
+        }
+      >
         Завести
       </button>
       <button type="button" className="btn-secondary" onClick={onCancel}>
         Отмена
       </button>
+      {/* Что получится, сказано до нажатия «Завести», а не после: петля
+          собирается ровно здесь, и узнать о ней по виду заведённой кнопки --
+          это узнать после того, как выбор уже сделан. */}
+      <span className="bb-note">
+        {sensor && motor
+          ? 'Петля: мотор зажигает кнопку, сенсор получает от неё 1 — сеть чувствует собственное действие'
+          : sensor
+            ? 'Палец: нажали — сенсор получил 1, отпустили — 0'
+            : motor
+              ? 'Лампочка: горит, пока мотор отдаёт ненулевое'
+              : 'Выберите сенсор, мотор или оба сразу'}
+      </span>
     </form>
   )
-}
-
-/** Дверь строкой -- значение поля выбора и ключ строки списка. */
-function doorId(door: Door): string {
-  return `${door.role}:${door.id}`
 }

@@ -1,6 +1,7 @@
 /**
  * Панель кнопок: нажатие, отпускание, лампочка мотора и отсутствие панели
- * там, где привязывать нечего (#562).
+ * там, где привязывать нечего (#562), и петля через внешний мир -- одна
+ * кнопка, привязанная и к мотору, и к сенсору (#574).
  *
  * Здесь настоящий React и настоящая разметка, потому что проверяется именно
  * поведение панели: что уходит в сессию на нажатие и отпускание, чем горит
@@ -105,8 +106,16 @@ function saved(...buttons: BoardButton[]): void {
   rememberButtons('p1', buttons)
 }
 
-const GAS: BoardButton = { id: 'btn1', name: 'Газ', role: 'sensor', bind: 'key', key: 'KeyG' }
-const LAMP: BoardButton = { id: 'btn2', name: 'Ход', role: 'motor', bind: 'out', key: null }
+const GAS: BoardButton = {
+  id: 'btn1',
+  name: 'Газ',
+  sensor: 'key',
+  motor: null,
+  key: 'KeyG',
+}
+const LAMP: BoardButton = { id: 'btn2', name: 'Ход', sensor: null, motor: 'out', key: null }
+/** Кнопка петли: та же дверь внутрь и та же дверь наружу на одной кнопке (#574). */
+const LOOP: BoardButton = { id: 'btn3', name: 'Петля', sensor: 'key', motor: 'out', key: 'KeyL' }
 
 beforeEach(() => {
   localStorage.clear()
@@ -238,11 +247,11 @@ describe('кнопки заводят и убирают', () => {
     act(() => {
       ;(host.querySelector('.bb-add') as HTMLElement).click()
     })
-    const choice = host.querySelector('.bb-new select') as HTMLSelectElement
-    // В списке ровно то, что пришло с сервера: выдумывать двери нельзя.
-    expect([...choice.options].map((item) => item.value)).toEqual([
-      'sensor:key',
-      'motor:out',
+    const fields = [...host.querySelectorAll('.bb-new select')] as HTMLSelectElement[]
+    // В списках ровно то, что пришло с сервера: выдумывать двери нельзя.
+    expect(fields.map((field) => [...field.options].map((item) => item.value))).toEqual([
+      ['', 'key'],
+      ['', 'out'],
     ])
 
     act(() => {
@@ -286,5 +295,137 @@ describe('кнопки заводят и убирают', () => {
     expect(keys()).toHaveLength(0)
     await again({})
     expect(keys()).toHaveLength(0)
+  })
+})
+
+describe('петля: одна кнопка -- и мотор, и сенсор (#574)', () => {
+  it('мотор отдал ненулевое -- сенсор получил единицу', async () => {
+    saved(LOOP)
+    await mount({ output: { out: 40 } })
+
+    expect(sent).toEqual([{ key: 1 }])
+  })
+
+  it('мотор замолчал -- сенсор получил ноль', async () => {
+    saved(LOOP)
+    await mount({ output: { out: 40 }, values: { key: 1 } })
+    expect(sent).toEqual([])
+
+    await again({ output: { out: 0 }, values: { key: 1 } })
+
+    expect(sent).toEqual([{ key: 0 }])
+  })
+
+  it('петля подаёт разницу, а не своё же значение по разу на ответ', async () => {
+    // Иначе поток входа забился бы сотней одинаковых событий, каждое из
+    // которых стирает записанное после себя будущее. Это же и есть молчание
+    // на перемотке: там величину держит запись, и разницы нет.
+    saved(LOOP)
+    await mount({ output: { out: 40 }, values: { key: 1 } })
+
+    await again({ output: { out: 40 }, values: { key: 1 } })
+    await again({ output: { out: 41 }, values: { key: 1 } })
+
+    expect(sent).toEqual([])
+  })
+
+  it('палец на кнопке, которую держит петля, второй единицы не шлёт', async () => {
+    saved(LOOP)
+    await mount({ output: { out: 40 }, values: { key: 1 } })
+
+    pressAt(0)
+
+    expect(sent).toEqual([])
+  })
+
+  it('палец убран, а мотор держит -- бит не гаснет: это «или», а не спор', async () => {
+    saved(LOOP)
+    await mount()
+
+    pressAt(0)
+    expect(sent).toEqual([{ key: 1 }])
+    // Сеть ответила: мотор пошёл, величина держится.
+    await again({ output: { out: 40 }, values: { key: 1 } })
+    releaseAt(0)
+
+    expect(sent).toEqual([{ key: 1 }])
+  })
+
+  it('мотор замолчал, а палец держит -- петля не гасит чужой бит', async () => {
+    saved(LOOP)
+    await mount()
+
+    pressAt(0)
+    await again({ output: { out: 0 }, values: { key: 1 } })
+
+    expect(sent).toEqual([{ key: 1 }])
+  })
+
+  it('без сессии петля молчит: подавать некуда', async () => {
+    saved(LOOP)
+    await mount({ output: { out: 40 }, live: false })
+
+    expect(sent).toEqual([])
+  })
+
+  it('кнопка петли читается как петля и показывает, кто её держит', async () => {
+    saved(LOOP)
+    await mount({ output: { out: 40 }, values: { key: 1 } })
+
+    const key = keys()[0]!
+    expect(key.className).toContain('is-loop')
+    expect(key.querySelector('.bb-loop')).not.toBeNull()
+    // Держит петля -- знак горит, и подсказка говорит, что рукой не погасить.
+    expect(key.querySelector('.bb-loop')?.className).toContain('is-held')
+    expect(key.querySelector('.bb-press')?.getAttribute('title')).toContain('петля')
+
+    // Мотор замолчал, бит сняли -- знак на месте, но уже не горит.
+    await again({ output: { out: 0 }, values: { key: 0 } })
+    expect(keys()[0]!.querySelector('.bb-loop')?.className).not.toContain('is-held')
+  })
+
+  it('у кнопки петли убрали мотор -- она остаётся рабочим пальцем и говорит об этом', async () => {
+    saved(LOOP)
+    await mount({ motors: [] })
+
+    expect(keys()[0]!.className).toContain('is-lost')
+    expect(keys()[0]!.querySelector('.bb-press')?.getAttribute('title')).toContain('мотора out')
+  })
+
+  it('петля заводится из формы: две привязки разом', async () => {
+    await mount()
+
+    act(() => {
+      ;(host.querySelector('.bb-add') as HTMLElement).click()
+    })
+    const fields = [...host.querySelectorAll('.bb-new select')] as HTMLSelectElement[]
+    act(() => {
+      fields[1]!.value = 'out'
+      fields[1]!.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    act(() => {
+      ;(host.querySelector('.bb-new') as HTMLFormElement).dispatchEvent(
+        new Event('submit', { bubbles: true, cancelable: true }),
+      )
+    })
+
+    expect(keys()).toHaveLength(1)
+    expect(keys()[0]!.className).toContain('is-loop')
+  })
+
+  it('кнопка без единой привязки не заводится: делать ей нечего', async () => {
+    await mount()
+
+    act(() => {
+      ;(host.querySelector('.bb-add') as HTMLElement).click()
+    })
+    const fields = [...host.querySelectorAll('.bb-new select')] as HTMLSelectElement[]
+    act(() => {
+      fields[0]!.value = ''
+      fields[0]!.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    const submit = host.querySelector('.bb-new button[type="submit"]') as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
   })
 })
