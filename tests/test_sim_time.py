@@ -143,11 +143,11 @@ def test_a_snapshot_does_not_follow_the_simulation(ffi):
     assert mark.step == 500
 
 
-def _queue(simulator: Simulator) -> list[tuple[int, tuple[tuple[int, float], ...]]]:
+def _queue(simulator: Simulator) -> list[tuple[int, tuple[int, ...]]]:
     """Очередь доставок номерами синапсов -- в том же виде, в каком её хранит снимок."""
     numbers = {id(synapse): n for n, synapse in enumerate(simulator.all_synapses)}
     return sorted(
-        (step, tuple((numbers[id(synapse)], amplitude) for synapse, amplitude in items))
+        (step, tuple(numbers[id(synapse)] for synapse in items))
         for step, items in simulator.pending.items()
     )
 
