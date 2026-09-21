@@ -88,3 +88,21 @@ record SST.soma.g_inh
 record PYR.soma.g_inh
 
 run { dt = 0.1ms  duration = 600ms  level = L1  seed = 3 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    PYR.spikes = 6   start=0ms   stop=200ms
+    PYR.spikes = 12  start=200ms stop=400ms
+    PYR.spikes = 7   start=400ms stop=600ms
+    IN.spikes  = 28  start=0ms   stop=200ms
+    IN.spikes  = 31  start=200ms stop=400ms
+    IN.spikes  = 26  start=400ms stop=600ms
+    SST.spikes = 21  start=0ms   stop=200ms
+    SST.spikes = 12  start=200ms stop=400ms
+    SST.spikes = 27  start=400ms stop=600ms
+    PYR.soma.g_inh.mean = 1.54nS start=0ms   stop=200ms
+    PYR.soma.g_inh.mean = 0.82nS start=200ms stop=400ms
+    PYR.soma.g_inh.mean = 2.09nS start=400ms stop=600ms
+    PYR.soma.w.max   = 2.2000nS start=0ms stop=420ms
+    PYR.soma.w.final = 3.0217nS
+}

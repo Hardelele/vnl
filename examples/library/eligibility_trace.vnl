@@ -83,3 +83,14 @@ record E_SHORT.soma.w
 record VTA.soma.spikes
 
 run { dt = 0.1ms  duration = 700ms  level = L1  seed = 3 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    IN.spikes      = 19
+    E_LONG.spikes  = 9
+    E_SHORT.spikes = 9
+    E_LONG.soma.w.max    = 2.2000nS start=0ms stop=450ms
+    E_SHORT.soma.w.max   = 2.2000nS start=0ms stop=450ms
+    E_LONG.soma.w.final  = 2.5171nS
+    E_SHORT.soma.w.final = 2.2000nS
+}

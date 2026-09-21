@@ -42,3 +42,9 @@ record E1.soma.g_inh
 record POOL.soma.spikes
 
 run { dt = 0.1ms  duration = 470ms  level = L1  seed = 17 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    E1.spikes = 10 start=50ms  stop=200ms
+    E1.spikes = 8  start=260ms stop=460ms
+}

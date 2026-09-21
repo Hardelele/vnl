@@ -61,3 +61,11 @@ record FAR.soma.v
 stim drive -> IN.soma : spikes weight=3nS times="20 60 100 140 180 220 260 300"
 
 run { dt = 0.1ms  duration = 340ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    NEAR.spikes = 8
+    FAR.spikes  = 8
+    NEAR.first_spike = 24.4ms
+    FAR.first_spike  = 33.4ms
+}

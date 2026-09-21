@@ -59,3 +59,11 @@ record E.soma.g_exc
 record E.soma.g_inh
 
 run { dt = 0.1ms  duration = 420ms  level = L1  seed = 5 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    E.spikes = 12
+    E.spikes = 0  start=150ms stop=300ms
+    E.soma.g_inh.max = 6.7nS
+    E.soma.v.min     = -69.2mV
+}

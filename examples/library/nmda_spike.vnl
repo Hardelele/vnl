@@ -114,3 +114,20 @@ record EN.soma.g_exc
 record EB.soma.spikes
 
 run { dt = 0.1ms  duration = 1100ms  level = L1  seed = 1 }
+
+# Заявленное шапкой -- машинно: числа сверяются прогоном (#501).
+expect {
+    EA.soma.v.max = 3.30mV  base=-65mV start=100ms stop=350ms
+    EN.soma.v.max = 3.22mV  base=-65mV start=100ms stop=350ms
+    EA.soma.v.max = 9.32mV  base=-65mV start=350ms stop=700ms
+    EN.soma.v.max = 14.29mV base=-65mV start=350ms stop=700ms
+    EA.soma.v.max = 12.07mV base=-65mV start=700ms stop=1100ms
+    EN.soma.v.max = 24.63mV base=-65mV start=700ms stop=1100ms
+    EN.soma.v.time_above = 0.0ms  level=-50mV start=350ms stop=700ms
+    EN.soma.v.time_above = 65.7ms level=-50mV start=700ms stop=1100ms
+    EB.spikes = 0 start=100ms stop=350ms
+    EB.spikes = 0 start=350ms stop=700ms
+    EB.spikes = 2 start=700ms stop=1100ms
+    sweep "m4.weight=0,0.1,0.2,0.4,0.95" EN.soma.v.max = 14.39, 15.25, 16.16, 18.12, 24.63  base=-65mV start=700ms stop=1100ms
+    sweep "m4.weight=0,0.1,0.2,0.4,0.95" EN.soma.v.time_above = 0.0, 11.5, 24.5, 39.5, 65.7  level=-50mV start=700ms stop=1100ms
+}

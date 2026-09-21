@@ -15,6 +15,7 @@ from .morphology import MorphologyError
 from .parser import (
     ParsedModel,
     PendingContact,
+    PendingExpectation,
     PendingMotor,
     PendingRecording,
     PendingSensor,
@@ -492,6 +493,123 @@ def _check_point_model(resolver: _Resolver, cell_type: ir.CellType) -> None:
         )
 
 
+_EXPECT_PARAMS = {"start", "stop", "base", "index", "level"}
+
+
+def _expectation(
+    resolver: _Resolver, model: ir.Model, pending: PendingExpectation
+) -> ir.Expectation | None:
+    """`E.soma.g_exc.max = 2.09nS` -> `ir.Expectation` с проверенным адресом.
+
+    Проверяется здесь всё, что можно проверить без прогона: есть ли такой
+    нейрон, записана ли величина, знакомо ли уточнение. Ожидание на незаписанную
+    трассу -- самая обидная ошибка этого оператора: прогон молча не найдёт
+    величину, и «проверка прошла» будет значить «проверять было нечего».
+    """
+    where = f"expect (строка {pending.line})"
+    head, _, measure = pending.path.rpartition(".")
+
+    target = ""
+    if measure in ir.NEURON_MEASURES:
+        if not head or "." in head:
+            resolver.error(
+                where,
+                f"{pending.path!r}: величина растра пишется как <нейрон>.{measure}",
+            )
+            return None
+        if head not in resolver.parsed.instances:
+            known = ", ".join(sorted(resolver.parsed.instances)) or "нейронов нет"
+            resolver.error(where, f"неизвестный нейрон {head!r} (есть: {known})")
+            return None
+        target = head
+    elif measure in ir.TRACE_MEASURES:
+        address, _, var = head.rpartition(".")
+        if not var or var not in ir.RECORDED:
+            resolver.error(
+                where,
+                f"{pending.path!r}: величина трассы пишется как "
+                f"<нейрон>.<участок>.<что>.{measure}, где <что> -- одно из "
+                f"{', '.join(sorted(ir.RECORDED))}",
+            )
+            return None
+        if not address:
+            resolver.error(where, f"{pending.path!r}: не сказано, у какой клетки")
+            return None
+        site = resolver.site(address, where, "soma")
+        if site is None:
+            return None
+        target = ir.trace_key(site.instance, site.section, var)
+        if target not in {
+            ir.trace_key(r.target.instance, r.target.section, r.var)
+            for r in model.recordings
+        }:
+            resolver.error(
+                where,
+                f"величина {target} не записана: ожидание сверять не с чем; "
+                f"нужна строка record {site.instance}.{site.section}.{var}",
+            )
+            return None
+    else:
+        known = ", ".join(sorted({*ir.NEURON_MEASURES, *ir.TRACE_MEASURES}))
+        resolver.error(where, f"неизвестная величина {measure!r} (есть: {known})")
+        return None
+
+    unknown = set(pending.params) - _EXPECT_PARAMS
+    if unknown:
+        resolver.error(
+            where,
+            f"непонятное уточнение {', '.join(sorted(unknown))} "
+            f"(есть: {', '.join(sorted(_EXPECT_PARAMS))}, tol)",
+        )
+        return None
+
+    if pending.sweep:
+        # Ряд развёртки -- одно утверждение: «13, 11, 6». Ряд не той длины
+        # означает, что число вариантов и число заявленных значений разошлись,
+        # и молча сверить первые три из четырёх было бы худшим исходом.
+        from .sweep import SweepError, parse_spec
+
+        try:
+            _, values = parse_spec(pending.sweep)
+        except SweepError as exc:
+            resolver.error(where, f"развёртка {pending.sweep!r}: {exc}")
+            return None
+        if len(values) != len(pending.values):
+            resolver.error(
+                where,
+                f"у развёртки {pending.sweep!r} вариантов {len(values)}, "
+                f"а заявленных чисел {len(pending.values)}",
+            )
+            return None
+    elif len(pending.values) != 1:
+        resolver.error(where, "ряд чисел бывает только у развёртки")
+        return None
+
+    if measure == "spikes" and any(
+        abs(value - round(value)) > 1e-9 for value in pending.values
+    ):
+        resolver.error(where, "спайки целые: дробное ожидание сверять не с чем")
+        return None
+
+    return ir.Expectation(
+        measure=measure,
+        target=target,
+        values=pending.values,
+        tolerance=pending.tolerance,
+        sweep=pending.sweep,
+        start=float(pending.params.get("start", 0.0)),
+        stop=float(pending.params.get("stop", float("inf"))),
+        base=float(pending.params.get("base", 0.0)),
+        index=int(pending.params.get("index", 1)),
+        level=float(pending.params.get("level", 0.0)),
+        text=f"{'sweep ' + pending.sweep + ' ' if pending.sweep else ''}"
+        f"{pending.path}",
+        unit=pending.unit,
+        factor=pending.factor,
+        line=pending.line,
+    )
+
+
 def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Diagnostic]]:
     """ParsedModel -> Model с разрешёнными адресами.
 
@@ -613,6 +731,16 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
         unique.append(recording)
     model.recordings = unique
 
+    # Ожидания разбираются последними: величина проверяется по списку записей,
+    # а он окончателен только после отсева дублей.
+    model.expectations = [
+        expectation
+        for expectation in (
+            _expectation(resolver, model, pending) for pending in parsed.expectations
+        )
+        if expectation is not None
+    ]
+
     seen: set[str] = set()
     for contact in model.contacts:
         if contact.id in seen:
@@ -624,6 +752,17 @@ def resolve(parsed: ParsedModel, strict: bool = True) -> tuple[ir.Model, list[Di
     # оттуда же его берёт песочница через `compose`.
     for caution in protocols.cautions(model):
         resolver.warn("протокол", caution)
+
+    # Что из написанного драйва не дойдёт до клетки (#512). Здесь, а не в
+    # `resolver.stimulus`: окно и потолок меряются шагом и длительностью
+    # прогона, а `run` к моменту разбора стимула ещё не обязан быть разобран --
+    # порядок операторов в файле свободный.
+    for severity, stim_id, message in protocols.delivery_problems(model):
+        where = f"стимул {stim_id}"
+        if severity == "error":
+            resolver.error(where, message)
+        else:
+            resolver.warn(where, message)
 
     for sensor in model.sensors.values():
         if not sensor.targets:
