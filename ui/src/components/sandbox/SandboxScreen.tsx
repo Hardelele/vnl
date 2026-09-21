@@ -22,7 +22,7 @@
  * которую он сам только что открыл, -- ровно то, о чём он попросил щелчком.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { historyCommand, objectCommand } from '../../lib/keys'
 import { CELLS, counted } from '../../lib/plural'
@@ -41,6 +41,7 @@ import { Timeline } from '../live/Timeline'
 import { Transport } from '../live/Transport'
 import { ActivityPanel } from './ActivityPanel'
 import { ButtonBoard } from './ButtonBoard'
+import { FieldPanel } from './FieldPanel'
 import { arrangement } from './arrange'
 import { Canvas } from './Canvas'
 import { LibraryRow } from './LibraryRow'
@@ -191,6 +192,22 @@ export function SandboxScreen({
   /** Граница с миром на текущем моменте: по ней горят кнопки (#562). */
   const sensed = useSim((state) => state.sensors)
   const acted = useSim((state) => state.motors)
+  /** Кадры полей: приходят не с каждым ответом, а по требованию (#581). */
+  const frames = useSim((state) => state.frames)
+  /**
+   * Кнопкам -- только те двери, у которых величина одна (#581).
+   *
+   * На поле кнопку не повесишь: её бит лёг бы в первый пиксель из 576, и
+   * сервер такую подачу отвергает. Отбор здесь, а не в панели кнопок: панель
+   * про поля не знает и знать не должна -- она про пальцы и лампочки.
+   */
+  const pressed = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const [name, value] of Object.entries(sensed)) {
+      if (typeof value === 'number') out[name] = value
+    }
+    return out
+  }, [sensed])
   const spikes = useSim((state) => state.spikes)
   const traces = useSim((state) => state.traces)
   const dt = useSim((state) => state.dt)
@@ -198,6 +215,16 @@ export function SandboxScreen({
   const simDenied = useSim((state) => state.denied)
   const simId = useSim((state) => state.id)
   const built = useSim((state) => state.built)
+
+  // Поле появилось в проекте (вставили «Сетчатку», открыли проект заново), а
+  // сессия могла идти и раньше: на поле уже что-то держится, и панель обязана
+  // показать это, а не пустую сетку до первого показа.
+  useEffect(() => {
+    if (simId && project?.fields?.length) void sim.look()
+    // Спрашивается при смене сессии и появлении полей, а не на каждом кадре:
+    // кадр меняется только тогда, когда его сменили.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simId, project?.fields?.length])
 
   useEffect(() => {
     // Без входа список песочниц запрашивать нечем: сервер откажет. Сюда так и
@@ -1231,12 +1258,29 @@ export function SandboxScreen({
 
           `key` по проекту: кнопки помнятся отдельно для каждого, и панель, не
           пересозданная при смене проекта, показывала бы чужие. */}
+      {/* Панель поля -- ниже кнопок и по той же причине, по которой кнопки
+          стоят под холстом: на неё смотрят вместе со схемой и растром. Схемы
+          без полей она не касается вовсе -- решает это сама панель по списку
+          собранной сети (#581).
+
+          Кадры спрашиваются при появлении поля в проекте: сессия могла идти и
+          до того, как панель открыли, и кадр на поле уже держаться. */}
+      <FieldPanel
+        fields={project.fields ?? []}
+        cells={cells}
+        spikes={spikes}
+        elapsed={time}
+        live={Boolean(simId)}
+        frames={frames}
+        onShow={(field, what) => void sim.show(field, what)}
+      />
+
       <ButtonBoard
         key={project.id}
         project={project.id}
         sensors={project.sensors}
         motors={project.motors}
-        values={sensed}
+        values={pressed}
         output={acted}
         live={Boolean(simId)}
         // Пустому проекту полоса не нужна вовсе: там кнопок ещё не ищут.

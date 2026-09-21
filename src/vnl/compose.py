@@ -360,6 +360,13 @@ def _unfold(
             if contact.id.startswith(prefix) and contact.plasticity.modulator == name:
                 contact.plasticity.modulator = prefix + name
 
+    # Слои блока -- с той же приставкой, что и клетки (#581). Клетки слоя в
+    # сеть уже переехали обычным порядком; без этой записи из проекта нельзя
+    # узнать, что `retina24/R[3,7]` -- часть сетки 24x24, и рисовать отклик
+    # поля было бы нечем: 576 клеток есть, а сетки нет.
+    for name, population in inner.populations.items():
+        model.populations[prefix + name] = replace(population, id=prefix + name)
+
     # Граница с миром -- часть схемы, а не витрины: паттерн, у которого
     # объявлен сенсор, честно сообщает, что ему нужно снаружи, и молча терять
     # эту дверь при вставке блока нельзя. Имена разводятся той же приставкой,

@@ -33,7 +33,7 @@ import os
 import sys
 import threading
 import time as clock
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -239,6 +239,36 @@ class Session:
             event = self.simulator.sense_at(self.elapsed, sensor_id, value)
             self._gate.notify_all()
             return event
+
+    def show(self, sensor_id: str, frame: Sequence[float]) -> SenseEvent:
+        """Показать полю кадр -- на текущем модельном времени сессии (#581).
+
+        То же самое, что `sense`, и отличается ровно тем, чем поле отличается
+        от кнопки: величин много и приходят они разом. Момент так же берётся у
+        сессии, кадр так же ложится в запись входа, и перемотка так же
+        переигрывает его оттуда -- показанная на 137-й букву видно на 137-й и
+        после десяти перемоток.
+        """
+        with self._gate:
+            event = self.simulator.sense_frame(self.elapsed, sensor_id, frame)
+            self._gate.notify_all()
+            return event
+
+    def frames(self) -> dict[str, list[float]]:
+        """Кадры, которые сейчас держатся на полях -- по требованию (#581).
+
+        Отдельно от `update`, а не полем в нём: ответ сессии уходит на каждый
+        кадр показа, и 576 чисел в каждом -- это поток ради картинки, которая
+        меняется только тогда, когда её сменили. Интерфейс спрашивает кадр,
+        когда показал его сам или когда открыл панель, а не двадцать раз в
+        секунду.
+        """
+        held = self.simulator.held(self.elapsed)
+        return {
+            name: [float(x) for x in value]
+            for name, value in held.items()
+            if not isinstance(value, (int, float))
+        }
 
     def seek(self, time: float) -> None:
         """Встать на выбранный момент: движок откатывается, а не курсор едет.

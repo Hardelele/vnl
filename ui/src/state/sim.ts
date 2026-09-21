@@ -27,10 +27,14 @@ import {
   readSim,
   resetSim,
   seekSim,
+  readFrames,
   senseSim,
+  showSim,
   startSim,
   stepSim,
   type CellState,
+  type FieldSummary,
+  type Shown,
   type SimState,
   type SimTarget,
   type SimUpdate,
@@ -63,8 +67,17 @@ export interface SimView {
    * ответом на тот же вопрос -- и разошлось бы с первым на перемотке, где
    * палец на кнопке, а прогон стоит на моменте до нажатия.
    */
-  sensors: Record<string, number>
+  sensors: Record<string, number | FieldSummary>
   motors: Record<string, number>
+  /**
+   * Кадры, которые держатся на полях (#581).
+   *
+   * Не приходят с каждым ответом сессии -- 576 величин на кадр показа были бы
+   * потоком ради картинки, которая меняется, только когда её сменили.
+   * Спрашиваются отдельно: после показа и при открытии панели над уже идущей
+   * сессией.
+   */
+  frames: Record<string, number[]>
   degradation: string[]
   busy: boolean
   error: string | null
@@ -86,6 +99,7 @@ const EMPTY: SimView = {
   cells: {},
   sensors: {},
   motors: {},
+  frames: {},
   degradation: [],
   busy: false,
   error: null,
@@ -102,6 +116,8 @@ export interface SimPorts {
   seek: (id: string, time: number) => Promise<SimUpdate>
   step: (id: string, delta: number) => Promise<SimUpdate>
   sense: (id: string, values: Record<string, number>) => Promise<SimUpdate>
+  show: (id: string, frames: Record<string, Shown>) => Promise<SimUpdate>
+  frames: (id: string) => Promise<Record<string, number[]>>
   drop: (id: string) => Promise<void>
   /** Повторяющийся вызов. Параметром -- чтобы тест не ждал настоящие миллисекунды. */
   every: (run: () => void, delay: number) => () => void
@@ -116,6 +132,8 @@ const DEFAULT_PORTS: SimPorts = {
   seek: seekSim,
   step: stepSim,
   sense: senseSim,
+  show: showSim,
+  frames: readFrames,
   drop: closeSim,
   every: (run, delay) => {
     const timer = setInterval(run, delay)
@@ -144,6 +162,10 @@ export interface SimController {
    * идёт как шло -- подача ничего в сессии не останавливает.
    */
   sense: (values: Record<string, number>) => Promise<void>
+  /** Показать полю кадр: встроенный образец по имени или готовые числа. */
+  show: (field: string, what: Shown) => Promise<void>
+  /** Спросить, какие кадры держатся сейчас, -- при открытии панели. */
+  look: () => Promise<void>
   close: () => Promise<void>
   forget: () => void
 }
@@ -253,6 +275,34 @@ export function createSimController(ports: Partial<SimPorts> = {}): SimControlle
       if (!id) return
       try {
         absorb(await io.sense(id, values))
+      } catch (reason) {
+        fail(reason)
+      }
+    },
+
+    /**
+     * Показать полю кадр и сразу перечитать, что на нём держится.
+     *
+     * Два обращения, а не одно: ответ сессии несёт про поле только счёт, а
+     * панель рисует сам кадр. Перечитывается он после показа, потому что
+     * показанное -- это ровно тот случай, когда картинка сменилась.
+     */
+    async show(field, what) {
+      const { id } = store.getState()
+      if (!id) return
+      try {
+        absorb(await io.show(id, { [field]: what }))
+        store.setState({ frames: await io.frames(id) })
+      } catch (reason) {
+        fail(reason)
+      }
+    },
+
+    async look() {
+      const { id } = store.getState()
+      if (!id) return
+      try {
+        store.setState({ frames: await io.frames(id) })
       } catch (reason) {
         fail(reason)
       }

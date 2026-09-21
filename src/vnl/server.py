@@ -62,7 +62,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import __version__, api, auth, cells, ir, protocols
+from . import __version__, api, auth, cells, ir, protocols, samples
 from .catalog import Query
 from .compose import compose
 from .index import Index, IndexUnavailable
@@ -520,6 +520,85 @@ class Api:
         for name, value in body.items():
             session.sense(str(name), value)
         return session.update()
+
+    def sim_show(self, sim_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Показать полям кадры: `{"eye": {"sample": "T"}}` (#581).
+
+        Словарём «поле -> что показать», по той же причине, по которой
+        словарём подаются величины кнопок: два поля, которым показали разом,
+        обязаны лечь на один момент модельного времени.
+
+        Показать можно двумя способами, и оба честные. `sample` -- имя
+        встроенного образца (`vnl.samples`): кадр собирается здесь, и по сети
+        едет одно слово вместо 576 чисел, а буква получается ровно та, про
+        которую написаны числа в примерах. `frame` -- готовые величины: так
+        приходит картинка, которую человек выбрал у себя, -- её режет браузер,
+        и файл никуда не уходит.
+
+        Отдельно от `sim_sense`, а не полем в нём: подать кнопке кадр или полю
+        одно число -- это не «другой аргумент», а ошибка, и разводить их надо
+        там, где их видно, а не внутри.
+        """
+        session = self._live(sim_id)
+        if not isinstance(body, dict) or not body:
+            raise PatternError('нечего показывать: нужно {"eye": {"sample": "T"}}')
+        for name, what in body.items():
+            session.show(str(name), self._frame_of(session, str(name), what))
+        return session.update()
+
+    def _frame_of(self, session: Any, name: str, what: Any) -> list[float]:
+        """Что показать -> кадр величин. Образец по имени или готовые числа."""
+        sensor = session.model.sensors.get(name)
+        if sensor is None:
+            known = ", ".join(session.model.sensors) or "их нет вовсе"
+            raise PatternError(f"в схеме нет сенсора {name!r} (есть: {known})")
+        if isinstance(what, (list, tuple)):
+            what = {"frame": list(what)}
+        if not isinstance(what, dict):
+            raise PatternError(
+                f"{name}: нужно {{\"sample\": \"T\"}} или {{\"frame\": [...]}}"
+            )
+        if "frame" in what:
+            frame = what["frame"]
+            if not isinstance(frame, (list, tuple)):
+                raise PatternError(f"{name}: кадр -- это список чисел")
+            try:
+                return [float(value) for value in frame]
+            except (TypeError, ValueError) as exc:
+                raise PatternError(f"{name}: в кадре не число: {exc}") from exc
+        if "sample" in what:
+            try:
+                sample = samples.get(str(what["sample"]))
+            except KeyError as exc:
+                raise PatternError(str(exc.args[0])) from exc
+            if sample.grid != (sensor.rows, sensor.cols):
+                # Не растягиваем: образец 24x24 на поле 16x16 -- это другая
+                # картинка, и кто её так увидел, не узнал бы об этом ниоткуда.
+                raise PatternError(
+                    f"образец {sample.id} -- сетка "
+                    f"{sample.grid[0]}x{sample.grid[1]}, а у поля {name} "
+                    f"{sensor.rows}x{sensor.cols}"
+                )
+            return sample.frame(
+                channels=sensor.depth, level=float(what.get("level", 1.0))
+            )
+        raise PatternError(
+            f"{name}: нужно {{\"sample\": \"T\"}} или {{\"frame\": [...]}}"
+        )
+
+    def sim_frames(self, sim_id: str) -> dict[str, Any]:
+        """Какие кадры сейчас держатся на полях сессии.
+
+        Отдельным запросом, а не полем общего ответа: тот уходит на каждый
+        кадр показа, и 576 чисел в каждом были бы потоком ради картинки,
+        которая меняется, только когда её сменили.
+        """
+        session = self._live(sim_id)
+        return {"frames": session.frames()}
+
+    def samples(self) -> dict[str, Any]:
+        """Встроенные образцы: что можно показать полю, ничего не загружая."""
+        return {"samples": samples.payload()}
 
     def close_sim(self, sim_id: str) -> dict[str, Any]:
         # Сначала та же дверь, что и у всех остальных: закрыть чужую сессию --
@@ -1223,6 +1302,14 @@ def routes(service: Api) -> list[Route]:
         # отвечать на один вопрос двумя разными правдами. Палитра живёт в
         # песочнице, а туда без входа и так не заходят.
         Route("GET", re.compile(r"^/api/cells$"), service.cells),
+        # Образцы открыты, как каталог: это содержимое пакета, а не чья-то
+        # работа, и список букв секретом не является (#581).
+        Route(
+            "GET",
+            re.compile(r"^/api/samples$"),
+            service.samples,
+            anonymous=anyone,
+        ),
         # Пополнение каталога из песочницы (#567). Путь тот же, что у чтения:
         # каталог один, и второй адрес под запись означал бы, что список
         # клеток и место, куда клетку кладут, -- разные вещи. Источник же
@@ -1308,6 +1395,22 @@ def routes(service: Api) -> list[Route]:
             re.compile(r"^/api/sim/([^/]+)/sensors$"),
             service.sim_sense,
             wants="body",
+            anonymous=service.sim_is_of_pattern,
+        ),
+        # Показ кадра -- такое же управление сессией, как подача величины, и
+        # право входа у него то же самое: витрину паттерна трогают без учётной
+        # записи, потому что схема при этом не меняется (#581).
+        Route(
+            "POST",
+            re.compile(r"^/api/sim/([^/]+)/frames$"),
+            service.sim_show,
+            wants="body",
+            anonymous=service.sim_is_of_pattern,
+        ),
+        Route(
+            "GET",
+            re.compile(r"^/api/sim/([^/]+)/frames$"),
+            service.sim_frames,
             anonymous=service.sim_is_of_pattern,
         ),
         Route(

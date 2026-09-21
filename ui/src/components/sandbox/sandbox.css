@@ -1359,3 +1359,98 @@
   height: auto;
   margin-top: 2px;
 }
+
+/* Панель поля (#581): что показали сети и чем она ответила.
+
+   Стоит она рядом с кнопками и устроена так же -- полосой под холстом, -- но
+   своей секцией: кнопка подаёт бит, поле принимает кадр, и складывать их в
+   одну строку значило бы уравнять вещи разного размера. */
+.field-panel {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.field-story {
+  color: var(--faint);
+}
+
+.field-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.field-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+}
+
+.field-file input[type='file'] {
+  max-width: 190px;
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+/* Подано и отклик -- рядом, а не одно под другим: их сравнивают глазами, и
+   разнесённые по вертикали они сравниваются памятью. */
+.field-view {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.field-view figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.field-view figcaption {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Тёмная подложка -- не оформление: поле показывает свет, а свет виден только
+   на темноте. Сетка пикселей рисуется по ней, и пустой кадр честно выглядит
+   как выключенный экран, а не как белый лист. */
+.field-grid {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--canvas-deep, #10141a);
+  image-rendering: pixelated;
+}
+
+.field-note,
+.field-trouble {
+  margin: 0;
+  max-width: 260px;
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+.field-trouble {
+  color: var(--danger, #c0392b);
+}
