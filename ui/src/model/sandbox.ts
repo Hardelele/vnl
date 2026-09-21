@@ -231,6 +231,16 @@ export interface SandboxMotor {
   position: [number, number]
 }
 
+/** Слой клеток: заведён одной строкой, живёт как обычные клетки. */
+export interface SandboxPopulation {
+  id: string
+  /** Строк и столбцов. */
+  grid: [number, number]
+  cellType: string
+  /** Имена клеток по порядку: строками сверху вниз. */
+  members: string[]
+}
+
 /** Слой клеток за полем: по нему рисуется отклик. */
 export interface FieldLayer {
   id: string
@@ -295,6 +305,14 @@ export interface SandboxState {
    * падать на пустом списке.
    */
   fields?: SandboxField[]
+  /**
+   * Слои собранной сети (#583): сетка и клетки по порядку.
+   *
+   * Нужны там, где поля может и не быть: таймлайн сворачивает 576 дорожек в
+   * одну по этому списку, свойства рассказывают про слой целиком. Считает их
+   * сервер -- «какие клетки стоят в этом слое» не должно иметь двух ответов.
+   */
+  populations?: SandboxPopulation[]
   motors: SandboxMotor[]
   recordings: SandboxRecording[]
   run: RunSpec

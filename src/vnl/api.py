@@ -54,6 +54,57 @@ def _port(port: Any) -> dict[str, Any]:
     }
 
 
+def _ports(pattern: Any) -> list[dict[str, Any]]:
+    """Порты блока со свёрнутым слоем (#583).
+
+    У сетчатки 576 портов -- по одному на клетку слоя, -- и на холсте они
+    превращаются в полосу точек шириной с сам блок: подключиться к ним
+    по одному всё равно нельзя (для этого делается жгут, #582), а найти среди
+    них обычный порт нельзя тем более.
+
+    Порты одного слоя едут одной строкой: имя без индекса (`out`), точка --
+    первая клетка слоя, и число рядом. Точка нужна не для красоты: связь,
+    протянутая к такому порту, должна куда-то прийти, и приходит она в
+    клетку, которая в слое первая. Пока жгута нет, это единственный честный
+    ответ -- и он виден человеку числом «576», а не спрятан.
+    """
+    layers = {
+        member: population.id
+        for population in pattern.body.populations.values()
+        for member in population.members()
+    }
+    if not layers:
+        return [_port(port) for port in pattern.ports]
+
+    out: list[dict[str, Any]] = []
+    seen: dict[str, dict[str, Any]] = {}
+    for port in pattern.ports:
+        layer = layers.get(port.site.instance)
+        if layer is None:
+            out.append(_port(port))
+            continue
+        # Имя порта слоя -- без индекса: `out[3,7]` -> `out`. Так его и
+        # называют, когда говорят про блок целиком.
+        name = port.name.partition("[")[0]
+        key = f"{layer}:{name}:{port.direction}"
+        kept = seen.get(key)
+        if kept is None:
+            population = pattern.body.populations[layer]
+            kept = {
+                **_port(port),
+                "name": name,
+                "layer": {
+                    "id": layer,
+                    "rows": population.rows,
+                    "cols": population.cols,
+                    "cells": population.size,
+                },
+            }
+            seen[key] = kept
+            out.append(kept)
+    return out
+
+
 def _morphology(morph) -> dict[str, Any]:
     return {
         "name": morph.name,
@@ -425,12 +476,29 @@ def scheme_payload(model: ir.Model) -> dict[str, Any]:
     ведёт от источника к клетке, на контакт которой действует. Без него
     микросхема, вся суть которой в модуляции, выглядела бы в каталоге как
     обычная цепочка.
+
+    Слой (#583) входит сюда **одним узлом**, а не своими 576 клетками, и 576
+    связей от поля схлопываются в одну. Иначе миниатюра сетчатки -- полоса
+    мусора шириной в экран, а раскрытый блок -- 576 кружков, среди которых
+    нельзя найти ни одного. Свёртка считается здесь, а не в браузере, по
+    обычной причине: тот же вопрос задаёт Claude через MCP, и вторая
+    реализация слова «слой» разошлась бы с этой незаметно.
     """
+    # Клетка слоя -> имя слоя. Пусто у схемы без слоёв -- и тогда всё ниже
+    # работает ровно как работало.
+    layer_of: dict[str, str] = {
+        member: population.id
+        for population in model.populations.values()
+        for member in population.members()
+    }
+
+    def node_of(instance: str) -> str:
+        return layer_of.get(instance, instance)
     edges: list[dict[str, Any]] = [
         {
             "id": contact.id,
-            "from": contact.pre.instance,
-            "to": contact.post.instance,
+            "from": node_of(contact.pre.instance),
+            "to": node_of(contact.post.instance),
             # `kind` у ребра двузначен, и трогать его нельзя: по нему
             # холст рисует плашку. Шунт едет в `inh` -- «не возбуждает», --
             # а точная полярность лежит рядом полем `polarity`.
@@ -459,16 +527,46 @@ def scheme_payload(model: ir.Model) -> dict[str, Any]:
                         "kind": "mod",
                     }
                 )
-    return {
-        "neurons": [
+    # Дубли после свёртки: 576 связей «поле -> клетка слоя» и 576 связей
+    # «клетка слоя -> сумматор» превращаются в одну линию каждая. Имя связи
+    # остаётся у первой -- оно ведёт к настоящему контакту, который человек
+    # и увидит, щёлкнув по линии.
+    seen: set[tuple[str, str, str]] = set()
+    folded: list[dict[str, Any]] = []
+    for edge in edges:
+        key = (str(edge["from"]), str(edge["to"]), str(edge["kind"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        folded.append(edge)
+
+    neurons: list[dict[str, Any]] = []
+    for instance in model.instances.values():
+        if instance.id in layer_of:
+            continue
+        neurons.append(
             {
                 "id": instance.id,
                 "inhibitory": ir.is_inhibitory_cell(model.cell_type_of(instance.id)),
             }
-            for instance in model.instances.values()
-        ],
-        "edges": edges,
-    }
+        )
+    for population in model.populations.values():
+        # Слой стоит там же, где стояли бы его клетки, и знает, сколько их: по
+        # сетке рисуется квадрат активности, а не кружок с именем.
+        neurons.append(
+            {
+                "id": population.id,
+                "inhibitory": ir.is_inhibitory_cell(
+                    model.cell_types[population.cell_type]
+                ),
+                "layer": {
+                    "rows": population.rows,
+                    "cols": population.cols,
+                    "cells": population.size,
+                },
+            }
+        )
+    return {"neurons": neurons, "edges": folded}
 
 
 def _demo_payload(demo: Any) -> dict[str, Any]:
@@ -510,7 +608,7 @@ def pattern_payload(pattern: Any, body: bool = False) -> dict[str, Any]:
         "levelName": pattern.level_name,
         "status": pattern.status,
         "statusName": STATUS_NAMES.get(pattern.status, pattern.status),
-        "ports": [_port(port) for port in pattern.ports],
+        "ports": _ports(pattern),
         "counts": {
             "neurons": len(pattern.body.instances),
             "contacts": len(pattern.body.contacts),
@@ -789,9 +887,27 @@ def _block_cells(block: Any) -> list[dict[str, Any]]:
     Перечисляем, кого правка задевает, чтобы это не было сюрпризом.
     """
     body = block.snapshot.body
+    # Клетки слоя перечисляются не именами, а слоем (#583): «R[0,0], R[0,1],
+    # R[0,2]…» на 576 имён -- это не список, а лента, и сказать она может
+    # ровно то же, что скажет одна строка «R 24x24».
+    layer_of: dict[str, str] = {
+        member: population.id
+        for population in body.populations.values()
+        for member in population.members()
+    }
     users: dict[str, list[str]] = {}
+    listed: set[str] = set()
     for neuron in body.instances.values():
-        users.setdefault(neuron.cell_type, []).append(neuron.id)
+        layer = layer_of.get(neuron.id)
+        names = users.setdefault(neuron.cell_type, [])
+        if layer is None:
+            names.append(neuron.id)
+            continue
+        if layer in listed:
+            continue
+        listed.add(layer)
+        population = body.populations[layer]
+        names.append(f"{layer} {population.rows}x{population.cols}")
     return [
         {
             "type": type_id,
@@ -897,6 +1013,22 @@ def _link_polarity(sandbox: Any, link: Any) -> str:
     return ir.synapse_polarity(_link_reversal(link), point)
 
 
+def _populations(project: Any) -> list[dict[str, Any]]:
+    """Слои собранной сети: сетка, тип клетки и её клетки по порядку."""
+    from .compose import compose
+
+    model = compose(project.sandbox).model
+    return [
+        {
+            "id": population.id,
+            "grid": [population.rows, population.cols],
+            "cellType": population.cell_type,
+            "members": population.members(),
+        }
+        for population in model.populations.values()
+    ]
+
+
 def _fields(project: Any) -> list[dict[str, Any]]:
     """Поля собранной сети вместе со слоями, которые за ними стоят.
 
@@ -958,7 +1090,7 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
                 "patternId": block.pattern_id,
                 "label": block.label,
                 "position": list(block.position),
-                "ports": [_port(port) for port in block.snapshot.ports],
+                "ports": _ports(block.snapshot),
                 "counts": {
                     "neurons": len(block.snapshot.body.instances),
                     "contacts": len(block.snapshot.body.contacts),
@@ -1100,6 +1232,12 @@ def sandbox_payload(project: Any) -> dict[str, Any]:
         # отклик. Считается он здесь, а не в браузере, по обычной причине --
         # «какие клетки стоят за этим полем» не должно иметь двух ответов.
         "fields": _fields(project),
+        # Слои собранной сети (#583). Нужны там, где поля может и не быть:
+        # таймлайн сворачивает 576 дорожек в одну по этому списку, а панель
+        # свойств рассказывает про слой целиком. Список членов -- по порядку,
+        # строками сверху вниз: по нему рисуется растр активности, и собирать
+        # имя `R[3,7]` из кусков в браузере никто не должен.
+        "populations": _populations(project),
         "problems": project.check(),
         # Рядом, но отдельным полем: `problems` -- это отказ, а здесь то, что
         # запускать не мешает, но делает результат пустым (#506). Свести их в

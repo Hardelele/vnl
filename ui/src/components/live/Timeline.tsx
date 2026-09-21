@@ -45,6 +45,7 @@ import {
 
 import { scaleMarks, ticks } from '../../lib/analysis'
 import './timeline.css'
+import { countsOf, rasterOf } from '../../lib/raster'
 
 /** Внутренняя ширина дорожки: тянется по месту, важна только пропорция. */
 const TRACK = 1000
@@ -109,6 +110,9 @@ export const TIMELINE_HINT =
   'наведение показывает значения, щелчок перематывает время и ставит на паузу, ' +
   'колесо листает дорожки, Ctrl с колесом приближает время, Shift — прокручивает'
 
+/** Сколько клеток слоя показывать при раскрытии дорожки. */
+const BUSIEST = 3
+
 export interface TimelineProps {
   duration: number
   /** Где сейчас время симуляции, мс. */
@@ -116,6 +120,17 @@ export interface TimelineProps {
   dt: number
   /** Имена клеток в том порядке, в каком они стоят на схеме. */
   order: string[]
+  /**
+   * Слои: дорожка на слой вместо дорожки на каждую его клетку (#583).
+   *
+   * 576 дорожек -- это не «много дорожек», это отсутствие таймлайна: до
+   * сумматора, ради которого запускали прогон, не долистать. У слоя
+   * спрашивают другое, чем у клетки, -- не «когда разряд», а «сколько клеток
+   * отозвалось», -- и дорожка отвечает кривой по этому числу.
+   *
+   * Необязательны: схема без слоёв выглядит ровно как раньше.
+   */
+  layers?: LayerLane[]
   spikes: Record<string, number[]>
   /** Трассы по ключам вида `E.soma:v`. */
   traces: Record<string, number[]>
@@ -125,6 +140,15 @@ export interface TimelineProps {
   selected?: string | null
   onSelect?: (name: string) => void
   disabled?: boolean
+}
+
+/** Слой для таймлайна: имя, сетка и клетки по порядку. */
+export interface LayerLane {
+  id: string
+  /** Подпись дорожки: `R 24x24`. */
+  label: string
+  /** Имена клеток слоя -- по ним считаются кривая и счётчик. */
+  members: string[]
 }
 
 interface Lane {
@@ -143,6 +167,7 @@ export function Timeline({
   time,
   dt,
   order,
+  layers = [],
   spikes,
   traces,
   inhibitory,
@@ -162,9 +187,45 @@ export function Timeline({
   /** Куда поставить прокрутку после перерисовки на новом масштабе. */
   const pending = useRef<number | null>(null)
 
+  /** Какие слои раскрыты в отдельные клетки. Показ, а не схема. */
+  const [opened, setOpened] = useState<string[]>([])
+
   const lanes = useMemo(
     () => order.map((name) => lane(name, spikes, traces, inhibitory, time)),
     [order, spikes, traces, inhibitory, time],
+  )
+
+  /**
+   * Дорожки слоёв: кривая «сколько клеток отозвалось» и счёт на текущий
+   * момент. Шаг кривой -- миллисекунды на точку; берётся от ширины дорожки,
+   * чтобы не считать того, чего не нарисовать.
+   */
+  const layerLanes = useMemo(
+    () =>
+      layers.map((item) => {
+        const step = Math.max(dt, duration / TRACK)
+        const counts = countsOf(spikes, item.members, duration, step)
+        const raster = rasterOf(spikes, item.members, time)
+        return { item, counts, step, awake: raster.awake, total: raster.total }
+      }),
+    [layers, spikes, duration, dt, time],
+  )
+
+  /**
+   * Что показать под раскрытым слоем: самые активные его клетки.
+   *
+   * Три, а не все: раскрытие отвечает на «кто именно там шумит», и ответом на
+   * него не может быть ещё 576 дорожек. Выбор по числу разрядов за прогон --
+   * та же мера, которой слой и меряют.
+   */
+  const busiest = useCallback(
+    (item: LayerLane): Lane[] =>
+      [...item.members]
+        .sort((a, b) => (spikes[b]?.length ?? 0) - (spikes[a]?.length ?? 0))
+        .slice(0, BUSIEST)
+        .filter((name) => (spikes[name]?.length ?? 0) > 0)
+        .map((name) => lane(name, spikes, traces, inhibitory, time)),
+    [spikes, traces, inhibitory, time],
   )
 
   const at = useCallback(
@@ -321,6 +382,116 @@ export function Timeline({
           </span>
         </div>
 
+        {layerLanes.map(({ item, counts, step, awake, total }) => (
+          <div className="tl-group" key={item.id}>
+            <div className="tl-lane is-layer">
+              <span className="tl-name">
+                <button
+                  type="button"
+                  className={`tl-open${opened.includes(item.id) ? ' is-on' : ''}`}
+                  title={
+                    opened.includes(item.id)
+                      ? 'Скрыть отдельные клетки'
+                      : `Показать ${BUSIEST} самые активные клетки слоя`
+                  }
+                  onClick={() =>
+                    setOpened((was) =>
+                      was.includes(item.id)
+                        ? was.filter((id) => id !== item.id)
+                        : [...was, item.id],
+                    )
+                  }
+                >
+                  {opened.includes(item.id) ? '⌄' : '›'}
+                </button>
+                <span className="tl-who" title={item.id}>
+                  <span className="mono tl-cell">{item.label}</span>
+                  {item.id.includes('/') ? (
+                    <span className="mono tl-owner">{ownerOf(item.id)}</span>
+                  ) : null}
+                </span>
+                {/* Число на дорожке слоя -- не «частота», а сколько клеток
+                    отозвалось за окно: у слоя спрашивают именно это. */}
+                <span className="mono tl-value">
+                  {awake} / {total}
+                </span>
+              </span>
+
+              <div
+                className={`tl-field${disabled ? ' is-off' : ''}`}
+                title={disabled ? undefined : TIMELINE_HINT}
+                onPointerMove={(event) => setHover(at(event))}
+                onPointerLeave={() => setHover(null)}
+                onPointerDown={(event) => {
+                  if (!disabled) onSeek(at(event))
+                }}
+              >
+                <svg
+                  className="tl-svg"
+                  viewBox={`0 0 ${TRACK} ${LANE}`}
+                  preserveAspectRatio="none"
+                >
+                  {grid.map((moment) => (
+                    <line
+                      key={moment}
+                      className="tl-grid"
+                      x1={x(moment)}
+                      y1={0}
+                      x2={x(moment)}
+                      y2={LANE}
+                    />
+                  ))}
+                  <path className="tl-fill" d={countArea(counts, step, total, duration)} />
+                  <path className="tl-curve" d={countCurve(counts, step, total, duration)} />
+                </svg>
+
+                {hover === null ? null : (
+                  <div className="tl-hairline" style={{ left: `${share(hover)}%` }} />
+                )}
+                <div className="tl-cursor" style={{ left: `${share(time)}%` }} />
+              </div>
+            </div>
+
+            {opened.includes(item.id)
+              ? busiest(item).map((cell) => (
+                  <div className="tl-lane is-inner" key={cell.name}>
+                    <LaneName item={cell} value={valueAt(cell, hover, dt)} onSelect={onSelect} />
+                    <div
+                      className={`tl-field${disabled ? ' is-off' : ''}`}
+                      title={disabled ? undefined : TIMELINE_HINT}
+                      onPointerMove={(event) => setHover(at(event))}
+                      onPointerLeave={() => setHover(null)}
+                      onPointerDown={(event) => {
+                        if (!disabled) onSeek(at(event))
+                      }}
+                    >
+                      <svg
+                        className="tl-svg"
+                        viewBox={`0 0 ${TRACK} ${LANE}`}
+                        preserveAspectRatio="none"
+                      >
+                        {cell.spikes.map((moment, index) => (
+                          <line
+                            key={`${moment}-${index}`}
+                            className={cell.inhibitory ? 'tl-spike is-inh' : 'tl-spike'}
+                            x1={x(moment)}
+                            y1={LANE * 0.25}
+                            x2={x(moment)}
+                            y2={LANE * 0.75}
+                          />
+                        ))}
+                      </svg>
+                      {hover === null ? null : (
+                        <div className="tl-hairline" style={{ left: `${share(hover)}%` }} />
+                      )}
+                      <div className="tl-cursor" style={{ left: `${share(time)}%` }} />
+                    </div>
+                  </div>
+                ))
+              : null}
+          </div>
+        ))}
+
         {lanes.map((item) => (
           <div className={`tl-lane${selected === item.name ? ' is-on' : ''}`} key={item.name}>
             <LaneName item={item} value={valueAt(item, hover, dt)} onSelect={onSelect} />
@@ -471,6 +642,60 @@ function lane(
     low: span.low,
     high: span.high,
   }
+}
+
+/**
+ * Точки кривой «сколько клеток отозвалось».
+ *
+ * Высота нормируется по числу клеток слоя, а не по максимуму кривой: «сто из
+ * пятисот» и «пятьсот из пятисот» обязаны выглядеть по-разному, а нормировка
+ * по максимуму нарисовала бы одно и то же.
+ */
+function countPoints(
+  counts: number[],
+  step: number,
+  total: number,
+  duration: number,
+): Array<[number, number]> {
+  const top = Math.max(1, total)
+  return counts.map((value, index) => {
+    const moment = Math.min(duration, index * step)
+    const share = Math.min(1, value / top)
+    return [
+      (moment / Math.max(duration, 1e-9)) * TRACK,
+      LANE - share * (LANE * 0.86) - LANE * 0.07,
+    ]
+  })
+}
+
+function countCurve(
+  counts: number[],
+  step: number,
+  total: number,
+  duration: number,
+): string {
+  const points = countPoints(counts, step, total, duration)
+  if (!points.length) return ''
+  return points
+    .map(([px, py], index) => `${index ? 'L' : 'M'}${px.toFixed(2)} ${py.toFixed(2)}`)
+    .join(' ')
+}
+
+function countArea(
+  counts: number[],
+  step: number,
+  total: number,
+  duration: number,
+): string {
+  const points = countPoints(counts, step, total, duration)
+  if (!points.length) return ''
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  return (
+    `M${first[0].toFixed(2)} ${LANE} ` +
+    points.map(([px, py]) => `L${px.toFixed(2)} ${py.toFixed(2)}`).join(' ') +
+    ` L${last[0].toFixed(2)} ${LANE} Z`
+  )
 }
 
 function extent(values: number[] | null): { low: number; high: number } {

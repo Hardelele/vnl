@@ -136,6 +136,7 @@ import {
   type Miniature,
 } from '../../lib/miniature'
 import { CELLS, LINKS, counted } from '../../lib/plural'
+import { rasterImage, rasterOf } from '../../lib/raster'
 import { schemeField, wire, type Point, type WireEnd, type WirePlace } from '../../lib/wire'
 import type { CellState } from '../../model/sim'
 import { where } from '../../model/sandbox'
@@ -145,6 +146,7 @@ import type {
   SandboxLink,
   SandboxMotor,
   SandboxNeuron,
+  SandboxPopulation,
   SandboxRecording,
   SandboxSensor,
 } from '../../model/sandbox'
@@ -287,6 +289,21 @@ export interface CanvasProps {
   sensors?: SandboxSensor[]
   motors?: SandboxMotor[]
   /**
+   * Слои собранной сети (#583): по ним узел слоя знает свои клетки.
+   *
+   * Внутри блока слой приходит одним узлом схемы (`scheme.neurons[].layer`), и
+   * сколько в нём клеток, там написано. А вот **какие** это клетки -- знает
+   * только собранная сеть: имя внутри блока идёт с приставкой
+   * (`retina24/R[3,7]`), и собирать его в браузере по кускам нельзя.
+   *
+   * Необязательны: схема без слоёв рисуется ровно как раньше.
+   */
+  populations?: SandboxPopulation[]
+  /** Растр сессии: им горит сетка активности слоя. */
+  spikes?: Record<string, number[]>
+  /** Пройденное модельное время, мс: от него отсчитывается окно активности. */
+  elapsed?: number
+  /**
    * Длительность прогона -- ради окна работы драйва.
    *
    * Окно показывается, только если оно короче прогона: драйв на весь прогон
@@ -312,6 +329,13 @@ export interface CanvasProps {
   opened?: string[]
   onPickBlock: (id: string) => void
   onPickNeuron: (id: string) => void
+  /**
+   * Щелчок по слою (#583): он открывается в свойствах, как клетка и блок.
+   *
+   * Необязателен: на экранах, где панели свойств нет, слой остаётся просто
+   * картинкой активности, и обещать щелчку действие там незачем.
+   */
+  onPickLayer?: (id: string) => void
   onPickLink: (id: string) => void
   /**
    * Щелчок по знаку драйва или записи -- то же, что щелчок по связи (#502).
@@ -616,10 +640,66 @@ function spiking(block: SandboxBlock, cells: Record<string, CellState>): boolean
   return block.scheme.neurons.some((neuron) => cells[`${block.id}/${neuron.id}`]?.spiked)
 }
 
+/**
+ * Лицо слоя: квадрат с сеткой активности (#583).
+ *
+ * Горит клетка, разрядившаяся за окно 50 мс, -- то же окно, что у мотора и у
+ * отклика поля. Картинкой, а не фигурами: 576 прямоугольников на каждом кадре
+ * показа -- это ровно те 576 узлов, от которых слой избавляет.
+ */
+function LayerFace({
+  x,
+  y,
+  size,
+  rows,
+  cols,
+  light,
+}: {
+  x: number
+  y: number
+  size: number
+  rows: number
+  cols: number
+  light: number[]
+}) {
+  const picture = useMemo(
+    () => rasterImage(light, rows, cols),
+    [light, rows, cols],
+  )
+  return (
+    <>
+      <rect
+        className="cv-layer-face"
+        x={x - size / 2}
+        y={y - size / 2}
+        width={size}
+        height={size}
+        rx={3}
+      />
+      {picture ? (
+        <image
+          href={picture}
+          x={x - size / 2}
+          y={y - size / 2}
+          width={size}
+          height={size}
+          preserveAspectRatio="none"
+          // Пиксель слоя -- это клетка, а не точка картинки: сглаживание
+          // размазало бы одну ответившую клетку по трём соседним.
+          style={{ imageRendering: 'pixelated' }}
+        />
+      ) : null}
+    </>
+  )
+}
+
 export function Canvas({
   blocks,
   neurons,
   links,
+  populations = [],
+  spikes = {},
+  elapsed = 0,
   stimuli = [],
   recordings = [],
   sensors = [],
@@ -633,6 +713,7 @@ export function Canvas({
   opened = [],
   onPickBlock,
   onPickNeuron,
+  onPickLayer,
   onPickLink,
   onPickDrive,
   onPickRecord,
@@ -1352,6 +1433,53 @@ export function Canvas({
                   const state = cells[flat]
                   const lit = state?.spiked ?? false
                   const level = chargeLabel(momentOf(state))
+                  // Слой -- один узел вместо 576 клеток (#583). Соединять его
+                  // целиком нельзя: стрелка ведёт к точке клетки, а их тут
+                  // 576, -- поэтому щелчок по слою его только выбирает, а
+                  // подключение отдельной клетки ждёт жгута (#582).
+                  if (node.layer) {
+                    const members =
+                      populations.find((item) => item.id === flat)?.members ?? []
+                    const raster = rasterOf(spikes, members, elapsed)
+                    return (
+                      <g
+                        key={node.id}
+                        className={`cv-in-layer${
+                          selected?.kind === 'layer' && selected.id === flat
+                            ? ' is-on'
+                            : ''
+                        }`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onPickLayer?.(flat)
+                        }}
+                      >
+                        <title>
+                          {`${flat}: слой ${node.layer.rows}×${node.layer.cols}, `}
+                          {`${node.layer.cells} клеток; `}
+                          {`разрядились ${raster.awake} за 50 мс`}
+                        </title>
+                        <LayerFace
+                          x={node.x}
+                          y={node.y}
+                          size={Math.min(node.width, node.height)}
+                          rows={node.layer.rows}
+                          cols={node.layer.cols}
+                          light={raster.light}
+                        />
+                        <text
+                          className="cv-in-name"
+                          x={node.x}
+                          y={node.y + node.height / 2 + 9}
+                          textAnchor="middle"
+                        >
+                          {`${node.id} ${node.layer.rows}×${node.layer.cols}`}
+                        </text>
+                      </g>
+                    )
+                  }
                   return (
                     <g
                       key={node.id}

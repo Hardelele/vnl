@@ -346,3 +346,72 @@ def test_showing_into_a_door_that_does_not_exist_says_which_are_there(base):
     )
     assert status >= 400
     assert "eye" in refused["error"]
+
+
+# --- слой одним объектом (#583) --------------------------------------------
+
+
+def test_the_scheme_carries_a_layer_as_one_node():
+    model, _ = load(
+        (EXAMPLES / "vision.vnl").read_text(encoding="utf-8"), strict=True
+    )
+    scheme = api.scheme_payload(model)
+    # 577 клеток и 576 связей превращаются в два узла и одну линию: иначе
+    # миниатюра сетчатки -- полоса мусора, а раскрытый блок -- стена кружков.
+    assert len(scheme["neurons"]) == 2
+    assert len(scheme["edges"]) == 1
+    layer = next(node for node in scheme["neurons"] if "layer" in node)
+    assert layer["id"] == "R"
+    assert layer["layer"] == {"rows": 24, "cols": 24, "cells": 576}
+
+
+def test_a_scheme_without_layers_is_untouched():
+    model, _ = load((EXAMPLES / "ffi.vnl").read_text(encoding="utf-8"), strict=True)
+    scheme = api.scheme_payload(model)
+    # Схема без слоёв обязана выглядеть ровно как раньше -- иначе «ничего не
+    # поменялось» пришлось бы доказывать на каждом паттерне библиотеки.
+    assert [node["id"] for node in scheme["neurons"]] == ["IN", "E", "I"]
+    assert all("layer" not in node for node in scheme["neurons"])
+
+
+def test_the_ports_of_a_layer_come_as_one():
+    ports = api._ports(retina())
+    # 576 портов -- это полоса точек шириной с блок, в которой не найти
+    # обычный порт. Подключиться к ним по одному всё равно нельзя.
+    assert len(ports) == 1
+    assert ports[0]["name"] == "out"
+    assert ports[0]["layer"]["cells"] == 576
+
+
+def test_a_pattern_without_layers_keeps_its_ports():
+    model, _ = load((EXAMPLES / "ffi.vnl").read_text(encoding="utf-8"), strict=True)
+    pattern = Pattern.from_model(
+        model,
+        id="ffi",
+        name="FFI",
+        ports=[
+            Port(name="in", direction="in", site=api.ir.Site("IN", "soma", 0.5)),
+            Port(name="out", direction="out", site=api.ir.Site("E", "soma", 0.5)),
+        ],
+    )
+    assert [port["name"] for port in api._ports(pattern)] == ["in", "out"]
+
+
+def test_the_project_lists_its_layers():
+    state = api.sandbox_payload(sandbox_with_retina())
+    (layer,) = state["populations"]
+    assert layer["id"] == "retina24/R"
+    assert layer["grid"] == [24, 24]
+    assert layer["cellType"] == "photoreceptor"
+    # Имена по порядку: по ним рисуется растр, и собирать их в браузере по
+    # кускам никто не должен.
+    assert layer["members"][0] == "retina24/R[0,0]"
+    assert len(layer["members"]) == 576
+
+
+def test_a_block_lists_its_layer_instead_of_576_names():
+    state = api.sandbox_payload(sandbox_with_retina())
+    (group,) = state["blocks"][0]["cells"]
+    # «R[0,0], R[0,1], R[0,2]…» на 576 имён -- это не список, а лента, и
+    # сказать она может ровно то же, что одна строка «R 24x24».
+    assert group["neurons"] == ["R 24x24"]

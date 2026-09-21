@@ -71,6 +71,53 @@ function describe(neurons: number, edges: number): string {
 }
 
 function Cell({ node }: { node: MiniNode }) {
+  // Слой (#583) -- квадрат с сеткой и подписью размера. До этого сетчатка
+  // приезжала в каталог полосой из 576 кружков: узнать в ней схему было
+  // нельзя, а разглядеть отдельную клетку -- тем более.
+  if (node.layer) {
+    const step = node.width / Math.max(1, Math.min(node.layer.cols, 6))
+    const lines = []
+    for (let at = 1; at < Math.min(node.layer.cols, 6); at += 1) {
+      lines.push(at * step)
+    }
+    return (
+      <g className="thumbnail-layer">
+        <rect
+          x={node.x - node.width / 2}
+          y={node.y - node.height / 2}
+          width={node.width}
+          height={node.height}
+          rx={3}
+        />
+        {lines.map((offset) => (
+          <line
+            key={`v${offset}`}
+            x1={node.x - node.width / 2 + offset}
+            y1={node.y - node.height / 2}
+            x2={node.x - node.width / 2 + offset}
+            y2={node.y + node.height / 2}
+          />
+        ))}
+        {lines.map((offset) => (
+          <line
+            key={`h${offset}`}
+            x1={node.x - node.width / 2}
+            y1={node.y - node.height / 2 + offset}
+            x2={node.x + node.width / 2}
+            y2={node.y - node.height / 2 + offset}
+          />
+        ))}
+        <text
+          x={node.x}
+          y={node.y + node.height / 2 + 7}
+          dominantBaseline="central"
+          textAnchor="middle"
+        >
+          {`${node.layer.rows}×${node.layer.cols}`}
+        </text>
+      </g>
+    )
+  }
   // Тормозная клетка -- квадратная, возбуждающая -- скруглённая: разница видна
   // и там, где цвета нет, например в чёрно-белой печати.
   const radius = node.inhibitory ? 4 : node.height / 2

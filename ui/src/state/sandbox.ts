@@ -70,7 +70,17 @@ import { createStore } from './store'
  * внутри каждого поля.
  */
 export interface Selection {
-  kind: 'block' | 'neuron' | 'link' | 'stimulus' | 'recording' | 'sensor' | 'motor'
+  kind:
+    | 'block'
+    | 'neuron'
+    | 'link'
+    | 'stimulus'
+    | 'recording'
+    | 'sensor'
+    | 'motor'
+    // Слой -- свой род, а не клетка и не блок (#583): у него нет ни мембраны
+    // одной клетки, ни портов блока, зато есть сетка и число отозвавшихся.
+    | 'layer'
   id: string
 }
 
