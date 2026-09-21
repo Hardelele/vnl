@@ -960,6 +960,20 @@
   font-size: var(--text-sm);
 }
 
+/* Встречная дверь для новой кнопки (#576): поле выбора в столбце действий.
+   Ростом и рамкой как кнопка рядом -- это один поступок в два шага («с каким
+   мотором» и «сделать»), и разный рост читался бы как два разных места. */
+.sb-pair {
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
 .sb-alert,
 .sb-warn {
   margin: 0;
@@ -1196,6 +1210,20 @@
 .bb-key.is-lost .bb-press {
   border-style: dashed;
   color: var(--inh);
+}
+
+/* Ждёт прогона (#576). Пунктир и цвет подсказки, а не ровное серое: серым
+   выглядела и кнопка с потерянной дверью, и кнопка без сессии, -- одинаково
+   мёртвыми, хотя первая сломана, а вторая просто ждёт. Что именно ждёт,
+   написано на самой кнопке подписью. */
+.bb-key.is-waiting .bb-press {
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+
+.bb-key.is-waiting .bb-sub {
+  opacity: 1;
+  color: var(--accent);
 }
 
 .bb-name {

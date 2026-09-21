@@ -16,6 +16,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Properties } from './Properties'
+import { boardController, readButtons } from '../../state/board'
 import type { CellState } from '../../model/sim'
 import type {
   SandboxBlock,
@@ -325,6 +326,9 @@ const MOTOR = {
 }
 
 const PROJECT = {
+  // Имя проекта: кнопки помнятся по нему (#562), и свойства двери спрашивают
+  // их именно по нему.
+  id: 's1',
   blocks: [BLOCK],
   neurons: [CELL],
   sensors: [SENSOR],
@@ -1140,5 +1144,112 @@ describe('свойства двери наружу (#571)', () => {
       (node) => node.textContent,
     )
     expect(labels).toContain('Окно, мс')
+  })
+})
+
+describe('привязка видна со стороны двери (#576)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    boardController.forget()
+  })
+
+  it('у сенсора видно привязанные к нему кнопки', async () => {
+    // Жалоба владельца: выбрал сенсор на холсте, а в его свойствах про кнопки
+    // ни слова -- привязка была видна ровно с одной стороны.
+    boardController.keep('s1', [
+      { id: 'btn1', name: 'Газ', sensor: 'sensor1', motor: null, key: 'KeyG' },
+      { id: 'btn2', name: 'Чужая', sensor: 'другой', motor: null, key: null },
+    ])
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' } })
+
+    expect(host.textContent).toContain('Газ')
+    expect(host.textContent).toContain('клавиша G')
+    // Кнопка соседней двери здесь ни при чём.
+    expect(host.textContent).not.toContain('Чужая')
+  })
+
+  it('кнопка заводится прямо из свойств сенсора', async () => {
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' } })
+
+    expect(host.textContent).toContain('Кнопок к этой двери не привязано')
+    const make = [...host.querySelectorAll('button')].find(
+      (node) => node.textContent?.trim() === 'Сделать кнопку',
+    ) as HTMLButtonElement
+    await act(async () => {
+      make.click()
+    })
+
+    // Кнопка легла в тот же список, из которого её читает полоса под холстом,
+    // и пережила бы перезагрузку: она в браузере, а не в схеме.
+    expect(readButtons('s1')).toEqual([
+      { id: 'btn1', name: 'sensor1', sensor: 'sensor1', motor: null, key: null },
+    ])
+    expect(host.textContent).toContain('нажимают рукой')
+  })
+
+  it('петля заводится со стороны сенсора: мотор выбирают тут же', async () => {
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' } })
+
+    const pair = host.querySelector('.sb-pair') as HTMLSelectElement
+    expect([...pair.options].map((one) => one.value)).toEqual(['', 'motor1'])
+    await act(async () => {
+      pair.value = 'motor1'
+      pair.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const make = [...host.querySelectorAll('button')].find(
+      (node) => node.textContent?.trim() === 'Сделать кнопку-петлю',
+    ) as HTMLButtonElement
+    await act(async () => {
+      make.click()
+    })
+
+    expect(readButtons('s1')).toEqual([
+      { id: 'btn1', name: 'sensor1', sensor: 'sensor1', motor: 'motor1', key: null },
+    ])
+    expect(host.textContent).toContain('петля: motor1 зажигает, sensor1 получает 1')
+  })
+
+  it('у мотора то же самое, и встречная дверь -- сенсор', async () => {
+    await mount({ selection: { kind: 'motor', id: 'motor1' } })
+
+    const pair = host.querySelector('.sb-pair') as HTMLSelectElement
+    expect([...pair.options].map((one) => one.value)).toEqual(['', 'sensor1'])
+    const make = [...host.querySelectorAll('button')].find(
+      (node) => node.textContent?.trim() === 'Сделать кнопку',
+    ) as HTMLButtonElement
+    await act(async () => {
+      make.click()
+    })
+
+    expect(readButtons('s1')).toEqual([
+      { id: 'btn1', name: 'motor1', sensor: null, motor: 'motor1', key: null },
+    ])
+    expect(host.textContent).toContain('лампочка')
+  })
+
+  it('вторая кнопка той же двери получает номер, а не тождественное имя', async () => {
+    // Имя не адрес, и повторы законны -- за кнопку держится `id`. Но две
+    // одинаковые строки в списке привязок не говорят, чем они различаются.
+    boardController.keep('s1', [
+      { id: 'btn1', name: 'sensor1', sensor: 'sensor1', motor: null, key: null },
+    ])
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' } })
+
+    const make = [...host.querySelectorAll('button')].find(
+      (node) => node.textContent?.trim() === 'Сделать кнопку',
+    ) as HTMLButtonElement
+    await act(async () => {
+      make.click()
+    })
+
+    expect(readButtons('s1').map((one) => one.name)).toEqual(['sensor1', 'sensor1 2'])
+  })
+
+  it('встречной двери в схеме нет -- и поля выбора нет', async () => {
+    // Пустой список «ни одного мотора» спрашивал бы о том, чего не бывает.
+    const alone = { ...PROJECT, motors: [] } as unknown as SandboxState
+    await mount({ selection: { kind: 'sensor', id: 'sensor1' }, project: alone })
+
+    expect(host.querySelector('.sb-pair')).toBeNull()
   })
 })

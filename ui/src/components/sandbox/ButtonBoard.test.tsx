@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { ButtonBoard } from './ButtonBoard'
 import type { SandboxMotor, SandboxSensor } from '../../model/sandbox'
-import { rememberButtons, type BoardButton } from '../../state/board'
+import { boardController, rememberButtons, type BoardButton } from '../../state/board'
 
 const KEY: SandboxSensor = {
   id: 'key',
@@ -119,6 +119,10 @@ const LOOP: BoardButton = { id: 'btn3', name: 'Петля', sensor: 'key', motor
 
 beforeEach(() => {
   localStorage.clear()
+  // Список кнопок теперь общий на экран (#576) и переживает размонтирование
+  // панели -- как ему и положено. Проверка кладёт кнопки прямо в хранилище,
+  // значит и прочитать их экран должен заново.
+  boardController.forget()
   sent = []
 })
 
@@ -203,6 +207,33 @@ describe('нажатие и отпускание', () => {
 
     expect(sent).toEqual([])
     expect(host.querySelector('.bb-note')?.textContent).toContain('запустите')
+  })
+
+  it('выключенная кнопка объясняет себя на себе, а не только строкой рядом (#576)', async () => {
+    // Серый цвет читается как «привязка сломалась» -- владелец так и прочёл, и
+    // пошёл заводить вторую кнопку. Причина проходит сама, и сказать об этом
+    // надо на той кнопке, которая погасла: строка рядом относится ко всем.
+    saved(GAS)
+    await mount({ live: false })
+
+    const key = keys()[0]!
+    expect(key.className).toContain('is-waiting')
+    expect(key.querySelector('.bb-sub')?.textContent).toBe('нужен прогон')
+    expect(key.querySelector('.bb-press')?.getAttribute('title')).toContain('Привязка цела')
+
+    // Прогон пошёл -- кнопка снова кнопка, и объяснение ушло.
+    await again({ live: true })
+    expect(keys()[0]!.className).not.toContain('is-waiting')
+    expect(keys()[0]!.querySelector('.bb-sub')?.textContent).toBe('G')
+  })
+
+  it('кнопка с потерянной дверью говорит о потере, а не «нужен прогон»', async () => {
+    // Две причины, которые раньше выглядели одинаково серыми: эта не проходит
+    // сама, и путать их нельзя.
+    saved(GAS)
+    await mount({ sensors: [] })
+
+    expect(keys()[0]!.querySelector('.bb-sub')?.textContent).toBe('двери нет')
   })
 })
 

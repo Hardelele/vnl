@@ -19,8 +19,9 @@
  * ровно столько, сколько параметров у модели: они будут только прибывать.
  */
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
+import { keyLabel } from '../../lib/keys'
 import { CELLS, LINKS, counted } from '../../lib/plural'
 import { momentWords } from '../../lib/times'
 import {
@@ -56,6 +57,7 @@ import type {
   PointModel,
   RecordedVar,
 } from '../../model/types'
+import { boardController, freeButtonName, roleOf, useButtons } from '../../state/board'
 import { sandboxController, type Selection } from '../../state/sandbox'
 import { Vitals } from '../live/Vitals'
 // Разбор приставки (`ffi/I` принадлежит блоку `ffi`) -- один на весь
@@ -412,6 +414,8 @@ export function Properties({
     return sensor ? (
       <SensorProps
         sensor={sensor}
+        project={project.id}
+        motors={project.motors}
         // Куда смотрит сенсор -- это его связи: подключён он обычной стрелкой,
         // у которой источник он сам. Второго списка целей у него нет, и
         // заводить его значило бы объявить, что связь от сенсора -- не связь.
@@ -423,7 +427,14 @@ export function Properties({
 
   if (selection.kind === 'motor') {
     const motor = project.motors.find((item) => item.id === selection.id)
-    return motor ? <MotorProps motor={motor} glossary={glossary} /> : null
+    return motor ? (
+      <MotorProps
+        motor={motor}
+        project={project.id}
+        sensors={project.sensors}
+        glossary={glossary}
+      />
+    ) : null
   }
 
   const record = project.recordings.find((item) => item.id === selection.id)
@@ -493,10 +504,16 @@ function KindParamField({
  */
 function SensorProps({
   sensor,
+  project,
+  motors,
   links,
   glossary,
 }: {
   sensor: SandboxSensor
+  /** Имя проекта: кнопки помнятся по нему. */
+  project: string
+  /** Моторы схемы -- ради петли: кнопку с двумя привязками заводят и отсюда. */
+  motors: SandboxMotor[]
   links: SandboxLink[]
   glossary: Glossary
 }) {
@@ -536,13 +553,137 @@ function SensorProps({
           по клетке. Пока связи нет, поданная величина никуда не идёт.
         </p>
       )}
+      <DoorButtons
+        project={project}
+        sensor={sensor.id}
+        motor={null}
+        others={motors.map((one) => ({ id: one.id, story: `${one.story}, ${one.unit}` }))}
+      />
       <Remove what="сенсор" id={sensor.id} />
     </>
   )
 }
 
+/**
+ * Кнопки этой двери -- и способ завести ещё одну, не уходя отсюда (#576).
+ *
+ * Жалоба владельца была прямой: «у клетки сенсор нету никакой возможности, ну
+ * и у мотора тоже, быть привязанными к чему-либо. У них нету вот этого
+ * механизма, где я сделал кнопку и привязал эту кнопку к мотору». Привязка
+ * делалась только из полосы кнопок, то есть была видна ровно с одной стороны:
+ * выбрав сенсор на холсте, человек не узнавал о кнопке ничего.
+ *
+ * Панель кнопок при этом остаётся, и это не два места для одного: полоса --
+ * про «нажать», она живёт под холстом вместе с растром и горит по ответу
+ * сессии. Здесь -- про «связать»: какие кнопки к этой двери привязаны и как
+ * привязать ещё. Нажимать отсюда нельзя нарочно -- нажимают там, где видно
+ * прогон.
+ *
+ * Список один и тот же (`state/board`), поэтому заведённая здесь кнопка
+ * появляется в полосе сразу, без перечитывания. Проект от этого не становится
+ * несохранённым и прогон не стареет: кнопка живёт в браузере и стоит с той же
+ * стороны границы, что палец (#562).
+ *
+ * Встречная дверь спрашивается полем выбора, и это тот самый способ завести
+ * петлю со стороны двери (#574): выбрал мотор в свойствах сенсора -- получил
+ * кнопку, которая и подаёт, и зажигается. Поле показывается только тогда,
+ * когда встречные двери в схеме есть: пустой список «ни одного мотора»
+ * спрашивал бы о том, чего не бывает.
+ */
+function DoorButtons({
+  project,
+  sensor,
+  motor,
+  others,
+}: {
+  project: string
+  /** Сенсор этой двери -- если дверь сенсор. */
+  sensor: string | null
+  /** Мотор этой двери -- если дверь мотор. */
+  motor: string | null
+  /** Встречные двери: моторы для сенсора, сенсоры для мотора. */
+  others: Array<{ id: string; story: string }>
+}) {
+  const buttons = useButtons(project)
+  /** Встречная дверь для новой кнопки. Пусто -- кнопка об одной привязке. */
+  const [pair, setPair] = useState('')
+  const mine = buttons.filter((one) => (sensor ? one.sensor === sensor : one.motor === motor))
+  const chosen = others.some((one) => one.id === pair) ? pair : ''
+
+  return (
+    <>
+      <Section title="Кнопки" />
+      {mine.length ? (
+        mine.map((button) => (
+          <p className="sb-note" key={button.id}>
+            <span className="sb-row-name">{button.name}</span>
+            {' — '}
+            {roleOf(button) === 'loop'
+              ? `петля: ${button.motor} зажигает, ${button.sensor} получает 1`
+              : button.sensor
+                ? 'нажимают рукой, сенсор получает 1'
+                : 'лампочка: горит, пока мотор отдаёт ненулевое'}
+            {button.key ? ` · клавиша ${keyLabel(button.key)}` : ''}
+          </p>
+        ))
+      ) : (
+        <p className="sb-note">
+          Кнопок к этой двери не привязано. Кнопка — это то, чем её трогают
+          снаружи: она стоит под холстом и в схему не попадает.
+        </p>
+      )}
+      <div className="sb-actions">
+        {others.length ? (
+          <select
+            className="sb-pair"
+            aria-label={sensor ? 'И зажигается мотором' : 'И подаёт на сенсор'}
+            value={chosen}
+            onChange={(event) => setPair(event.target.value)}
+          >
+            <option value="">{sensor ? 'без мотора' : 'без сенсора'}</option>
+            {others.map((one) => (
+              <option key={one.id} value={one.id} title={one.story}>
+                {sensor ? 'мотор' : 'сенсор'} {one.id}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <button
+          type="button"
+          className="btn-secondary"
+          title={
+            chosen
+              ? `Кнопка с двумя привязками: ${sensor ?? chosen} получает от неё 1, ${motor ?? chosen} её зажигает — это петля`
+              : 'Кнопка появится в полосе под холстом. Проект от этого не меняется: кнопка живёт в браузере'
+          }
+          onClick={() =>
+            boardController.add(project, {
+              name: freeButtonName(buttons, (sensor ?? motor) as string),
+              sensor: sensor ?? (chosen || null),
+              motor: motor ?? (chosen || null),
+              key: null,
+            })
+          }
+        >
+          {chosen ? 'Сделать кнопку-петлю' : 'Сделать кнопку'}
+        </button>
+      </div>
+    </>
+  )
+}
+
 /** Мотор: род, числа рода и клетка, на которую он смотрит (#571). */
-function MotorProps({ motor, glossary }: { motor: SandboxMotor; glossary: Glossary }) {
+function MotorProps({
+  motor,
+  project,
+  sensors,
+  glossary,
+}: {
+  motor: SandboxMotor
+  project: string
+  sensors: SandboxSensor[]
+  glossary: Glossary
+}) {
   const control = sandboxController
   const kind = (glossary.motors ?? []).find((item) => item.id === motor.kind)
   return (
@@ -572,6 +713,12 @@ function MotorProps({ motor, glossary }: { motor: SandboxMotor; glossary: Glossa
           onChange={(value) => void control.setMotor(motor.id, { [param.name]: value })}
         />
       ))}
+      <DoorButtons
+        project={project}
+        sensor={null}
+        motor={motor.id}
+        others={sensors.map((one) => ({ id: one.id, story: one.story }))}
+      />
       <Remove what="мотор" id={motor.id} />
     </>
   )

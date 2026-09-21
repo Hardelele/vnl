@@ -19,6 +19,10 @@
  * показать кнопку, привязанную неизвестно к чему, -- страшно.
  */
 
+import { useSyncExternalStore } from 'react'
+
+import { createStore } from './store'
+
 /**
  * Чем кнопка оказалась для сети: пальцем, лампочкой или петлёй (#574).
  *
@@ -143,4 +147,101 @@ export function freeButtonId(buttons: BoardButton[]): string {
   let number = buttons.length + 1
   while (taken.has(`btn${number}`)) number += 1
   return `btn${number}`
+}
+
+/**
+ * Имя новой кнопке, заведённой не человеком, а действием «сделать кнопку».
+ *
+ * Имя кнопки -- не её адрес, и повторы законны: за кнопку держится `id`.
+ * Но две одинаковые строки в списке привязок двери ничего не говорят о том,
+ * чем они различаются, а различаются они тем, что их две. Поэтому второй
+ * такой же достаётся номер: «sensor», «sensor 2», «sensor 3».
+ *
+ * В форме панели этого не нужно: там имя спрашивают у человека.
+ */
+export function freeButtonName(buttons: BoardButton[], base: string): string {
+  const taken = new Set(buttons.map((item) => item.name))
+  if (!taken.has(base)) return base
+  let number = 2
+  while (taken.has(`${base} ${number}`)) number += 1
+  return `${base} ${number}`
+}
+
+/**
+ * Список кнопок проекта -- общий на весь экран (#576).
+ *
+ * До этого он лежал в состоянии самой панели кнопок, и этого хватало, пока
+ * кнопки были видны только из неё. Теперь привязка видна с обеих сторон: в
+ * свойствах выбранного сенсора написано, какие кнопки к нему привязаны, и
+ * оттуда же заводится новая. Два списка -- панель со своим, свойства со своим
+ * -- разошлись бы на первом же заведении: кнопка появилась бы в одном месте и
+ * не появилась в другом, а «обновить» человеку нечем.
+ *
+ * Стор, а не контекст: заведение кнопки не должно перерисовывать холст.
+ *
+ * Проект хранится рядом со списком, чтобы читающий мог убедиться, что список
+ * именно его: панель и свойства спрашивают кнопки по имени проекта, и пока
+ * открытие не случилось, честный ответ -- пусто, а не чужие кнопки.
+ */
+export interface BoardView {
+  project: string | null
+  buttons: BoardButton[]
+}
+
+const boardStore = createStore<BoardView>({ project: null, buttons: [] })
+
+/** Пусто одним и тем же объектом: иначе подписчик просыпался бы на каждом кадре. */
+const NONE: BoardButton[] = []
+
+export const boardController = {
+  /** Открыть проект: прочитать его кнопки. Повторный вызов с тем же -- ничего. */
+  open(project: string): void {
+    if (boardStore.getState().project === project) return
+    boardStore.setState({ project, buttons: readButtons(project) })
+  },
+
+  /** Завести кнопку. Возвращает её -- заведшему бывает нужно сказать, какую. */
+  add(project: string, button: Omit<BoardButton, 'id'>): BoardButton {
+    boardController.open(project)
+    const buttons = boardStore.getState().buttons
+    const fresh = { ...button, id: freeButtonId(buttons) }
+    boardController.keep(project, [...buttons, fresh])
+    return fresh
+  },
+
+  drop(project: string, id: string): void {
+    boardController.open(project)
+    boardController.keep(
+      project,
+      boardStore.getState().buttons.filter((item) => item.id !== id),
+    )
+  },
+
+  /**
+   * Забыть прочитанное. Нужно там, где хранилище меняют мимо контроллера, --
+   * то есть в тестах: проверка кладёт кнопки прямо в `localStorage` и вправе
+   * ожидать, что экран прочтёт именно их, а не то, что осталось от соседней.
+   */
+  forget(): void {
+    boardStore.setState({ project: null, buttons: NONE })
+  },
+
+  /** Записать список целиком: и в память экрана, и в браузер. */
+  keep(project: string, buttons: BoardButton[]): void {
+    boardStore.setState({ project, buttons })
+    rememberButtons(project, buttons)
+  },
+}
+
+export function useBoard<S>(select: (state: BoardView) => S): S {
+  return useSyncExternalStore(
+    boardStore.subscribe,
+    () => select(boardStore.getState()),
+    () => select(boardStore.getState()),
+  )
+}
+
+/** Кнопки этого проекта. Чужие -- никогда: пока не открыт, ответ пуст. */
+export function useButtons(project: string): BoardButton[] {
+  return useBoard((state) => (state.project === project ? state.buttons : NONE))
 }

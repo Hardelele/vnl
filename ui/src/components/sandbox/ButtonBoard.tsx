@@ -84,13 +84,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { boardKey, keyLabel } from '../../lib/keys'
 import type { SandboxMotor, SandboxSensor } from '../../model/sandbox'
-import {
-  freeButtonId,
-  readButtons,
-  rememberButtons,
-  roleOf,
-  type BoardButton,
-} from '../../state/board'
+import { boardController, roleOf, useButtons, type BoardButton } from '../../state/board'
 
 export interface ButtonBoardProps {
   /** Проект: кнопки помнятся по нему, имена дверей у каждого свои. */
@@ -115,9 +109,9 @@ export function ButtonBoard({
   live,
   onSense,
 }: ButtonBoardProps) {
-  // Читается один раз на проект: панель пересоздаётся при его смене (`key` у
-  // вызова), и следить за чужими кнопками ей не приходится.
-  const [buttons, setButtons] = useState<BoardButton[]>(() => readButtons(project))
+  // Список общий на весь экран (#576): те же кнопки видны в свойствах двери,
+  // и второй список разошёлся бы с этим на первом же заведении.
+  const buttons = useButtons(project)
   const [adding, setAdding] = useState(false)
   /**
    * Что сейчас держат пальцем -- ровно затем, чтобы отпустить.
@@ -127,11 +121,6 @@ export function ButtonBoard({
    * оставлял бы сенсор нажатым навсегда -- отпускать было бы некому.
    */
   const held = useRef(new Set<string>())
-
-  const keep = (next: BoardButton[]): void => {
-    setButtons(next)
-    rememberButtons(project, next)
-  }
 
   const press = (button: BoardButton): void => {
     if (!button.sensor || !live) return
@@ -171,6 +160,12 @@ export function ButtonBoard({
    * Пока палец держит ту же кнопку, петля не гасит её: бит -- «или», и
    * замолчавший мотор не отменяет нажатого пальца.
    */
+  // Кнопки проекта читаются при его открытии, а не при каждом кадре: список
+  // живёт в браузере, и перечитывать его незачем -- правят его отсюда же.
+  useEffect(() => {
+    boardController.open(project)
+  }, [project])
+
   useEffect(() => {
     if (!live) return
     for (const button of buttons) {
@@ -243,7 +238,7 @@ export function ButtonBoard({
           unit={button.motor ? unitOf(motors, button.motor) : ''}
           onPress={() => press(button)}
           onRelease={() => release(button)}
-          onDrop={() => keep(buttons.filter((item) => item.id !== button.id))}
+          onDrop={() => boardController.drop(project, button.id)}
         />
       ))}
 
@@ -251,10 +246,9 @@ export function ButtonBoard({
         <NewButton
           sensors={sensors}
           motors={motors}
-          taken={buttons}
           onCancel={() => setAdding(false)}
           onAdd={(button) => {
-            keep([...buttons, button])
+            boardController.add(project, button)
             setAdding(false)
           }}
         />
@@ -334,16 +328,25 @@ function Key({
   const on = Boolean(button.sensor ? value : out)
   /** Держит петля: мотор отдаёт, и бит на сенсоре уже стоит. */
   const auto = loop && Boolean(out) && Boolean(value)
+  /**
+   * Ждёт прогона: нажимать есть чем, а подавать некуда (#576).
+   *
+   * Отдельно от `lost` и от «нечего нажимать», потому что это единственная из
+   * трёх причин, которая проходит сама: запустите прогон -- и кнопка оживёт.
+   * Серым цветом все три выглядели одинаково, и человек читал серое как
+   * «привязка сломалась» -- ровно так владелец и прочёл.
+   */
+  const waiting = Boolean(button.sensor) && !live && !lost
   const dead = lost || (!button.sensor && !lamp) || (Boolean(button.sensor) && !live)
   return (
     <span
-      className={`bb-key${on ? ' is-on' : ''}${lost ? ' is-lost' : ''}${loop ? ' is-loop' : ''}`}
+      className={`bb-key${on ? ' is-on' : ''}${lost ? ' is-lost' : ''}${loop ? ' is-loop' : ''}${waiting ? ' is-waiting' : ''}`}
     >
       <button
         type="button"
         className="bb-press"
         disabled={dead}
-        title={title(button, lostSensor, lostMotor, auto)}
+        title={title(button, lostSensor, lostMotor, auto, waiting)}
         onPointerDown={(event) => {
           if (!button.sensor) return
           onPress()
@@ -383,7 +386,11 @@ function Key({
           ) : null}
           {button.name}
         </span>
-        <span className="mono bb-sub">{sub(button, out, unit)}</span>
+        {/* Подпись под именем -- место, где кнопка объясняет себя сама
+            (#576). Число мотора у неё есть не всегда, а сказать, почему она
+            не нажимается, надо именно на ней: строка рядом с панелью
+            относится ко всем кнопкам сразу, а гаснет их по одной. */}
+        <span className="mono bb-sub">{sub(button, out, unit, lostSensor, lostMotor, waiting)}</span>
       </button>
       <button type="button" className="bb-drop" title="Убрать кнопку" onClick={onDrop}>
         ×
@@ -392,8 +399,23 @@ function Key({
   )
 }
 
-/** Подпись под именем: у чего есть мотор -- его число, иначе клавиша или дверь. */
-function sub(button: BoardButton, out: number | undefined, unit: string): string {
+/**
+ * Подпись под именем.
+ *
+ * Сперва причина, по которой кнопка не работает, потом число мотора, потом
+ * клавиша: кнопка, которая сейчас ничего не делает, обязана сказать об этом
+ * первой -- иначе «— Гц» на сером прямоугольнике читается как поломка.
+ */
+function sub(
+  button: BoardButton,
+  out: number | undefined,
+  unit: string,
+  lostSensor: boolean,
+  lostMotor: boolean,
+  waiting: boolean,
+): string {
+  if (lostSensor || lostMotor) return 'двери нет'
+  if (waiting) return 'нужен прогон'
   if (button.motor) return `${format(out)}${unit ? ` ${unit}` : ''}`
   return button.key ? keyLabel(button.key) : (button.sensor ?? '')
 }
@@ -404,10 +426,15 @@ function title(
   lostSensor: boolean,
   lostMotor: boolean,
   auto: boolean,
+  waiting: boolean,
 ): string {
   if (lostSensor && lostMotor) return `${button.sensor} и ${button.motor} в схеме больше нет`
   if (lostSensor) return `сенсора ${button.sensor} в схеме больше нет`
   if (lostMotor) return `мотора ${button.motor} в схеме больше нет`
+  // Привязка цела, и сказать об этом важнее, чем повторить «не нажимается»:
+  // человек, увидевший серую кнопку, идёт заводить вторую.
+  if (waiting)
+    return `Привязка цела: ${button.sensor} получит 1, как только пойдёт прогон. Нажатие подаётся в прогон — запустите его`
   if (button.sensor && button.motor) {
     const loop = `Петля: мотор ${button.motor} зажигает её, сенсор ${button.sensor} получает 1. Держать можно и рукой — это тот же бит`
     return auto ? `${loop}. Сейчас её держит петля: отпускание рукой её не погасит` : loop
@@ -442,15 +469,13 @@ function format(value: number | undefined): string {
 function NewButton({
   sensors,
   motors,
-  taken,
   onCancel,
   onAdd,
 }: {
   sensors: SandboxSensor[]
   motors: SandboxMotor[]
-  taken: BoardButton[]
   onCancel: () => void
-  onAdd: (button: BoardButton) => void
+  onAdd: (button: Omit<BoardButton, 'id'>) => void
 }) {
   // Первая дверь предлагается сама: схема чаще всего об одном сенсоре, и
   // заводить кнопку в ней -- это два щелчка, а не выбор из списка в один пункт.
@@ -467,7 +492,6 @@ function NewButton({
         event.preventDefault()
         if (nothing) return
         onAdd({
-          id: freeButtonId(taken),
           name: name.trim() || sensor || motor,
           sensor: sensor || null,
           motor: motor || null,
